@@ -1,0 +1,45 @@
+
+# Backup and OS files
+*~
+.DS_Store
+~$*
+\#*#
+.#*
+
+# my playground/tests files
+playground
+cache
+t.*
+
+# secret files
+secrets.*
+*.env
+
+# Python build artifacts (should NOT be checked in)
+dist/
+build/
+*.egg-info/
+*.egg
+.build
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Virtual environments
+venv/
+env/
+ENV/.swiftpm
+
+# iOS/Swift files
+Pods
+xcuserdata
+

@@ -1,0 +1,6 @@
+# Configuration files should not be committed
+security_config.py
+
+# prevent accidental commit of the database and rules file
+airports.db
+rules.json
