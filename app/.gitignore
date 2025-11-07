@@ -1,0 +1,11 @@
+Pods
+.DS_Store
+*~
+\#*#
+xcuserdata
+.#*
+~$*
+t.json
+secret.json
+venv
+
