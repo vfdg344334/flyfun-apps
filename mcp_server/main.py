@@ -17,6 +17,11 @@ from fastmcp import FastMCP, Context
 from euro_aip.storage.database_storage import DatabaseStorage
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
+import logging
+
+# Configure logging
+logging.basicConfig(level=getattr(logging, LOG_LEVEL), format=LOG_FORMAT)
+logger = logging.getLogger(__name__)
 
 # ---- Types for structured output (optional but nice) -------------------------
 class AirportSummary(TypedDict, total=False):
@@ -51,11 +56,13 @@ async def lifespan(app: FastMCP):
     global _rules
     global _rules_index
     db_path = os.environ.get("AIRPORTS_DB", "airports.db")
+    logger.info(f"Loading model from database at '{db_path}'")
     # Let FastMCP handle logging/levels via FASTMCP_LOG_LEVEL, etc.
     db_storage = DatabaseStorage(db_path)
     _model = db_storage.load_model()
     # Load rules store
     rules_path = os.environ.get("RULES_JSON", os.path.join(os.path.dirname(__file__), "rules.json"))
+    logger.info(f"Loading rules from '{rules_path}'")
     try:
         with open(rules_path, "r", encoding="utf-8") as f:
             _rules = json.load(f)
