@@ -203,7 +203,9 @@ async def add_cache_control_headers(request: Request, call_next):
     return response
 
 # Mount static files
+css_dir = os.path.join(client_dir, "css")
 app.mount("/js", StaticFiles(directory=js_dir, html=True), name="js")
+app.mount("/css", StaticFiles(directory=css_dir, html=True), name="css")
 
 @app.get("/")
 async def read_root():
