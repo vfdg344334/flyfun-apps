@@ -29,7 +29,6 @@ from langchain.tools import tool
 
 # Euro AIP models (in-process, like old codebase)
 from euro_aip.storage.database_storage import DatabaseStorage
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 from euro_aip.models.euro_aip_model import EuroAipModel
 
 logger = logging.getLogger(__name__)
@@ -53,7 +52,6 @@ RULES_JSON = os.getenv("RULES_JSON", "rules.json")
 # Lazy, global initialization (warm)
 # ------------------------------------
 _model: Optional[EuroAipModel] = None
-_enrichment_storage: Optional[EnrichmentStorage] = None
 _agent = None
 _rules: Optional[Dict[str, Any]] = None
 _rules_index: Optional[Dict[str, Any]] = None
@@ -98,7 +96,7 @@ async def _get_agent():
     Lazily initialize and memoize the Agent that uses OpenAI tool-calling
     and in-process MCP tools (like the old codebase).
     """
-    global _model, _enrichment_storage, _agent, _rules, _rules_index
+    global _model, _agent, _rules, _rules_index
     if _agent:
         return _agent
 
@@ -111,7 +109,6 @@ async def _get_agent():
             logger.info(f"📦 Loading model from database at '{AIRPORTS_DB}'")
             db_storage = DatabaseStorage(AIRPORTS_DB)
             _model = db_storage.load_model()
-            _enrichment_storage = EnrichmentStorage(AIRPORTS_DB)
             logger.info(f"✅ Loaded model with {len(_model.airports)} airports")
         except Exception as e:
             error_msg = f"Failed to load model from {AIRPORTS_DB}"
@@ -144,7 +141,6 @@ async def _get_agent():
 
             # Set the global variables in mcp_server module
             mcp_main._model = _model
-            mcp_main._enrichment_storage = _enrichment_storage
             mcp_main._rules = _rules
             mcp_main._rules_index = _rules_index
 
