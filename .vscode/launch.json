@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Web Server (dev.env)",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/web/server/main.py",
+        "cwd": "${workspaceFolder}/web/server",
+        "envFile": "${workspaceFolder}/web/server/dev.env",
+        "console": "integratedTerminal"
+      }
+    ]
+  }

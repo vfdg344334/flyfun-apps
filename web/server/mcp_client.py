@@ -6,11 +6,25 @@ Calls the MCP server's tools and returns results for the LLM.
 
 import httpx
 import logging
+import os
 import requests
 from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
 import re
-from rules_manager import RulesManager
+
+from shared.airport_tools import (
+    ToolContext,
+    search_airports as shared_search_airports,
+    find_airports_near_route as shared_find_airports_near_route,
+    get_airport_details as shared_get_airport_details,
+    get_border_crossing_airports as shared_get_border_crossing_airports,
+    get_airport_statistics as shared_get_airport_statistics,
+    get_airport_pricing as shared_get_airport_pricing,
+    get_pilot_reviews as shared_get_pilot_reviews,
+    get_fuel_prices as shared_get_fuel_prices,
+    list_rules_for_country as shared_list_rules_for_country,
+    compare_rules_between_countries as shared_compare_rules_between_countries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +35,19 @@ class MCPClient:
     def __init__(self, mcp_base_url: str = "http://localhost:8002"):
         self.mcp_base_url = mcp_base_url
         self.client = httpx.Client(timeout=30.0)
+        self._tool_context: Optional[ToolContext] = None
 
-        # Initialize rules manager and load rules
-        self.rules_manager = RulesManager()
-        rules_loaded = self.rules_manager.load_rules()
-        if rules_loaded:
-            logger.info(f"Rules manager initialized - loaded {len(self.rules_manager.rules)} rules")
-        else:
-            logger.warning("Rules manager initialized but no rules loaded")
+    def _ensure_context(self) -> ToolContext:
+        if self._tool_context is None:
+            db_path = os.getenv("AIRPORTS_DB", "airports.db")
+            rules_path = os.getenv("RULES_JSON", "rules.json")
+            self._tool_context = ToolContext.create(db_path=db_path, rules_path=rules_path)
+            logger.info(
+                "Tool context initialized: %d airports loaded, %d rules available",
+                len(self._tool_context.model.airports),
+                len(self._tool_context.rules_manager.rules if self._tool_context.rules_manager else []),
+            )
+        return self._tool_context
 
     def _call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -38,27 +57,7 @@ class MCPClient:
         import time
 
         try:
-            # Import the model directly for faster access
-            from euro_aip.storage.database_storage import DatabaseStorage
-            from euro_aip.storage.enrichment_storage import EnrichmentStorage
-            from euro_aip.models.euro_aip_model import EuroAipModel
-            import os
-
-            # Load model if not already loaded
-            if not hasattr(self, 'model'):
-                load_start = time.time()
-                logger.info(f"⏱️ MCP: Loading database model...")
-
-                db_path = os.getenv("AIRPORTS_DB", "airports.db")
-                db_storage = DatabaseStorage(db_path)
-                self.model = db_storage.load_model()
-                self.enrichment_storage = EnrichmentStorage(db_path)
-
-                load_end = time.time()
-                logger.info(f"⏱️ MCP: Database loaded in {load_end - load_start:.2f}s - {len(self.model.airports)} airports")
-                logger.info(f"⏱️ MCP: Enrichment storage loaded")
-
-            # Execute tool based on name
+            self._ensure_context()
             exec_start = time.time()
             logger.info(f"⏱️ MCP: Executing {tool_name}...")
 
@@ -89,7 +88,6 @@ class MCPClient:
 
             exec_end = time.time()
             logger.info(f"⏱️ MCP: {tool_name} execution took {exec_end - exec_start:.2f}s")
-
             return result
 
         except Exception as e:
@@ -97,38 +95,8 @@ class MCPClient:
             return {"error": str(e)}
 
     def _search_airports(self, query: str, max_results: int = 20) -> Dict[str, Any]:
-        """Search airports by name, ICAO, IATA, or municipality."""
-        q = query.upper().strip()
-        matches = []
-
-        for a in self.model.airports.values():
-            if (
-                (q in a.ident)
-                or (a.name and q in a.name.upper())
-                or (getattr(a, "iata_code", None) and q in a.iata_code)
-                or (a.municipality and q in a.municipality.upper())
-            ):
-                matches.append({
-                    "ident": a.ident,
-                    "name": a.name,
-                    "municipality": a.municipality,
-                    "country": a.iso_country,
-                    "latitude_deg": getattr(a, "latitude_deg", None),
-                    "longitude_deg": getattr(a, "longitude_deg", None),
-                    "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
-                    "point_of_entry": bool(getattr(a, "point_of_entry", False)),
-                })
-                if len(matches) >= max_results:
-                    break
-
-        return {
-            "count": len(matches),
-            "airports": matches,
-            "visualization": {
-                "type": "markers",
-                "data": matches  # Frontend will plot these on map
-            }
-        }
+        ctx = self._ensure_context()
+        return shared_search_airports(ctx, query, max_results)
 
     def _find_airports_near_route(
         self,
@@ -136,213 +104,24 @@ class MCPClient:
         to_icao: str,
         max_distance_nm: float = 50.0
     ) -> Dict[str, Any]:
-        """Find airports within distance of a direct route."""
-        results = self.model.find_airports_near_route(
-            [from_icao.upper(), to_icao.upper()],
-            max_distance_nm
-        )
-
-        airports = []
-        for item in results:
-            a = item["airport"]
-            airports.append({
-                "ident": a.ident,
-                "name": a.name,
-                "municipality": a.municipality,
-                "country": a.iso_country,
-                "latitude_deg": getattr(a, "latitude_deg", None),
-                "longitude_deg": getattr(a, "longitude_deg", None),
-                "distance_nm": float(item["distance_nm"]),
-                "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
-                "point_of_entry": bool(getattr(a, "point_of_entry", False)),
-            })
-
-        # Get from/to airport coordinates for route line
-        from_airport = self.model.get_airport(from_icao.upper())
-        to_airport = self.model.get_airport(to_icao.upper())
-
-        return {
-            "count": len(airports),
-            "airports": airports,
-            "visualization": {
-                "type": "route_with_markers",
-                "route": {
-                    "from": {
-                        "icao": from_icao,
-                        "lat": getattr(from_airport, "latitude_deg", None) if from_airport else None,
-                        "lon": getattr(from_airport, "longitude_deg", None) if from_airport else None,
-                    },
-                    "to": {
-                        "icao": to_icao,
-                        "lat": getattr(to_airport, "latitude_deg", None) if to_airport else None,
-                        "lon": getattr(to_airport, "longitude_deg", None) if to_airport else None,
-                    }
-                },
-                "markers": airports  # Airports along the route
-            }
-        }
+        ctx = self._ensure_context()
+        return shared_find_airports_near_route(ctx, from_icao, to_icao, max_distance_nm)
 
     def _get_airport_details(self, icao_code: str) -> Dict[str, Any]:
-        """Get detailed information about a specific airport."""
-        icao = icao_code.strip().upper()
-        a = self.model.get_airport(icao)
-
-        if not a:
-            return {"found": False, "error": f"Airport {icao} not found"}
-
-        # Get standardized entries (AIP data)
-        standardized = []
-        for e in (a.get_standardized_entries() or []):
-            if getattr(e, "std_field", None) and getattr(e, "value", None):
-                standardized.append({
-                    "field": e.std_field,
-                    "value": e.value
-                })
-
-        # Get runway details
-        runways = []
-        for r in a.runways:
-            runways.append({
-                "le_ident": r.le_ident,
-                "he_ident": r.he_ident,
-                "length_ft": r.length_ft,
-                "width_ft": r.width_ft,
-                "surface": r.surface,
-                "lighted": bool(getattr(r, "lighted", False)),
-            })
-
-        details = {
-            "found": True,
-            "airport": {
-                "ident": a.ident,
-                "name": a.name,
-                "municipality": a.municipality,
-                "country": a.iso_country,
-                "latitude_deg": getattr(a, "latitude_deg", None),
-                "longitude_deg": getattr(a, "longitude_deg", None),
-                "elevation_ft": getattr(a, "elevation_ft", None),
-                "point_of_entry": bool(getattr(a, "point_of_entry", False)),
-            },
-            "runways": runways,
-            "runway_summary": {
-                "count": len(a.runways),
-                "longest_ft": getattr(a, "longest_runway_length_ft", None),
-                "has_hard_surface": bool(getattr(a, "has_hard_runway", False)),
-            },
-            "procedures": {"count": len(a.procedures)},
-            "aip_data": standardized,
-            "visualization": {
-                "type": "marker_with_details",
-                "marker": {
-                    "ident": a.ident,
-                    "lat": getattr(a, "latitude_deg", None),
-                    "lon": getattr(a, "longitude_deg", None),
-                    "zoom": 12  # Zoom level for detail view
-                }
-            }
-        }
-
-        return details
+        ctx = self._ensure_context()
+        return shared_get_airport_details(ctx, icao_code)
 
     def _get_border_crossing_airports(self, country: Optional[str] = None) -> Dict[str, Any]:
-        """Get list of border crossing (customs) airports."""
-        airports_list = self.model.get_border_crossing_airports()
-
-        if country:
-            c = country.upper()
-            airports_list = [a for a in airports_list if (a.iso_country or "").upper() == c]
-
-        # Group by country
-        grouped = {}
-        all_airports = []
-        for a in airports_list:
-            country_code = a.iso_country or "Unknown"
-            if country_code not in grouped:
-                grouped[country_code] = []
-
-            airport_data = {
-                "ident": a.ident,
-                "name": a.name,
-                "municipality": a.municipality,
-                "country": a.iso_country,
-                "latitude_deg": getattr(a, "latitude_deg", None),
-                "longitude_deg": getattr(a, "longitude_deg", None),
-            }
-            grouped[country_code].append(airport_data)
-            all_airports.append(airport_data)
-
-        return {
-            "count": len(all_airports),
-            "by_country": grouped,
-            "airports": all_airports,
-            "visualization": {
-                "type": "markers",
-                "data": all_airports,
-                "style": "customs"  # Special styling for customs airports
-            }
-        }
+        ctx = self._ensure_context()
+        return shared_get_border_crossing_airports(ctx, country)
 
     def _get_airport_statistics(self, country: Optional[str] = None) -> Dict[str, Any]:
-        """Get airport statistics, optionally filtered by country."""
-        if country:
-            airports = self.model.get_airports_by_country(country.upper())
-        else:
-            airports = list(self.model.airports.values())
-
-        total = len(airports)
-        stats = {
-            "total_airports": total,
-            "with_customs": sum(1 for a in airports if getattr(a, "point_of_entry", False)),
-            "with_avgas": sum(1 for a in airports if getattr(a, "avgas", False)),
-            "with_jet_a": sum(1 for a in airports if getattr(a, "jet_a", False)),
-            "with_procedures": sum(1 for a in airports if a.procedures),
-        }
-
-        pct = lambda n: round((n / total * 100), 1) if total else 0.0
-        stats.update({
-            "with_customs_pct": pct(stats["with_customs"]),
-            "with_avgas_pct": pct(stats["with_avgas"]),
-            "with_jet_a_pct": pct(stats["with_jet_a"]),
-            "with_procedures_pct": pct(stats["with_procedures"]),
-        })
-
-        return {"stats": stats}
+        ctx = self._ensure_context()
+        return shared_get_airport_statistics(ctx, country)
 
     def _get_airport_pricing(self, icao_code: str) -> Dict[str, Any]:
-        """Get pricing data (landing fees, fuel prices) for an airport."""
-        icao = icao_code.strip().upper()
-        pricing = self.enrichment_storage.get_pricing_data(icao)
-
-        if not pricing:
-            return {
-                "found": False,
-                "icao_code": icao,
-                "message": f"No pricing data available for {icao}. Data may not be in airfield.directory or not yet synced."
-            }
-
-        return {
-            "found": True,
-            "icao_code": icao,
-            "pricing": {
-                "landing_fees": {
-                    "C172": pricing.get('landing_fee_c172'),
-                    "DA42": pricing.get('landing_fee_da42'),
-                    "SR22": pricing.get('landing_fee_sr22'),
-                    "PC12": pricing.get('landing_fee_pc12'),
-                },
-                "fuel_prices": {
-                    "AVGAS": pricing.get('avgas_price'),
-                    "JetA1": pricing.get('jeta1_price'),
-                    "SuperPlus": pricing.get('superplus_price'),
-                },
-                "currency": pricing.get('currency'),
-                "fuel_provider": pricing.get('fuel_provider'),
-                "payment_available": bool(pricing.get('payment_available')),
-                "ppr_available": bool(pricing.get('ppr_available')),
-                "last_updated": pricing.get('last_updated'),
-                "source": pricing.get('source', 'airfield.directory')
-            }
-        }
+        ctx = self._ensure_context()
+        return shared_get_airport_pricing(ctx, icao_code)
 
     def _get_pilot_reviews(self, icao_code: str, limit: int = 10) -> Dict[str, Any]:
         """Get pilot reviews (PIREPs) for an airport."""
@@ -537,41 +316,15 @@ class MCPClient:
         try:
             logger.info(f"📋 Fetching rules for {country_code.upper()}" +
                        (f" (category: {category})" if category else ""))
-            logger.info(f"DEBUG: RulesManager has {len(self.rules_manager.rules)} total rules loaded, loaded={self.rules_manager.loaded}")
-
-            rules = self.rules_manager.get_rules_for_country(
+            ctx = self._ensure_context()
+            rules = shared_list_rules_for_country(
+                ctx,
                 country_code=country_code,
                 category=category,
                 tags=tags
             )
-
-            if not rules:
-                logger.warning(f"⚠️ No rules found for {country_code.upper()}")
-                return {
-                    "found": False,
-                    "country_code": country_code.upper(),
-                    "count": 0,
-                    "message": f"No rules found for {country_code.upper()}. Available countries: {', '.join(self.rules_manager.get_available_countries())}"
-                }
-
-            # Format for display
-            formatted_text = self.rules_manager.format_rules_for_display(
-                rules,
-                group_by_category=True
-            )
-
-            categories = list(set(r.get('category', 'General') for r in rules))
-            logger.info(f"✅ Found {len(rules)} rules for {country_code.upper()} across {len(categories)} categories: {', '.join(categories)}")
-
-            return {
-                "found": True,
-                "country_code": country_code.upper(),
-                "count": len(rules),
-                "rules": rules[:50],  # Limit to 50 rules in response
-                "formatted_text": formatted_text,
-                "categories": categories
-            }
-
+            logger.info(f"✅ Found {rules['count']} rules for {country_code.upper()}")
+            return rules
         except Exception as e:
             logger.error(f"Error listing rules for country: {e}", exc_info=True)
             return {
@@ -613,14 +366,7 @@ class MCPClient:
 
             logger.info(f"✅ Comparison complete: {country1.upper()} ({c1_count} rules) vs {country2.upper()} ({c2_count} rules) - {diff_count} differences found")
 
-            return {
-                "found": True,
-                "comparison": comparison,
-                "formatted_summary": comparison.get('summary', ''),
-                "total_differences": diff_count,
-                "message": f"Comparison between {country1.upper()} and {country2.upper()} complete."
-            }
-
+            return comparison
         except Exception as e:
             logger.error(f"Error comparing rules: {e}", exc_info=True)
             return {

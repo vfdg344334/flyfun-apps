@@ -14,7 +14,7 @@ if env_path.exists():
                 key, value = line.split('=', 1)
                 os.environ[key.strip()] = value.strip()
 
-# Add the euro_aip package to the path
+# Add the flyfun-apps package to the path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi import FastAPI, HTTPException, Request

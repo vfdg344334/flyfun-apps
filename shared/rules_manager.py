@@ -138,7 +138,7 @@ class RulesManager:
                 }
                 self.rules_index['by_country'].setdefault(country_code, []).append(entry)
 
-        # Sort country entries for deterministic output
+        # Sort entries for deterministic output
         for entries in self.rules_index['by_country'].values():
             entries.sort(key=lambda x: x['question_text'].lower())
 
@@ -186,7 +186,7 @@ class RulesManager:
 
         # Apply category filter
         if category:
-            entries = [r for r in entries if r.get('category') == category]
+            entries = [r for r in entries if category.lower() in r.get('category').lower()]
 
         # Apply tags filter
         if tags:
@@ -224,7 +224,7 @@ class RulesManager:
             Dict with comparison results
         """
         if not self.loaded:
-            logger.warning(f"Rules not loaded in compare, loading now...")
+            logger.warning("Rules not loaded in compare, loading now...")
             self.load_rules()
         if not self.loaded:
             return {}
@@ -286,6 +286,7 @@ class RulesManager:
             'only_in_country1': len(only_in_1),
             'only_in_country2': len(only_in_2),
             'differences': differences,
+            "differences_count": len(differences),
             'summary': self._format_comparison_summary(
                 country1, country2, differences, only_in_1, only_in_2, rules1, rules2
             )
@@ -424,3 +425,4 @@ class RulesManager:
             'country_list': self.get_available_countries(),
             'category_list': self.get_available_categories()
         }
+
