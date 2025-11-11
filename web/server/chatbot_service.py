@@ -383,6 +383,9 @@ class ChatbotService:
 - Runway details, lengths, and surface types
 - Instrument procedures and approaches
 - AIP (Aeronautical Information Publication) data
+- Flying Rules between countries about IFR/VFR, airspace, radio communication, etc.
+- A route search tool to find airports near a route defined by a list of airports ICAO codes
+
 
 **CRITICAL - Thinking Process Format:**
 ALWAYS structure your response in TWO parts:

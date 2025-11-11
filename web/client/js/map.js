@@ -12,6 +12,7 @@ class AirportMap {
         this.routeMarkers = []; // Store route airport markers
         this.routeLine = null; // Store route line
         this.legendMode = 'airport-type';
+        this.countryRulesCache = new Map();
         
         // Don't initialize map immediately - let the app handle it
         console.log(`AirportMap constructor called for container: ${containerId}`);
@@ -626,15 +627,18 @@ class AirportMap {
             this.showAirportDetailsLoading();
             
             // Get detailed airport information
-            const [airportDetail, procedures, runways, aipEntries] = await Promise.all([
+            const countryCode = airport.iso_country || airport.isoCountry;
+            const rulesPromise = countryCode ? this.getCountryRules(countryCode) : Promise.resolve(null);
+            const [airportDetail, procedures, runways, aipEntries, countryRules] = await Promise.all([
                 api.getAirportDetail(airport.ident),
                 api.getAirportProcedures(airport.ident),
                 api.getAirportRunways(airport.ident),
-                api.getAirportAIPEntries(airport.ident)
+                api.getAirportAIPEntries(airport.ident),
+                rulesPromise
             ]);
 
             // Display airport details
-            this.displayAirportDetails(airportDetail, procedures, runways, aipEntries);
+            this.displayAirportDetails(airportDetail, procedures, runways, aipEntries, countryRules);
             
         } catch (error) {
             console.error('Error loading airport details:', error);
@@ -642,9 +646,32 @@ class AirportMap {
         }
     }
 
+    async getCountryRules(countryCode) {
+        const code = countryCode?.toUpperCase();
+        if (!code) {
+            return null;
+        }
+
+        if (this.countryRulesCache.has(code)) {
+            return this.countryRulesCache.get(code);
+        }
+
+        try {
+            const data = await api.getCountryRules(code);
+            this.countryRulesCache.set(code, data);
+            return data;
+        } catch (error) {
+            console.error('Error loading rules for country:', code, error);
+            throw error;
+        }
+    }
+
     showAirportDetailsLoading() {
         const detailsContainer = document.getElementById('airport-details');
         const infoContainer = document.getElementById('airport-info');
+        const rulesContainer = document.getElementById('rules-content');
+        const rulesSummary = document.getElementById('rules-summary');
+        const aipContentContainer = document.getElementById('aip-data-content');
         
         detailsContainer.style.display = 'block';
         document.getElementById('no-selection').style.display = 'none';
@@ -657,6 +684,32 @@ class AirportMap {
                 <p class="mt-2">Loading airport details...</p>
             </div>
         `;
+
+        if (aipContentContainer) {
+            aipContentContainer.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading AIP data...</p>
+                </div>
+            `;
+        }
+
+        if (rulesSummary) {
+            rulesSummary.textContent = '';
+        }
+
+        if (rulesContainer) {
+            rulesContainer.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading country rules...</p>
+                </div>
+            `;
+        }
     }
 
     showAirportDetailsError(error) {
@@ -669,15 +722,21 @@ class AirportMap {
         `;
     }
 
-    displayAirportDetails(airport, procedures, runways, aipEntries) {
+    displayAirportDetails(airport, procedures, runways, aipEntries, countryRules) {
         const infoContainer = document.getElementById('airport-info');
         const airportContent = document.getElementById('airport-content');
         const noSelectionContainer = document.getElementById('no-selection');
+        const rulesContainer = document.getElementById('rules-content');
+        const rulesSummary = document.getElementById('rules-summary');
 
         if (!airport) {
             // Hide tabbed content, show "no selection" message
             if (airportContent) airportContent.style.display = 'none';
             if (noSelectionContainer) noSelectionContainer.style.display = 'block';
+            if (rulesSummary) rulesSummary.textContent = '';
+            if (rulesContainer) {
+                rulesContainer.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-info-circle"></i> Select an airport to load country rules</div>';
+            }
             return;
         }
 
@@ -795,6 +854,7 @@ class AirportMap {
         
         // Display AIP data (right panel)
         this.displayAIPData(aipEntries);
+        this.displayCountryRules(countryRules, airport?.iso_country);
     }
 
     displayAIPData(aipEntries) {
@@ -868,6 +928,104 @@ class AirportMap {
         this.initializeAIPFilter();
     }
 
+    displayCountryRules(rulesData, countryCode) {
+        const rulesContainer = document.getElementById('rules-content');
+        const rulesSummary = document.getElementById('rules-summary');
+
+        if (!rulesContainer) {
+            return;
+        }
+
+        const code = countryCode ? countryCode.toUpperCase() : null;
+
+        if (!code) {
+            if (rulesSummary) {
+                rulesSummary.textContent = '';
+            }
+            rulesContainer.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-info-circle"></i> No country information available for this airport.</div>';
+            return;
+        }
+
+        if (!rulesData || !Array.isArray(rulesData.categories) || rulesData.categories.length === 0) {
+            if (rulesSummary) {
+                rulesSummary.textContent = `No published rules available for ${code}.`;
+            }
+            rulesContainer.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-info-circle"></i> No rules available for this country.</div>';
+            return;
+        }
+
+        if (rulesSummary) {
+            const totalCategories = rulesData.categories.length;
+            rulesSummary.textContent = `Rules for ${code}: ${rulesData.total_rules} answers across ${totalCategories} ${totalCategories === 1 ? 'category' : 'categories'}.`;
+        }
+
+        let html = '';
+
+        rulesData.categories.forEach(category => {
+            const sectionId = this.buildRuleSectionId(code, category.name);
+            const toggleId = `rules-toggle-${sectionId}`;
+
+            html += `
+                <div class="rules-section" data-category="${this.escapeHtml(category.name || 'General')}">
+                    <div class="rules-section-header" onclick="airportMap.toggleRuleSection('${sectionId}')">
+                        <span>
+                            <i class="fas fa-chevron-right rules-section-toggle" id="${toggleId}"></i>
+                            ${this.escapeHtml(category.name || 'General')} (${category.count})
+                        </span>
+                    </div>
+                    <div class="rules-section-content" id="${sectionId}">
+            `;
+
+            category.rules.forEach(rule => {
+                const question = this.escapeHtml(rule.question_text || 'Untitled rule');
+                const answerText = this.escapeHtml(this.stripHtml(rule.answer_html) || 'No answer available.');
+                const tagsHtml = (rule.tags || [])
+                    .map(tag => `<span class="badge bg-secondary">${this.escapeHtml(tag)}</span>`)
+                    .join(' ');
+                const linksHtml = (rule.links || [])
+                    .map(link => {
+                        const rawUrl = link || '';
+                        let label = rawUrl;
+                        try {
+                            const parsed = new URL(rawUrl, window.location.origin);
+                            label = parsed.hostname.replace(/^www\\./i, '') || parsed.href;
+                        } catch (e) {
+                            label = rawUrl;
+                        }
+                        const safeUrl = this.escapeAttribute(rawUrl);
+                        return `<a href="${safeUrl}" class="me-2" target="_blank" rel="noopener noreferrer">${this.escapeHtml(label)}</a>`;
+                    })
+                    .join(' ');
+
+                const metaParts = [];
+                if (rule.last_reviewed) {
+                    metaParts.push(`Last reviewed: ${this.escapeHtml(rule.last_reviewed)}`);
+                }
+                if (rule.confidence) {
+                    metaParts.push(`Confidence: ${this.escapeHtml(rule.confidence)}`);
+                }
+
+                html += `
+                    <div class="rules-entry">
+                        <span class="rule-question"><i class="fas fa-gavel me-2"></i>${question}</span>
+                        <div class="rule-answer">${answerText}</div>
+                        ${tagsHtml ? `<div class="mb-2">${tagsHtml}</div>` : ''}
+                        ${linksHtml ? `<div class="rule-links"><i class="fas fa-link me-1"></i>${linksHtml}</div>` : ''}
+                        ${metaParts.length ? `<div class="text-muted small">${metaParts.join(' • ')}</div>` : ''}
+                    </div>
+                `;
+            });
+
+            html += `
+                    </div>
+                </div>
+            `;
+        });
+
+        rulesContainer.innerHTML = html;
+        this.initializeRuleSections();
+    }
+
     toggleAIPSection(sectionId) {
         const content = document.getElementById(sectionId);
         const toggle = document.getElementById(`toggle-${sectionId}`);
@@ -931,6 +1089,71 @@ class AirportMap {
         this.loadAIPSectionStates();
     }
 
+    initializeRuleSections() {
+        this.loadRuleSectionStates();
+    }
+
+    buildRuleSectionId(countryCode, categoryName) {
+        const slug = (categoryName || 'general')
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        return `rules-${countryCode}-${slug || 'general'}`;
+    }
+
+    toggleRuleSection(sectionId) {
+        const content = document.getElementById(sectionId);
+        const toggle = document.getElementById(`rules-toggle-${sectionId}`);
+        if (!content || !toggle) {
+            return;
+        }
+
+        const isExpanded = content.classList.contains('expanded');
+        if (isExpanded) {
+            content.classList.remove('expanded');
+            toggle.classList.remove('expanded');
+        } else {
+            content.classList.add('expanded');
+            toggle.classList.add('expanded');
+        }
+
+        this.saveRuleSectionState(sectionId, !isExpanded);
+    }
+
+    saveRuleSectionState(sectionId, isExpanded) {
+        const states = JSON.parse(localStorage.getItem('ruleSectionStates') || '{}');
+        states[sectionId] = isExpanded;
+        localStorage.setItem('ruleSectionStates', JSON.stringify(states));
+    }
+
+    loadRuleSectionStates() {
+        const sections = document.querySelectorAll('.rules-section-content');
+        if (!sections.length) {
+            return;
+        }
+
+        const states = JSON.parse(localStorage.getItem('ruleSectionStates') || '{}');
+        const hasStoredState = Object.keys(states).length > 0;
+
+        sections.forEach((section, index) => {
+            const toggle = document.getElementById(`rules-toggle-${section.id}`);
+            const isExpanded = states[section.id];
+            const shouldExpand = isExpanded === true || (!hasStoredState && index === 0);
+
+            if (shouldExpand) {
+                section.classList.add('expanded');
+                if (toggle) toggle.classList.add('expanded');
+                if (!hasStoredState && index === 0) {
+                    this.saveRuleSectionState(section.id, true);
+                }
+            } else {
+                section.classList.remove('expanded');
+                if (toggle) toggle.classList.remove('expanded');
+            }
+        });
+    }
+
     clearAIPFilter() {
         const filterInput = document.getElementById('aip-filter-input');
         if (filterInput) {
@@ -985,6 +1208,31 @@ class AirportMap {
                 section.style.display = 'block';
             }
         });
+    }
+
+    stripHtml(html) {
+        if (!html) {
+            return '';
+        }
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        return tempDiv.textContent || tempDiv.innerText || '';
+    }
+
+    escapeHtml(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    escapeAttribute(value) {
+        return this.escapeHtml(value);
     }
 
     getProcedureBadgeClass(procedureType, approachType) {

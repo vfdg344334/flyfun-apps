@@ -283,3 +283,32 @@ class RunwayResponse(BaseModel):
             he_heading_degT=runway.he_heading_degT,
             he_displaced_threshold_ft=runway.he_displaced_threshold_ft
         ) 
+
+
+class RuleEntryResponse(BaseModel):
+    """Pydantic model for an individual rule entry."""
+
+    question_id: str
+    question_text: Optional[str]
+    category: Optional[str]
+    tags: List[str] = []
+    answer_html: Optional[str]
+    links: List[str] = []
+    last_reviewed: Optional[str]
+    confidence: Optional[str]
+
+
+class RuleCategoryResponse(BaseModel):
+    """Pydantic model for a category grouping of rules."""
+
+    name: str
+    count: int
+    rules: List[RuleEntryResponse]
+
+
+class CountryRulesResponse(BaseModel):
+    """Pydantic model for rules grouped by category for a country."""
+
+    country: str
+    total_rules: int
+    categories: List[RuleCategoryResponse]

@@ -243,6 +243,14 @@ class APIClient {
         return this.request('/api/statistics/data-quality');
     }
 
+    // Rules endpoints
+    async getCountryRules(countryCode) {
+        if (!countryCode) {
+            return null;
+        }
+        return this.request(`/api/rules/${encodeURIComponent(countryCode)}`);
+    }
+
     // Health check
     async healthCheck() {
         return this.request('/health');

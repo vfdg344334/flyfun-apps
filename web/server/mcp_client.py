@@ -353,8 +353,9 @@ class MCPClient:
         try:
             logger.info(f"🔄 Comparing rules between {country1.upper()} and {country2.upper()}" +
                        (f" (category: {category})" if category else ""))
-
-            comparison = self.rules_manager.compare_rules_between_countries(
+            ctx = self._ensure_context()
+            comparison = shared_compare_rules_between_countries(
+                ctx,
                 country1=country1,
                 country2=country2,
                 category=category

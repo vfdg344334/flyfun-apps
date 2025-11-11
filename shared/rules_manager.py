@@ -367,7 +367,7 @@ class RulesManager:
             lines = []
             for category, cat_rules in sorted(by_category.items()):
                 lines.append(f"\n**{category}** ({len(cat_rules)} rules):")
-                for rule in cat_rules[:10]:  # Limit per category
+                for rule in cat_rules:
                     lines.append(f"\n• **{rule.get('question_text', 'Unknown')}**")
                     answer = rule.get('answer_html', 'No answer available')
                     # Strip HTML tags for display
@@ -376,9 +376,6 @@ class RulesManager:
 
                     if rule.get('links'):
                         lines.append(f"  📎 Links: {', '.join(rule['links'][:2])}")
-
-                if len(cat_rules) > 10:
-                    lines.append(f"  ... and {len(cat_rules) - 10} more in this category")
 
             return "\n".join(lines)
         else:

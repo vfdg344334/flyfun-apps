@@ -3,6 +3,7 @@
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent / '.env'
@@ -35,16 +36,17 @@ from euro_aip.models.euro_aip_model import EuroAipModel
 # Import security configuration
 from security_config import (
     ALLOWED_ORIGINS, ALLOWED_HOSTS, RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_REQUESTS,
-    FORCE_HTTPS, get_safe_db_path, SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
+    FORCE_HTTPS, get_safe_db_path, get_safe_rules_path, SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
 )
 
 # Import API routes
-from api import airports, procedures, filters, statistics, chatbot
+from api import airports, procedures, filters, statistics, chatbot, rules
 # LangChain-based chat endpoint (alternative to streaming chatbot)
 from chat import ask as chat_ask
 
 # Import chatbot service
 from chatbot_service import ChatbotService
+from shared.rules_manager import RulesManager
 
 # Configure logging with both file and console output
 log_dir = Path("/tmp/flyfun-logs")
@@ -71,6 +73,7 @@ logger.info(f"Logging to file: {log_file}")
 # Global database storage
 db_storage = None
 model = None
+rules_manager: Optional[RulesManager] = None
 
 # Simple rate limiting storage
 request_counts = {}
@@ -103,7 +106,7 @@ def check_rate_limit(client_ip: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
-    global db_storage, model
+    global db_storage, model, rules_manager
     
     # Startup
     logger.info("Starting up Euro AIP Airport Explorer...")
@@ -125,6 +128,14 @@ async def lifespan(app: FastAPI):
         procedures.set_model(model)
         filters.set_model(model)
         statistics.set_model(model)
+
+        # Initialize rules manager
+        rules_path = get_safe_rules_path()
+        logger.info(f"Loading rules from '{rules_path}'")
+        rules_manager = RulesManager(rules_path)
+        if not rules_manager.load_rules():
+            logger.warning("No rules loaded from %s", rules_path)
+        rules.set_rules_manager(rules_manager)
 
         # Initialize chatbot service
         logger.info("Initializing chatbot service...")
@@ -216,6 +227,7 @@ app.include_router(airports.router, prefix="/api/airports", tags=["airports"])
 app.include_router(procedures.router, prefix="/api/procedures", tags=["procedures"])
 app.include_router(filters.router, prefix="/api/filters", tags=["filters"])
 app.include_router(statistics.router, prefix="/api/statistics", tags=["statistics"])
+app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
 # Chatbot endpoints: both streaming (OpenAI) and LangChain+MCP available
 app.include_router(chatbot.router, prefix="/api/chat", tags=["chatbot"])  # Streaming: /api/chat/stream
 app.include_router(chat_ask.router, tags=["chat"])  # LangChain+MCP: /chat/ask, /chat/health
