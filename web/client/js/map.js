@@ -1027,6 +1027,7 @@ class AirportMap {
 
         rulesContainer.innerHTML = html;
         this.initializeRuleSections();
+        this.initializeRulesFilter();
     }
 
     toggleAIPSection(sectionId) {
@@ -1096,6 +1097,31 @@ class AirportMap {
         this.loadRuleSectionStates();
     }
 
+    initializeRulesFilter() {
+        const filterInput = document.getElementById('rules-filter-input');
+        const clearButton = document.getElementById('rules-filter-clear');
+        if (!filterInput) {
+            return;
+        }
+
+        // Remove previous listeners if present
+        filterInput.removeEventListener('input', this.handleRulesFilter);
+        if (clearButton) {
+            clearButton.removeEventListener('click', this.clearRulesFilter);
+        }
+
+        this.handleRulesFilter = this.handleRulesFilter.bind(this);
+        this.clearRulesFilter = this.clearRulesFilter.bind(this);
+
+        filterInput.addEventListener('input', this.handleRulesFilter);
+        if (clearButton) {
+            clearButton.addEventListener('click', this.clearRulesFilter);
+        }
+
+        // Clear any stale value when switching airports
+        filterInput.value = '';
+    }
+
     buildRuleSectionId(countryCode, categoryName) {
         const slug = (categoryName || 'general')
             .toString()
@@ -1153,6 +1179,65 @@ class AirportMap {
             } else {
                 section.classList.remove('expanded');
                 if (toggle) toggle.classList.remove('expanded');
+            }
+        });
+    }
+
+    clearRulesFilter() {
+        const filterInput = document.getElementById('rules-filter-input');
+        if (filterInput) {
+            filterInput.value = '';
+            this.handleRulesFilter({ target: { value: '' } });
+        }
+    }
+
+    handleRulesFilter(event) {
+        const filterText = (event.target.value || '').toLowerCase();
+        const entries = document.querySelectorAll('.rules-entry');
+
+        const matchedSections = new Set();
+
+        entries.forEach(entry => {
+            const question = entry.querySelector('.rule-question')?.textContent || '';
+            const answer = entry.querySelector('.rule-answer')?.textContent || '';
+            const tags = Array.from(entry.querySelectorAll('.badge')).map(b => b.textContent || '').join(' ');
+            const meta = entry.querySelector('.text-muted')?.textContent || '';
+            const category = entry.closest('.rules-section')?.dataset.category || '';
+
+            const combined = `${question} ${answer} ${tags} ${meta} ${category}`.toLowerCase();
+            const matches = combined.includes(filterText);
+
+            if (matches) {
+                entry.classList.remove('hidden');
+                entry.classList.toggle('highlight', Boolean(filterText));
+                const sectionContent = entry.closest('.rules-section-content');
+                if (sectionContent) {
+                    matchedSections.add(sectionContent.id);
+                }
+            } else {
+                entry.classList.add('hidden');
+                entry.classList.remove('highlight');
+            }
+        });
+
+        // Expand matched sections, collapse others if filter active
+        const sections = document.querySelectorAll('.rules-section-content');
+        sections.forEach(section => {
+            const toggle = document.getElementById(`rules-toggle-${section.id}`);
+            const visibleEntries = section.querySelectorAll('.rules-entry:not(.hidden)');
+            if (filterText) {
+                const shouldExpand = matchedSections.has(section.id) || visibleEntries.length > 0;
+                if (shouldExpand) {
+                    section.classList.add('expanded');
+                    if (toggle) toggle.classList.add('expanded');
+                } else {
+                    section.classList.remove('expanded');
+                    if (toggle) toggle.classList.remove('expanded');
+                }
+                section.parentElement.style.display = visibleEntries.length > 0 ? 'block' : 'none';
+            } else {
+                // Restore visibility when filter cleared
+                section.parentElement.style.display = 'block';
             }
         });
     }
