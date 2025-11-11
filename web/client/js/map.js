@@ -779,6 +779,9 @@ class AirportMap {
             <i class="fas fa-plane"></i> EuroGA
         </a>`);
         
+        links.push(`<a href="https://airfield.directory/airfield/${airport.ident}" target="_blank" class="btn btn-outline-success btn-sm me-2">
+            <i class="fas fa-plane"></i> Airfield Directory
+        </a>`);
         if (links.length > 0) {
             html += `
                 <div class="airport-detail-section">
