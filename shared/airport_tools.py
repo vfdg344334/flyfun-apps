@@ -501,7 +501,7 @@ def list_rules_for_country(
         "found": True,
         "country_code": country_code.upper(),
         "count": len(rules),
-        "rules": rules[:60],
+        "rules": rules[:50],
         "formatted_text": formatted_text,
         "categories": categories
     }
@@ -511,9 +511,7 @@ def compare_rules_between_countries(
     ctx: ToolContext,
     country1: str,
     country2: str,
-    category: Optional[str] = None,
-    tags: Optional[List[str]] = None,
-    search: Optional[str] = None
+    category: Optional[str] = None
 ) -> Dict[str, Any]:
     rules_manager = ctx.ensure_rules_manager()
     comparison = rules_manager.compare_rules_between_countries(
