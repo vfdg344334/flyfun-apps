@@ -168,7 +168,7 @@ async def get_airports_near_route(
     
     # Find airports near the route
     nearby_airports = model.find_airports_near_route(route_airports, distance_nm)
-    
+   
     # Apply additional filters
     filtered_airports = []
     for item in nearby_airports:

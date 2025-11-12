@@ -102,10 +102,11 @@ class MCPClient:
         self,
         from_icao: str,
         to_icao: str,
-        max_distance_nm: float = 50.0
+        max_distance_nm: float = 50.0,
+        filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         ctx = self._ensure_context()
-        return shared_find_airports_near_route(ctx, from_icao, to_icao, max_distance_nm)
+        return shared_find_airports_near_route(ctx, from_icao, to_icao, max_distance_nm, filters=filters)
 
     def _get_airport_details(self, icao_code: str) -> Dict[str, Any]:
         ctx = self._ensure_context()
@@ -380,12 +381,16 @@ class MCPClient:
         Return tool definitions in OpenAI function calling format.
         These will be provided to the LLM so it knows what tools it can call.
         """
+
+        def _desc(func):
+            return (func.__doc__ or "").strip()
+
         return [
             {
                 "type": "function",
                 "function": {
                     "name": "search_airports",
-                    "description": "Search for airports by name, ICAO code, IATA code, or city name. Returns matching airports with key information.",
+                    "description": _desc(shared_search_airports),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -407,7 +412,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "find_airports_near_route",
-                    "description": "Find airports within a specified distance from a direct route between two airports. Useful for finding fuel stops, alternates, or customs stops.",
+                    "description": _desc(shared_find_airports_near_route),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -424,6 +429,17 @@ class MCPClient:
                                 "description": "Maximum distance in nautical miles from the direct route (default: 50)",
                                 "default": 50.0,
                             },
+                            "filters": {
+                                "type": "object",
+                                "description": "Optional airport filters (country, has_procedures, has_aip_data, has_hard_runway, point_of_entry).",
+                                "properties": {
+                                    "country": {"type": "string", "description": "ISO-2 country code (e.g., FR, GB)"},
+                                    "has_procedures": {"type": "boolean"},
+                                    "has_aip_data": {"type": "boolean"},
+                                    "has_hard_runway": {"type": "boolean"},
+                                    "point_of_entry": {"type": "boolean"},
+                                },
+                            },
                         },
                         "required": ["from_icao", "to_icao"],
                     },
@@ -433,7 +449,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_airport_details",
-                    "description": "Get comprehensive details about a specific airport including runways, procedures, facilities, and AIP information.",
+                    "description": _desc(shared_get_airport_details),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -450,7 +466,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_border_crossing_airports",
-                    "description": "List all airports that are official border crossing points (with customs). Optionally filter by country.",
+                    "description": _desc(shared_get_border_crossing_airports),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -467,7 +483,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_airport_statistics",
-                    "description": "Get statistical information about airports in the database, such as counts of airports with customs, fuel types, etc. Optionally filter by country.",
+                    "description": _desc(shared_get_airport_statistics),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -484,7 +500,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_airport_pricing",
-                    "description": "Get pricing data (landing fees by aircraft type and fuel prices) from airfield.directory. Returns landing fees for C172, DA42, SR22, PC12 and fuel prices for AVGAS, JetA1, SuperPlus. Coverage: 30% of EU airports (678 airports with pricing).",
+                    "description": _desc(shared_get_airport_pricing),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -501,7 +517,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_pilot_reviews",
-                    "description": "Get community pilot reviews (PIREPs) from airfield.directory. Returns ratings, comments, and pilot feedback for an airport. Coverage: 350 airports with reviews (448 total reviews).",
+                    "description": _desc(shared_get_pilot_reviews),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -523,7 +539,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "get_fuel_prices",
-                    "description": "Get fuel availability and prices from airfield.directory. Shows which fuel types are available (AVGAS, JetA1, SuperPlus, etc.) and their prices if known. Coverage: 624 airports with fuel data.",
+                    "description": _desc(shared_get_fuel_prices),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -562,7 +578,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "list_rules_for_country",
-                    "description": "Get aviation rules and regulations for a specific European country. Includes information about customs, flight plans, airspace, IFR/VFR requirements, fuel, and other operational rules. Useful for understanding country-specific requirements for cross-border flights.",
+                    "description": _desc(shared_list_rules_for_country),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -583,7 +599,7 @@ class MCPClient:
                 "type": "function",
                 "function": {
                     "name": "compare_rules_between_countries",
-                    "description": "Compare aviation rules and regulations between two European countries. Shows differences in requirements, procedures, and regulations. Essential for planning international flights to understand varying requirements.",
+                    "description": _desc(shared_compare_rules_between_countries),
                     "parameters": {
                         "type": "object",
                         "properties": {

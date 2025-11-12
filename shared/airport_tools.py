@@ -5,7 +5,7 @@ Shared airport tool logic used by both the MCP server and internal chatbot clien
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
@@ -64,7 +64,45 @@ def _airport_summary(a: Airport) -> Dict[str, Any]:
     }
 
 
+def _apply_airport_filters(
+    airports: Iterable[Airport],
+    filters: Optional[Dict[str, Any]] = None,
+) -> List[Airport]:
+    """
+    Apply common airport filters (country, has_procedures, point_of_entry, etc.)
+    to an iterable of Airport objects and return the filtered list preserving order.
+    """
+    if not filters:
+        return list(airports)
+
+    country = filters.get("country")
+    if country:
+        country = country.upper()
+
+    has_procedures = filters.get("has_procedures")
+    has_aip_data = filters.get("has_aip_data")
+    has_hard_runway = filters.get("has_hard_runway")
+    point_of_entry = filters.get("point_of_entry")
+
+    filtered: List[Airport] = []
+    for airport in airports:
+        if country and (airport.iso_country or "").upper() != country:
+            continue
+        if has_procedures is not None and bool(airport.has_procedures) != bool(has_procedures):
+            continue
+        if has_aip_data is not None and bool(len(airport.aip_entries) > 0) != bool(has_aip_data):
+            continue
+        if has_hard_runway is not None and bool(getattr(airport, "has_hard_runway", False)) != bool(has_hard_runway):
+            continue
+        if point_of_entry is not None and bool(getattr(airport, "point_of_entry", False)) != bool(point_of_entry):
+            continue
+        filtered.append(airport)
+
+    return filtered
+
+
 def search_airports(ctx: ToolContext, query: str, max_results: int = 20) -> Dict[str, Any]:
+    """Search for airports by name, ICAO code, IATA code, or city name. Returns matching airports with key information."""
     q = query.upper().strip()
     matches: List[Dict[str, Any]] = []
 
@@ -102,16 +140,28 @@ def find_airports_near_route(
     ctx: ToolContext,
     from_icao: str,
     to_icao: str,
-    max_distance_nm: float = 50.0
+    max_distance_nm: float = 50.0,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    """List airports within a specified distance from a direct route between two airports, with optional airport filters (country, procedures, customs, etc.). Useful for finding fuel stops, alternates, or customs stops."""
     results = ctx.model.find_airports_near_route(
         [from_icao.upper(), to_icao.upper()],
         max_distance_nm
     )
 
+    allowed_idents = None
+    if filters:
+        filtered_airports = _apply_airport_filters(
+            (item["airport"] for item in results),
+            filters,
+        )
+        allowed_idents = {airport.ident for airport in filtered_airports}
+
     airports: List[Dict[str, Any]] = []
     for item in results:
         a = item["airport"]
+        if allowed_idents is not None and a.ident not in allowed_idents:
+            continue
         summary = _airport_summary(a)
         summary["distance_nm"] = float(item["distance_nm"])
         airports.append(summary)
@@ -149,6 +199,7 @@ def find_airports_near_route(
 
 
 def get_airport_details(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
+    """Get comprehensive details about a specific airport including runways, procedures, facilities, and AIP information."""
     icao = icao_code.strip().upper()
     a = ctx.model.get_airport(icao)
 
@@ -218,6 +269,7 @@ def get_airport_details(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
 
 
 def get_border_crossing_airports(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
+    """List all airports that are official border crossing points (with customs). Optionally filter by country."""
     airports_list = ctx.model.get_border_crossing_airports()
 
     if country:
@@ -257,6 +309,7 @@ def get_border_crossing_airports(ctx: ToolContext, country: Optional[str] = None
 
 
 def get_airport_statistics(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
+    """Get statistical information about airports, such as counts with customs, fuel types, or procedures. Optionally filter by country."""
     airports = ctx.model.get_airports_by_country(country.upper()) if country else list(ctx.model.airports.values())
     total = len(airports)
 
@@ -289,6 +342,7 @@ def get_airport_statistics(ctx: ToolContext, country: Optional[str] = None) -> D
 
 
 def get_airport_pricing(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
+    """Get pricing data (landing fees and fuel prices) from airfield.directory, including common aircraft types and currency information."""
     if not ctx.enrichment_storage:
         raise RuntimeError("Enrichment storage not available in tool context.")
 
@@ -350,6 +404,7 @@ def get_airport_pricing(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
 
 
 def get_pilot_reviews(ctx: ToolContext, icao_code: str, limit: int = 10) -> Dict[str, Any]:
+    """Get community pilot reviews (PIREPs) from airfield.directory, including ratings, comments, and review metadata."""
     if not ctx.enrichment_storage:
         raise RuntimeError("Enrichment storage not available in tool context.")
 
@@ -406,6 +461,7 @@ def get_pilot_reviews(ctx: ToolContext, icao_code: str, limit: int = 10) -> Dict
 
 
 def get_fuel_prices(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
+    """Get fuel availability and prices from airfield.directory, showing which fuel types are available and any known prices."""
     if not ctx.enrichment_storage:
         raise RuntimeError("Enrichment storage not available in tool context.")
 
@@ -478,6 +534,7 @@ def list_rules_for_country(
     category: Optional[str] = None,
     tags: Optional[List[str]] = None
 ) -> Dict[str, Any]:
+    """List aviation rules and regulations for a specific country (iso-2 code eg FR,GB), including customs, flight plans, and operational requirements. Can be filtered by category like IFR/VFR, airspace, etc."""
     rules_manager = ctx.ensure_rules_manager()
     rules = rules_manager.get_rules_for_country(
         country_code=country_code,
@@ -513,6 +570,7 @@ def compare_rules_between_countries(
     country2: str,
     category: Optional[str] = None
 ) -> Dict[str, Any]:
+    """Compare aviation rules and regulations between two countries (iso-2 code eg FR,GB) and highlight differences in answers. Can be filtered by category like IFR/VFR, airspace, etc."""
     rules_manager = ctx.ensure_rules_manager()
     comparison = rules_manager.compare_rules_between_countries(
         country1=country1,
@@ -532,6 +590,7 @@ def compare_rules_between_countries(
 
 
 def get_answers_for_questions(ctx: ToolContext, question_ids: List[str]) -> Dict[str, Any]:
+    """Get rule answers for specific question IDs, including per-country responses, categories, and tags."""
     rules_manager = ctx.ensure_rules_manager()
     items: List[Dict[str, Any]] = []
     for qid in question_ids or []:
@@ -562,6 +621,7 @@ def get_answers_for_questions(ctx: ToolContext, question_ids: List[str]) -> Dict
 
 
 def list_rule_categories_and_tags(ctx: ToolContext) -> Dict[str, Any]:
+    """List available aviation rule categories and tags from the rules store."""
     rules_manager = ctx.ensure_rules_manager()
     categories = sorted(rules_manager.rules_index.get("categories", {}).keys())
     tags = sorted(rules_manager.rules_index.get("tags", {}).keys())
@@ -588,6 +648,7 @@ def list_rule_categories_and_tags(ctx: ToolContext) -> Dict[str, Any]:
 
 
 def list_rule_countries(ctx: ToolContext) -> Dict[str, Any]:
+    """List available countries (ISO-2 codes) present in the aviation rules store."""
     rules_manager = ctx.ensure_rules_manager()
     countries = rules_manager.get_available_countries()
     pretty = "**Rule Countries (ISO-2):**\n" + ("\n".join(f"- {c}" for c in countries) if countries else "(none)")

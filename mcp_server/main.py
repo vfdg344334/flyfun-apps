@@ -42,6 +42,11 @@ from shared.airport_tools import (
 )
 from shared.rules_manager import RulesManager
 
+# Helper to keep tool descriptions consistent with shared functions
+def _desc(func) -> str:
+    return (func.__doc__ or "").strip()
+
+
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -125,24 +130,36 @@ mcp = FastMCP(
 )
 
 # ---- Tools -------------------------------------------------------------------
-@mcp.tool(name="search_airports", description="Search by name, ICAO, IATA, or municipality")
+@mcp.tool(name="search_airports", description=_desc(shared_search_airports))
 def search_airports(query: str, max_results: int = 20, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     result = shared_search_airports(context, query, max_results)
     return result
 
-@mcp.tool(name="find_airports_near_route", description="Find airports within max_distance_nm of a direct route")
-def find_airports_near_route(from_icao: str, to_icao: str, max_distance_nm: float = 50.0, ctx: Context = None) -> Dict[str, Any]:
+@mcp.tool(name="find_airports_near_route", description=_desc(shared_find_airports_near_route))
+def find_airports_near_route(
+    from_icao: str,
+    to_icao: str,
+    max_distance_nm: float = 50.0,
+    filters: Optional[Dict[str, Any]] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
     context = _require_tool_context()
-    result = shared_find_airports_near_route(context, from_icao, to_icao, max_distance_nm)
+    result = shared_find_airports_near_route(
+        context,
+        from_icao,
+        to_icao,
+        max_distance_nm,
+        filters=filters,
+    )
     return result
 
-@mcp.tool(name="get_airport_details", description="Get details by ICAO")
+@mcp.tool(name="get_airport_details", description=_desc(shared_get_airport_details))
 def get_airport_details(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_airport_details(context, icao_code)
 
-@mcp.tool(name="list_rules_for_country", description="List aviation rules answers for a country (ISO-2 code, e.g., FR, GB). Optional: category, tags, search. Example: {country:'FR', category:'VFR'}")
+@mcp.tool(name="list_rules_for_country", description=_desc(shared_list_rules_for_country))
 def list_rules_for_country(country: str,
                            category: Optional[str] = None,
                            tags: Optional[List[str]] = None,
@@ -156,7 +173,7 @@ def list_rules_for_country(country: str,
     result = shared_list_rules_for_country(context, country, category=category, tags=tags)
     return result
 
-@mcp.tool(name="compare_rules_between_countries", description="Compare aviation rules answers between two countries (ISO-2, e.g., FR vs GB). Optional: category, tags, search. Differences shown by default.")
+@mcp.tool(name="compare_rules_between_countries", description=_desc(shared_compare_rules_between_countries))
 def compare_rules_between_countries(country_a: str,
                                     country_b: str,
                                     category: Optional[str] = None,
@@ -185,42 +202,42 @@ def compare_rules_between_countries(country_a: str,
         "pretty": result.get("formatted_summary"),
     }
 
-@mcp.tool(name="get_answers_for_questions", description="Get answers by country for specific question IDs (country keys are ISO-2 codes). Use list_rule_categories_and_tags and list_rules_for_country to discover IDs.")
+@mcp.tool(name="get_answers_for_questions", description=_desc(shared_get_answers_for_questions))
 def get_answers_for_questions(question_ids: List[str], ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_answers_for_questions(context, question_ids)
 
-@mcp.tool(name="list_rule_categories_and_tags", description="List available aviation rule categories and tags in the rules store")
+@mcp.tool(name="list_rule_categories_and_tags", description=_desc(shared_list_rule_categories_and_tags))
 def list_rule_categories_and_tags(ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_list_rule_categories_and_tags(context)
 
-@mcp.tool(name="list_rule_countries", description="List available countries (ISO-2 codes) present in the aviation rules store")
+@mcp.tool(name="list_rule_countries", description=_desc(shared_list_rule_countries))
 def list_rule_countries(ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_list_rule_countries(context)
 
-@mcp.tool(name="get_border_crossing_airports", description="List airports that are border crossing points (optional country filter)")
+@mcp.tool(name="get_border_crossing_airports", description=_desc(shared_get_border_crossing_airports))
 def get_border_crossing_airports(country: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_border_crossing_airports(context, country)
 
-@mcp.tool(name="get_airport_statistics", description="Basic stats for airports (optional country)")
+@mcp.tool(name="get_airport_statistics", description=_desc(shared_get_airport_statistics))
 def get_airport_statistics(country: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_airport_statistics(context, country)
 
-@mcp.tool(name="get_airport_pricing", description="Get pricing data (landing fees, fuel prices) from airfield.directory")
+@mcp.tool(name="get_airport_pricing", description=_desc(shared_get_airport_pricing))
 def get_airport_pricing(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_airport_pricing(context, icao_code)
 
-@mcp.tool(name="get_pilot_reviews", description="Get community pilot reviews (PIREPs) from airfield.directory")
+@mcp.tool(name="get_pilot_reviews", description=_desc(shared_get_pilot_reviews))
 def get_pilot_reviews(icao_code: str, limit: int = 10, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_pilot_reviews(context, icao_code, limit)
 
-@mcp.tool(name="get_fuel_prices", description="Get fuel availability and prices from airfield.directory")
+@mcp.tool(name="get_fuel_prices", description=_desc(shared_get_fuel_prices))
 def get_fuel_prices(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     return shared_get_fuel_prices(context, icao_code)
