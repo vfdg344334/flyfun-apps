@@ -409,18 +409,23 @@ ALWAYS structure your response in TWO parts:
    - References to map visualization
 
 **CRITICAL - What NEVER Goes in Final Answer:**
-❌ NEVER include these in your final answer (they belong in <thinking> tags):
+❌ ABSOLUTELY FORBIDDEN in final answer (they belong in <thinking> tags):
    - "Searching for..." or "Now searching..." or "Continuing search..."
+   - "Finalizing..." or "Preparing..." or "Completing..."
+   - "Almost done..." or "Gathering..." or "Processing..."
    - "I will search for..." or "I'm going to..."
    - "Warning: Always verify..." (internal reminders)
    - "Now providing..." or "Let me provide..."
    - Any commentary about your search process or strategy
+   - ANY progress updates or status messages
 
 ✅ Final answer should ONLY contain:
    - Brief analysis of the query
    - Direct information for the user
    - Specific recommendations with details
    - Map visualization references
+
+⚠️ IF YOU INCLUDE ANY "Searching", "Continuing", "Finalizing", "Preparing" STATEMENTS IN YOUR FINAL ANSWER, YOU HAVE FAILED THE TASK.
 
 **Example (CORRECT FORMAT):**
 <thinking>
@@ -779,6 +784,11 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
             answer_buffer = ""
             full_response = ""
 
+            # Track token usage
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_tokens = 0
+
             # First pass: Check if LLM wants to call tools (non-streaming) with fallback
             logger.info(f"⏱️ TIMING: Starting first LLM call (tool detection)...")
             llm_start = time.time()
@@ -791,7 +801,15 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
             )
 
             llm_end = time.time()
-            logger.info(f"⏱️ TIMING: First LLM call completed in {llm_end - llm_start:.2f}s")
+
+            # Track tokens from first LLM call
+            if hasattr(initial_response, 'usage') and initial_response.usage:
+                total_input_tokens += initial_response.usage.prompt_tokens
+                total_output_tokens += initial_response.usage.completion_tokens
+                total_tokens += initial_response.usage.total_tokens
+                logger.info(f"⏱️ TIMING: First LLM call completed in {llm_end - llm_start:.2f}s | Tokens: input={initial_response.usage.prompt_tokens}, output={initial_response.usage.completion_tokens}, total={initial_response.usage.total_tokens}")
+            else:
+                logger.info(f"⏱️ TIMING: First LLM call completed in {llm_end - llm_start:.2f}s")
 
             assistant_message = initial_response.choices[0].message
 
@@ -823,6 +841,7 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
                     function_args = json.loads(tool_call.function.arguments)
 
                     tool_exec_start = time.time()
+                    logger.info(f"🔧 Used: {function_name}")
                     logger.info(f"⏱️ TIMING: Calling tool: {function_name} with args: {function_args}")
 
                     tool_result = self.mcp_client._call_tool(function_name, function_args)
@@ -861,8 +880,15 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
             # Process stream chunks with TRUE immediate streaming (from first token)
             tag_buffer = ""  # Only used when we detect potential tag start
             first_chunk_received = False
+            stream_tokens_input = 0
+            stream_tokens_output = 0
 
             for chunk in stream:
+                # Check for usage info in streaming response (last chunk often has it)
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    stream_tokens_input = chunk.usage.prompt_tokens
+                    stream_tokens_output = chunk.usage.completion_tokens
+
                 # Check if chunk has choices and content
                 if not chunk.choices or len(chunk.choices) == 0:
                     continue
@@ -955,16 +981,34 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
             if tool_calls_made:
                 yield f"event: tool_calls\ndata: {json.dumps(tool_calls_made)}\n\n"
 
-            # Send visualization if any
+            # Send visualization if any - FILTER based on LLM's answer
             if visualizations:
                 viz_data = visualizations[0] if len(visualizations) == 1 else visualizations
+
+                # Filter visualization to only show airports mentioned in the answer
+                if answer_buffer and tool_calls_made:
+                    logger.info("Filtering visualization based on LLM's answer...")
+                    viz_data = self._filter_visualization_by_answer(
+                        visualization=viz_data,
+                        answer_text=answer_buffer,
+                        tool_results=tool_calls_made
+                    )
+
                 yield f"event: visualization\ndata: {json.dumps(viz_data)}\n\n"
+
+            # Add streaming tokens to total (handle None values)
+            if stream_tokens_input is not None and stream_tokens_input > 0:
+                total_input_tokens += stream_tokens_input
+            if stream_tokens_output is not None and stream_tokens_output > 0:
+                total_output_tokens += stream_tokens_output
+            total_tokens = total_input_tokens + total_output_tokens
 
             # Final timing summary
             end_time = time.time()
             total_time = end_time - start_time
             logger.info(f"⏱️ TIMING: ═══════════════════════════════════════")
             logger.info(f"⏱️ TIMING: TOTAL request time: {total_time:.2f}s")
+            logger.info(f"📊 TOKENS: Input={total_input_tokens}, Output={total_output_tokens}, Total={total_tokens}")
             logger.info(f"⏱️ TIMING: ═══════════════════════════════════════")
 
             # Save conversation log
@@ -981,12 +1025,15 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
                     "temperature": self.llm_temperature,
                     "total_time_seconds": round(total_time, 2),
                     "has_visualizations": len(visualizations) > 0,
-                    "num_tool_calls": len(tool_calls_made)
+                    "num_tool_calls": len(tool_calls_made),
+                    "tokens_input": total_input_tokens,
+                    "tokens_output": total_output_tokens,
+                    "tokens_total": total_tokens
                 }
             )
 
-            # Send done event
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
+            # Send done event with token counts
+            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': {'input': total_input_tokens, 'output': total_output_tokens, 'total': total_tokens}})}\n\n"
 
         except Exception as e:
             logger.error(f"Error in streaming chat: {e}", exc_info=True)
@@ -1006,6 +1053,124 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
         # Clean up newlines
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
+
+    def _extract_icao_codes(self, text: str) -> List[str]:
+        """
+        Extract ICAO airport codes from LLM response text.
+        ICAO codes are 4 uppercase letters (e.g., LFAT, LFPG, EGTF).
+        """
+        if not text:
+            return []
+
+        # Pattern: 4 uppercase letters, often followed by space or punctuation
+        # Look for patterns like "LFAT ", "LFPG)", "(EGTF", etc.
+        pattern = r'\b([A-Z]{4})\b'
+        matches = re.findall(pattern, text)
+
+        # Deduplicate while preserving order
+        seen = set()
+        icao_codes = []
+        for code in matches:
+            if code not in seen:
+                seen.add(code)
+                icao_codes.append(code)
+
+        logger.info(f"Extracted {len(icao_codes)} ICAO codes from LLM answer: {icao_codes}")
+        return icao_codes
+
+    def _filter_visualization_by_answer(
+        self,
+        visualization: Any,
+        answer_text: str,
+        tool_results: List[Dict[str, Any]]
+    ) -> Any:
+        """
+        Filter visualization data to only show airports mentioned in the LLM's answer.
+
+        Args:
+            visualization: Original visualization data from tool
+            answer_text: The LLM's final answer text
+            tool_results: List of tool call results with airport data
+
+        Returns:
+            Filtered visualization showing only airports mentioned in answer
+        """
+        if not visualization or not answer_text:
+            return visualization
+
+        # Extract ICAO codes from the LLM's answer
+        mentioned_icaos = self._extract_icao_codes(answer_text)
+
+        if not mentioned_icaos:
+            logger.warning("No ICAO codes found in LLM answer, returning original visualization")
+            return visualization
+
+        logger.info(f"Filtering visualization to show only airports mentioned in answer: {mentioned_icaos}")
+
+        # Get all airports from tool results
+        all_airports = []
+        for tool_result in tool_results:
+            result = tool_result.get("result", {})
+            if "airports" in result:
+                all_airports.extend(result["airports"])
+
+            # Also add start/end airports from route if present
+            if "visualization" in result:
+                viz = result["visualization"]
+                logger.info(f"Found visualization in result: type={viz.get('type') if isinstance(viz, dict) else 'not a dict'}")
+                if isinstance(viz, dict) and viz.get("type") == "route_with_markers":
+                    route = viz.get("route", {})
+                    logger.info(f"Route data: from={route.get('from')}, to={route.get('to')}")
+                    # Add start airport if it has coordinates
+                    if route.get("from", {}).get("icao"):
+                        from_airport = {
+                            "ident": route["from"]["icao"],
+                            "latitude_deg": route["from"].get("lat"),
+                            "longitude_deg": route["from"].get("lon"),
+                            "name": f"{route['from']['icao']} (Start)",
+                            "municipality": "",
+                            "country": ""
+                        }
+                        all_airports.append(from_airport)
+                        logger.info(f"Added start airport: {from_airport['ident']}")
+                    # Add end airport if it has coordinates
+                    if route.get("to", {}).get("icao"):
+                        to_airport = {
+                            "ident": route["to"]["icao"],
+                            "latitude_deg": route["to"].get("lat"),
+                            "longitude_deg": route["to"].get("lon"),
+                            "name": f"{route['to']['icao']} (End)",
+                            "municipality": "",
+                            "country": ""
+                        }
+                        all_airports.append(to_airport)
+                        logger.info(f"Added end airport: {to_airport['ident']}")
+
+        # Filter airports to only those mentioned in the answer
+        filtered_airports = [
+            airport for airport in all_airports
+            if airport.get("ident") in mentioned_icaos
+        ]
+
+        logger.info(f"Filtered {len(all_airports)} airports down to {len(filtered_airports)} mentioned in answer")
+
+        # Update visualization with filtered data
+        if isinstance(visualization, dict):
+            viz_type = visualization.get("type")
+
+            if viz_type == "route_with_markers":
+                # Keep the route, update markers
+                filtered_viz = visualization.copy()
+                filtered_viz["markers"] = filtered_airports
+                return filtered_viz
+
+            elif viz_type == "markers":
+                # Update marker data
+                filtered_viz = visualization.copy()
+                filtered_viz["data"] = filtered_airports
+                return filtered_viz
+
+        return visualization
 
     def get_quick_actions(self) -> List[Dict[str, str]]:
         """
