@@ -292,6 +292,77 @@ class RulesManager:
             )
         }
 
+    def compare_rules_across_countries(
+        self,
+        category: Optional[str] = None,
+        tags: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a comparison of rules for all available countries, grouped by category.
+
+        Args:
+            category: Optional category filter. If provided, only rules within this category are included.
+            tags: Optional list of tags; if provided, rules must have at least one matching tag.
+
+        Returns:
+            Dict containing:
+                - categories: list of category summaries
+                - country_list: list of countries included
+                - total_rules: total number of unique questions included
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return {"categories": [], "country_list": [], "total_rules": 0}
+
+        countries = self.get_available_countries()
+        questions: Dict[str, Dict[str, Any]] = {}
+
+        for country in countries:
+            rules = self.get_rules_for_country(
+                country_code=country,
+                category=category,
+                tags=tags
+            )
+            for rule in rules:
+                question_id = rule.get('question_id') or rule.get('id')
+                if not question_id:
+                    continue
+
+                info = questions.setdefault(question_id, {
+                    "question_id": question_id,
+                    "question_text": rule.get('question_text') or rule.get('question') or '',
+                    "category": rule.get('category') or 'General',
+                    "tags": rule.get('tags') or [],
+                    "answers_by_country": {}
+                })
+
+                info['answers_by_country'][country.upper()] = {
+                    "answer_html": rule.get('answer_html') or '',
+                    "links": rule.get('links') or [],
+                    "last_reviewed": rule.get('last_reviewed'),
+                    "confidence": rule.get('confidence'),
+                }
+
+        categories: Dict[str, List[Dict[str, Any]]] = {}
+        for question in questions.values():
+            categories.setdefault(question["category"], []).append(question)
+
+        category_summaries = []
+        for cat_name, cat_questions in sorted(categories.items(), key=lambda item: item[0].lower()):
+            cat_questions.sort(key=lambda q: q["question_text"].lower())
+            category_summaries.append({
+                "name": cat_name,
+                "count": len(cat_questions),
+                "questions": cat_questions,
+            })
+
+        return {
+            "categories": category_summaries,
+            "country_list": countries,
+            "total_rules": len(questions),
+        }
+
     def _format_comparison_summary(
         self,
         country1: str,
