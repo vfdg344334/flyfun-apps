@@ -96,9 +96,28 @@ class ChatbotService:
             # Remove thinking tags from the answer
             answer = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
         else:
-            # No thinking tags found - treat entire response as answer
-            thinking = ""
-            answer = text.strip()
+            # No thinking tags found - try to detect thinking patterns at start of response
+            # Look for common planning/thinking statements before "Brief analysis:"
+            brief_analysis_match = re.search(r'(?:^|\n)\s*Brief analysis:', text, flags=re.IGNORECASE)
+
+            if brief_analysis_match:
+                # Everything before "Brief analysis:" is thinking (if it exists)
+                thinking_text = text[:brief_analysis_match.start()].strip()
+                answer_text = text[brief_analysis_match.start():].strip()
+
+                # Check if the thinking section contains planning statements
+                if thinking_text and any(pattern in thinking_text.lower() for pattern in
+                    ['searching', 'i will', 'i am going to', 'let me', 'continuing', 'now providing']):
+                    thinking = thinking_text
+                    answer = answer_text
+                else:
+                    # No clear thinking patterns, treat entire response as answer
+                    thinking = ""
+                    answer = text.strip()
+            else:
+                # No "Brief analysis:" marker - treat entire response as answer
+                thinking = ""
+                answer = text.strip()
 
         # Clean up thinking section: remove JSON artifacts and tool call syntax
         if thinking:
@@ -148,6 +167,19 @@ class ChatbotService:
         # Clean up any remaining XML-style thinking tags (as backup)
         text = re.sub(r'<channel>.*?</channel>', '', text, flags=re.DOTALL)
         text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+
+        # Remove common thinking/planning statements that should be hidden
+        # These are process statements that don't belong in the final answer
+        thinking_patterns = [
+            r'^(?:Warning|Note|Important):?\s*Always verify.*?(?:\n|$)',  # Internal warnings
+            r'(?:^|\n)\s*(?:I am going to|I\'m going to|I will|I\'ll|Let me)\s+(?:search|look|check|find|query|get|fetch|retrieve|gather).*?(?:\n|$)',
+            r'(?:^|\n)\s*(?:Searching|Continuing|Now searching|Finalizing|Preparing|Processing|Gathering|Almost done).*?(?:\n|$)',
+            r'(?:^|\n)\s*Now (?:providing|checking|analyzing|searching|looking).*?(?:\n|$)',
+            r'(?:^|\n)\s*(?:First|Next|Then),?\s+(?:I will|I\'ll|let me).*?(?:\n|$)',
+        ]
+
+        for pattern in thinking_patterns:
+            text = re.sub(pattern, '\n', text, flags=re.IGNORECASE | re.MULTILINE)
 
         # Clean up multiple blank lines
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
@@ -674,6 +706,10 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
                     # Call the tool via MCP client
                     tool_result = self.mcp_client._call_tool(function_name, function_args)
 
+                    # Log filter profile if present
+                    if "filter_profile" in tool_result:
+                        logger.info(f"📋 Filter profile generated: {tool_result['filter_profile']}")
+
                     tool_calls_made.append({
                         "name": function_name,
                         "arguments": function_args,
@@ -848,6 +884,11 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
 
                     tool_exec_end = time.time()
                     logger.info(f"⏱️ TIMING: Tool {function_name} completed in {tool_exec_end - tool_exec_start:.2f}s")
+
+                    # Log filter profile if present
+                    if "filter_profile" in tool_result:
+                        logger.info(f"📋 Filter profile generated: {tool_result['filter_profile']}")
+
                     tool_calls_made.append({
                         "name": function_name,
                         "arguments": function_args,
