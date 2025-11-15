@@ -9,29 +9,6 @@ from .base import Filter
 if TYPE_CHECKING:
     from shared.airport_tools import ToolContext
 
-class TripDistanceFilter(Filter):
-    """Filter airports by trip distance (in nautical miles)."""
-    name = "trip_distance"
-    description = "Filter by trip distance range (dict with optional 'min'/'max' keys in NM)"
-
-    def apply(
-        self,
-        airport: Airport,
-        value: Any,
-        context: Optional["ToolContext"] = None,
-    ) -> bool:
-        if value is None or not isinstance(value, dict):
-            return True
-        max_distance = value.get('max', None)
-        min_distance = value.get('min', None)
-        if max_distance is not None and min_distance is not None:
-            return max_distance >= airport.distance_nm >= min_distance
-        elif max_distance is not None:
-            return airport.distance_nm <= max_distance
-        elif min_distance is not None:
-            return airport.distance_nm >= min_distance
-        return True
-
 class CountryFilter(Filter):
     """Filter airports by ISO country code."""
     name = "country"

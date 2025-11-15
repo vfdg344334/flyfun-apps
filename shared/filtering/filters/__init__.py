@@ -21,6 +21,9 @@ from .fuel_filters import (
 from .pricing_filters import (
     MaxLandingFeeFilter,
 )
+from .distance_filters import (
+    TripDistanceFilter,
+)
 
 __all__ = [
     "Filter",
@@ -38,4 +41,6 @@ __all__ = [
     "HasJetAFilter",
     # Pricing filters
     "MaxLandingFeeFilter",
+    # Distance filters
+    "TripDistanceFilter",
 ]

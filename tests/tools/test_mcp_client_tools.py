@@ -29,3 +29,11 @@ def test_find_airports_near_route_integration(real_mcp_client):
     assert result["count"] >= 1
     assert result["airports"]
 
+def test_find_airports_near_route_with_filters_integration(real_mcp_client):
+    result = real_mcp_client._call_tool(
+        "find_airports_near_route",
+        {"from_icao": "EGTF", "to_icao": "LFMD", "max_distance_nm": 40, 
+        "filters": {"trip_distance": {"from": "EGTF", "min": 350, "max": 450}}},
+    )
+    assert result["count"] >= 1
+    assert result["airports"]

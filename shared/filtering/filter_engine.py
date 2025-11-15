@@ -19,6 +19,7 @@ from .filters import (
     HasAvgasFilter,
     HasJetAFilter,
     MaxLandingFeeFilter,
+    TripDistanceFilter,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ FilterRegistry.register(MinRunwayLengthFilter())
 FilterRegistry.register(HasAvgasFilter())
 FilterRegistry.register(HasJetAFilter())
 FilterRegistry.register(MaxLandingFeeFilter())
+FilterRegistry.register(TripDistanceFilter())
 
 logger.info(f"Filter registry initialized with {len(FilterRegistry.list_all())} filters")
 
