@@ -3,9 +3,11 @@
 Base classes for airport filtering system.
 """
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
+
+if TYPE_CHECKING:
+    from shared.airport_tools import ToolContext
 
 
 class Filter(ABC):
@@ -18,7 +20,6 @@ class Filter(ABC):
 
     # Override these in subclasses
     name: str = "base_filter"
-    requires_enrichment: bool = False
     description: str = "Base filter"
 
     @abstractmethod
@@ -26,7 +27,7 @@ class Filter(ABC):
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         """
         Check if airport passes this filter.

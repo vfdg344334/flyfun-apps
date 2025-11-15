@@ -2,27 +2,29 @@
 """
 Pricing-related filters (landing fees, etc.)
 """
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 from .base import Filter
+
+if TYPE_CHECKING:
+    from shared.airport_tools import ToolContext
 
 
 class MaxLandingFeeFilter(Filter):
     """Filter airports by maximum landing fee."""
     name = "max_landing_fee"
-    requires_enrichment = True
     description = "Filter by maximum landing fee (C172) in local currency"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if value is None:
             return True  # Not filtering by landing fee
 
+        enrichment_storage = getattr(context, "enrichment_storage", None)
         if not enrichment_storage:
             return False  # Can't check without enrichment data
 

@@ -3,7 +3,7 @@
 Filter engine for applying multiple filters to airports.
 """
 import logging
-from typing import Dict, Any, List, Iterable, Optional
+from typing import Dict, Any, List, Iterable, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
 from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
@@ -22,6 +22,9 @@ from .filters import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from shared.airport_tools import ToolContext
 
 
 class FilterRegistry:
@@ -75,13 +78,20 @@ class FilterEngine:
         filtered = engine.apply(airports, {"country": "FR", "has_avgas": True})
     """
 
-    def __init__(self, enrichment_storage: Optional[EnrichmentStorage] = None):
+    def __init__(
+        self,
+        context: Optional["ToolContext"] = None,
+        enrichment_storage: Optional[EnrichmentStorage] = None,
+    ):
         """
         Initialize filter engine.
 
         Args:
             enrichment_storage: Optional enrichment storage for pricing/fuel filters
         """
+        self.context = context
+        if enrichment_storage is None and context is not None:
+            enrichment_storage = context.enrichment_storage
         self.enrichment_storage = enrichment_storage
 
     def apply(
@@ -131,7 +141,11 @@ class FilterEngine:
 
                 # Apply the filter
                 try:
-                    if not filter_obj.apply(airport, filter_value, self.enrichment_storage):
+                    if not filter_obj.apply(
+                        airport,
+                        filter_value,
+                        self.context,
+                    ):
                         passes_all_filters = False
                         break  # Airport failed this filter, no need to check others
                 except Exception as e:

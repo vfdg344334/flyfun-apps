@@ -2,23 +2,46 @@
 """
 Basic airport filters (country, procedures, border crossing, etc.)
 """
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 from .base import Filter
 
+if TYPE_CHECKING:
+    from shared.airport_tools import ToolContext
+
+class TripDistanceFilter(Filter):
+    """Filter airports by trip distance (in nautical miles)."""
+    name = "trip_distance"
+    description = "Filter by trip distance range (dict with optional 'min'/'max' keys in NM)"
+
+    def apply(
+        self,
+        airport: Airport,
+        value: Any,
+        context: Optional["ToolContext"] = None,
+    ) -> bool:
+        if value is None or not isinstance(value, dict):
+            return True
+        max_distance = value.get('max', None)
+        min_distance = value.get('min', None)
+        if max_distance is not None and min_distance is not None:
+            return max_distance >= airport.distance_nm >= min_distance
+        elif max_distance is not None:
+            return airport.distance_nm <= max_distance
+        elif min_distance is not None:
+            return airport.distance_nm >= min_distance
+        return True
 
 class CountryFilter(Filter):
     """Filter airports by ISO country code."""
     name = "country"
-    requires_enrichment = False
     description = "Filter by country (ISO-2 code, e.g., 'FR', 'GB')"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if not value:
             return True
@@ -30,14 +53,13 @@ class CountryFilter(Filter):
 class HasProceduresFilter(Filter):
     """Filter airports by procedure availability."""
     name = "has_procedures"
-    requires_enrichment = False
     description = "Filter by instrument procedures availability (boolean)"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if value is None:
             return True
@@ -48,14 +70,13 @@ class HasProceduresFilter(Filter):
 class HasAipDataFilter(Filter):
     """Filter airports by AIP data availability."""
     name = "has_aip_data"
-    requires_enrichment = False
     description = "Filter by AIP data availability (boolean)"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if value is None:
             return True
@@ -66,14 +87,13 @@ class HasAipDataFilter(Filter):
 class HasHardRunwayFilter(Filter):
     """Filter airports by hard surface runway availability."""
     name = "has_hard_runway"
-    requires_enrichment = False
     description = "Filter by hard surface runway (boolean)"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if value is None:
             return True
@@ -84,14 +104,13 @@ class HasHardRunwayFilter(Filter):
 class PointOfEntryFilter(Filter):
     """Filter airports by border crossing (customs) capability."""
     name = "point_of_entry"
-    requires_enrichment = False
     description = "Filter by border crossing/customs capability (boolean)"
 
     def apply(
         self,
         airport: Airport,
         value: Any,
-        enrichment_storage: Optional[EnrichmentStorage] = None
+        context: Optional["ToolContext"] = None,
     ) -> bool:
         if value is None:
             return True

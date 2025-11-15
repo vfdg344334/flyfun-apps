@@ -104,7 +104,7 @@ def search_airports(
 
     # Apply filters using FilterEngine
     if filters:
-        filter_engine = FilterEngine(enrichment_storage=ctx.enrichment_storage)
+        filter_engine = FilterEngine(context=ctx)
         matches = filter_engine.apply(matches, filters)
 
     # Apply priority sorting using PriorityEngine
@@ -187,7 +187,7 @@ def find_airports_near_route(
 
     # Apply filters using FilterEngine
     if filters:
-        filter_engine = FilterEngine(enrichment_storage=ctx.enrichment_storage)
+        filter_engine = FilterEngine(context=ctx)
         airport_objects = filter_engine.apply(airport_objects, filters)
 
     # Apply priority sorting using PriorityEngine
