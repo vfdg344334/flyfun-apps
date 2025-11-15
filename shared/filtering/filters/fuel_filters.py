@@ -26,12 +26,12 @@ class HasAvgasFilter(Filter):
 
         enrichment_storage = getattr(context, "enrichment_storage", None)
         if not enrichment_storage:
-            return False  # Can't check without enrichment data
+            return True  # No enrichment data - don't filter (graceful degradation)
 
         try:
             fuels = enrichment_storage.get_fuel_availability(airport.ident)
             if not fuels:
-                return False  # No fuel data
+                return True  # No fuel data for this airport - don't filter
 
             has_avgas = any(
                 'avgas' in fuel.get('fuel_type', '').lower() and fuel.get('available', False)
@@ -40,8 +40,8 @@ class HasAvgasFilter(Filter):
 
             return has_avgas
         except Exception:
-            # Fuel data table doesn't exist or other error
-            return False
+            # Fuel data table doesn't exist or other error - don't filter
+            return True
 
 
 class HasJetAFilter(Filter):
@@ -60,12 +60,12 @@ class HasJetAFilter(Filter):
 
         enrichment_storage = getattr(context, "enrichment_storage", None)
         if not enrichment_storage:
-            return False  # Can't check without enrichment data
+            return True  # No enrichment data - don't filter (graceful degradation)
 
         try:
             fuels = enrichment_storage.get_fuel_availability(airport.ident)
             if not fuels:
-                return False  # No fuel data
+                return True  # No fuel data for this airport - don't filter
 
             has_jet_a = any(
                 ('jeta1' in fuel.get('fuel_type', '').lower() or
@@ -77,5 +77,5 @@ class HasJetAFilter(Filter):
 
             return has_jet_a
         except Exception:
-            # Fuel data table doesn't exist or other error
-            return False
+            # Fuel data table doesn't exist or other error - don't filter
+            return True

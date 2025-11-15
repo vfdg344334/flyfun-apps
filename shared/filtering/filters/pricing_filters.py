@@ -26,7 +26,7 @@ class MaxLandingFeeFilter(Filter):
 
         enrichment_storage = getattr(context, "enrichment_storage", None)
         if not enrichment_storage:
-            return False  # Can't check without enrichment data
+            return True  # No enrichment data - don't filter (graceful degradation)
 
         try:
             max_fee = float(value)
@@ -36,18 +36,18 @@ class MaxLandingFeeFilter(Filter):
         try:
             pricing = enrichment_storage.get_pricing_data(airport.ident)
             if not pricing:
-                return False  # No pricing data, exclude airport
+                return True  # No pricing data for this airport - don't filter
 
             # Use C172 landing fee as default (most common GA aircraft)
             landing_fee = pricing.get('landing_fee_c172')
             if landing_fee is None:
-                return False  # No fee data, exclude
+                return True  # No fee data - don't filter
 
             try:
                 fee_value = float(landing_fee)
                 return fee_value <= max_fee
             except (TypeError, ValueError):
-                return False  # Invalid fee data
+                return True  # Invalid fee data - don't filter
         except Exception:
-            # Pricing data table doesn't exist or other error
-            return False
+            # Pricing data table doesn't exist or other error - don't filter
+            return True
