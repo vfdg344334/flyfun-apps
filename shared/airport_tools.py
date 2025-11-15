@@ -4,8 +4,9 @@ Shared airport tool logic used by both the MCP server and internal chatbot clien
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, OrderedDict as OrderedDictType, TypedDict
 
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
@@ -15,6 +16,19 @@ from euro_aip.storage.enrichment_storage import EnrichmentStorage
 from .rules_manager import RulesManager
 from .filtering import FilterEngine
 from .prioritization import PriorityEngine
+
+
+ToolCallable = Callable[..., Dict[str, Any]]
+
+
+class ToolSpec(TypedDict):
+    """Metadata describing a shared tool."""
+
+    name: str
+    handler: ToolCallable
+    description: str
+    parameters: Dict[str, Any]
+    expose_to_llm: bool
 
 
 @dataclass
@@ -726,4 +740,322 @@ def list_rule_countries(ctx: ToolContext) -> Dict[str, Any]:
     countries = rules_manager.get_available_countries()
     pretty = "**Rule Countries (ISO-2):**\n" + ("\n".join(f"- {c}" for c in countries) if countries else "(none)")
     return {"count": len(countries), "items": countries, "pretty": pretty}
+
+
+def _compare_rules_between_countries_tool(
+    ctx: ToolContext,
+    country1: str,
+    country2: str,
+    category: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Wrapper that adds a human readable summary field expected by UI clients.
+    """
+    result = compare_rules_between_countries(ctx, country1, country2, category=category)
+    if result.get("formatted_summary") and "pretty" not in result:
+        result["pretty"] = result["formatted_summary"]
+    return result
+
+
+def _tool_description(func: Callable) -> str:
+    return (func.__doc__ or "").strip()
+
+
+def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
+    """Create the ordered manifest of shared tools."""
+    return OrderedDict([
+        (
+            "search_airports",
+            {
+                "name": "search_airports",
+                "handler": search_airports,
+                "description": _tool_description(search_airports),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Airport name, ICAO/IATA code, or city (e.g., 'Paris', 'LFPG').",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return.",
+                            "default": 20,
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Optional airport filters: country, runway, fuel, customs, pricing.",
+                        },
+                        "priority_strategy": {
+                            "type": "string",
+                            "description": "Priority sorting strategy (e.g., cost_optimized).",
+                            "default": "cost_optimized",
+                        },
+                    },
+                    "required": ["query"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "find_airports_near_route",
+            {
+                "name": "find_airports_near_route",
+                "handler": find_airports_near_route,
+                "description": _tool_description(find_airports_near_route),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from_icao": {
+                            "type": "string",
+                            "description": "Departure airport ICAO code (e.g., EGTF).",
+                        },
+                        "to_icao": {
+                            "type": "string",
+                            "description": "Destination airport ICAO code (e.g., LFMD).",
+                        },
+                        "max_distance_nm": {
+                            "type": "number",
+                            "description": "Max distance from route centerline in nautical miles.",
+                            "default": 50.0,
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Airport filters (fuel, customs, runway length, etc.).",
+                        },
+                        "priority_strategy": {
+                            "type": "string",
+                            "description": "Priority sorting strategy (e.g., cost_optimized).",
+                            "default": "cost_optimized",
+                        },
+                    },
+                    "required": ["from_icao", "to_icao"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_airport_details",
+            {
+                "name": "get_airport_details",
+                "handler": get_airport_details,
+                "description": _tool_description(get_airport_details),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "icao_code": {
+                            "type": "string",
+                            "description": "Airport ICAO code (e.g., LFPG).",
+                        },
+                    },
+                    "required": ["icao_code"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_border_crossing_airports",
+            {
+                "name": "get_border_crossing_airports",
+                "handler": get_border_crossing_airports,
+                "description": _tool_description(get_border_crossing_airports),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "country": {
+                            "type": "string",
+                            "description": "Optional ISO-2 country code (e.g., FR, DE).",
+                        },
+                    },
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_airport_statistics",
+            {
+                "name": "get_airport_statistics",
+                "handler": get_airport_statistics,
+                "description": _tool_description(get_airport_statistics),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "country": {
+                            "type": "string",
+                            "description": "Optional ISO-2 country code to filter stats.",
+                        },
+                    },
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_airport_pricing",
+            {
+                "name": "get_airport_pricing",
+                "handler": get_airport_pricing,
+                "description": _tool_description(get_airport_pricing),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "icao_code": {
+                            "type": "string",
+                            "description": "Airport ICAO code (e.g., EDAZ).",
+                        },
+                    },
+                    "required": ["icao_code"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_pilot_reviews",
+            {
+                "name": "get_pilot_reviews",
+                "handler": get_pilot_reviews,
+                "description": _tool_description(get_pilot_reviews),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "icao_code": {
+                            "type": "string",
+                            "description": "Airport ICAO code.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of reviews to return.",
+                            "default": 10,
+                        },
+                    },
+                    "required": ["icao_code"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_fuel_prices",
+            {
+                "name": "get_fuel_prices",
+                "handler": get_fuel_prices,
+                "description": _tool_description(get_fuel_prices),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "icao_code": {
+                            "type": "string",
+                            "description": "Airport ICAO code.",
+                        },
+                    },
+                    "required": ["icao_code"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "list_rules_for_country",
+            {
+                "name": "list_rules_for_country",
+                "handler": list_rules_for_country,
+                "description": _tool_description(list_rules_for_country),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "country_code": {
+                            "type": "string",
+                            "description": "ISO-2 country code (e.g., FR, GB).",
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Optional category filter (e.g., Customs).",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of tags to filter rules.",
+                        },
+                    },
+                    "required": ["country_code"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "compare_rules_between_countries",
+            {
+                "name": "compare_rules_between_countries",
+                "handler": _compare_rules_between_countries_tool,
+                "description": _tool_description(compare_rules_between_countries),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "country1": {
+                            "type": "string",
+                            "description": "First ISO-2 country code.",
+                        },
+                        "country2": {
+                            "type": "string",
+                            "description": "Second ISO-2 country code.",
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Optional category filter.",
+                        },
+                    },
+                    "required": ["country1", "country2"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "get_answers_for_questions",
+            {
+                "name": "get_answers_for_questions",
+                "handler": get_answers_for_questions,
+                "description": _tool_description(get_answers_for_questions),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of predefined question IDs.",
+                        },
+                    },
+                    "required": ["question_ids"],
+                },
+                "expose_to_llm": False,
+            },
+        ),
+        (
+            "list_rule_categories_and_tags",
+            {
+                "name": "list_rule_categories_and_tags",
+                "handler": list_rule_categories_and_tags,
+                "description": _tool_description(list_rule_categories_and_tags),
+                "parameters": {"type": "object", "properties": {}},
+                "expose_to_llm": False,
+            },
+        ),
+        (
+            "list_rule_countries",
+            {
+                "name": "list_rule_countries",
+                "handler": list_rule_countries,
+                "description": _tool_description(list_rule_countries),
+                "parameters": {"type": "object", "properties": {}},
+                "expose_to_llm": False,
+            },
+        ),
+    ])
+
+
+_SHARED_TOOL_SPECS: OrderedDictType[str, ToolSpec] = _build_shared_tool_specs()
+
+
+def get_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
+    """
+    Return the shared tool manifest.
+    The mapping is ordered to keep registration deterministic.
+    """
+    return _SHARED_TOOL_SPECS.copy()
 
