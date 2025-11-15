@@ -43,6 +43,7 @@ The server provides the following tools:
 ### Prerequisites
 - Python 3.8+
 - Euro AIP airport database (`airports.db`)
+- Aviation rules JSON (`rules.json`)
 - MCP-compatible client (ChatGPT, Claude, etc.)
 
 ### Installation
@@ -53,9 +54,10 @@ cd mcp_server
 pip install -r requirements.txt
 ```
 
-2. **Set database path:**
+2. **Set data paths:**
 ```bash
-export AIRPORTS_DB=/path/to/your/airports.db
+export AIRPORTS_DB=/absolute/path/to/airports.db
+export RULES_JSON=/absolute/path/to/rules.json
 ```
 
 3. **Test the server:**
@@ -95,6 +97,7 @@ What facilities does LFMD have? What procedures are available?
 
 ### Environment Variables
 - `AIRPORTS_DB`: Path to the airport database file (default: `airports.db`)
+- `RULES_JSON`: Path to the aviation rules file (default: `rules.json`)
 
 ### MCP Client Configuration
 
@@ -109,7 +112,8 @@ For ChatGPT:
       "command": "python",
       "args": ["/path/to/mcp_server/main.py"],
       "env": {
-        "AIRPORTS_DB": "/path/to/airports.db"
+        "AIRPORTS_DB": "/absolute/path/to/airports.db",
+        "RULES_JSON": "/absolute/path/to/rules.json"
       }
     }
   }
@@ -139,75 +143,6 @@ COPY . .
 CMD ["python", "main.py"]
 ```
 
-#### Option 2: Cloud Deployment
-- Deploy to AWS Lambda, Google Cloud Functions, or Azure Functions
-- Use serverless architecture for cost efficiency
-- Implement proper authentication and rate limiting
-
-#### Option 3: Traditional Server
-- Deploy to VPS or cloud VM
-- Use systemd service for auto-restart
-- Implement monitoring and logging
-
-## Cost Considerations
-
-### Token Usage Optimization
-1. **Response Length**: Keep responses concise but informative
-2. **Caching**: Implement caching for frequently requested data
-3. **Pagination**: Limit results to reduce token usage
-4. **Smart Filtering**: Use specific filters to reduce data transfer
-
-### Cost Allocation
-1. **User Tracking**: Implement user ID tracking in requests
-2. **Usage Metrics**: Track tool calls per user
-3. **Billing Integration**: Connect to billing system for cost allocation
-4. **Rate Limiting**: Implement per-user rate limits
-
-## Security Considerations
-
-### Authentication
-- Implement API key authentication
-- Use OAuth2 for user authentication
-- Validate user permissions
-
-### Rate Limiting
-- Implement per-user rate limits
-- Use sliding window rate limiting
-- Monitor for abuse
-
-### Data Privacy
-- Log minimal user data
-- Implement data retention policies
-- Comply with GDPR/privacy regulations
-
-## Monitoring and Logging
-
-### Metrics to Track
-- Tool call frequency
-- Response times
-- Error rates
-- User usage patterns
-
-### Logging
-- Log all tool calls with user context
-- Track performance metrics
-- Monitor for errors and exceptions
-
-## Future Enhancements
-
-### Planned Features
-1. **Geocoding Integration**: Better location-based searches
-2. **Weather Integration**: Real-time weather data
-3. **Flight Planning**: Complete flight planning capabilities
-4. **Real-time Data**: Live airport status updates
-5. **Multi-language Support**: Support for multiple languages
-
-### Performance Improvements
-1. **Database Optimization**: Index optimization and query tuning
-2. **Caching Layer**: Redis or similar for frequently accessed data
-3. **CDN Integration**: For static data delivery
-4. **Load Balancing**: For high-traffic scenarios
-
 ## Troubleshooting
 
 ### Common Issues
@@ -230,11 +165,3 @@ Enable debug logging:
 export LOG_LEVEL=DEBUG
 python main.py
 ```
-
-## Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review the logs for error messages
-3. Verify your configuration
-4. Contact support with detailed error information

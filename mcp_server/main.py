@@ -5,6 +5,8 @@ MCP Server for Euro AIP Airport Database
 This server provides tools for querying airport data, route planning, and flight information
 to LLM clients like ChatGPT and Claude.
 
+See `shared/README.md` for more information on the shared tooling and how to add/update tools.
+
 """
 from __future__ import annotations
 import json

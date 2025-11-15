@@ -2,6 +2,8 @@
 """
 Internal MCP Client for Chatbot Service
 Calls the MCP server's tools and returns results for the LLM.
+
+See `shared/README.md` for more information on the shared tooling and how to add/update tools.
 """
 
 import httpx

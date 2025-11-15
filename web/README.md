@@ -40,7 +40,7 @@ cp security_config.py.sample security_config.py
 
 - `dev.env`
   - `AIRPORTS_DB`: absolute path to the SQLite database (e.g., `/Users/you/flyfun/data/airports.db`)
-  - `RULES_JSON`: optional rules metadata consumed by `/chat/ask`
+  - `RULES_JSON`: required rules metadata so the chat endpoint mirrors MCP behavior
   - `ENVIRONMENT`, `LOG_LEVEL`: runtime tuning
 - `security_config.py`
   - Update `ALLOWED_ORIGINS`/`ALLOWED_HOSTS` for your dev/prod domains
@@ -116,13 +116,13 @@ All endpoints inherit the rate limiting, security headers, and host/CORS constra
 ## Customization & Extension
 
 - **Security**: Harden `security_config.py` for production (API keys, HTTPS enforcement, origin restrictions, stricter limits).
-- **Data**: Swap databases by changing `AIRPORTS_DB` without modifying code; the FastAPI startup reloads the `EuroAipModel` automatically.
+- **Data**: Swap databases or rules by changing `AIRPORTS_DB` / `RULES_JSON`; the FastAPI startup reloads resources automatically.
 - **Frontend**: Extend `client/js/` modules or inject additional bundles; static files are served by `StaticFiles` from `client/`.
 - **New endpoints**: Add routers under `server/api/`, register them in `main.py`, and surface the data in the frontend as needed.
 
 ## Troubleshooting
 
-- **Server fails to start**: confirm `dev.env` points to a real database (`sqlite3 your.db '.tables'`), security config imports without errors, and dependencies are installed.
+- **Server fails to start**: confirm `dev.env` points to real `airports.db` / `rules.json` files (`sqlite3 your.db '.tables'`), security config imports without errors, and dependencies are installed.
 - **CORS/host errors**: broaden `ALLOWED_ORIGINS`/`ALLOWED_HOSTS` while developing, then lock them down for production.
 - **Blank map or empty tables**: inspect browser console, ensure the API requests return 200, and verify rate limiting is not blocking requests.
 - **429 responses**: increase `RATE_LIMIT_MAX_REQUESTS` during testing or run behind a reverse proxy with IP forwarding configured.
