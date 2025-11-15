@@ -329,14 +329,62 @@
             max-height: none;
         }
 
-        .filter-group {
-            margin-bottom: 20px;
+        .filters-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 18px;
         }
 
-        .filter-group label {
+        .filter-field {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1 1 220px;
+        }
+
+        .filter-field label {
+            margin-bottom: 0;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .filter-field input,
+        .filter-field select {
+            flex: 1 1 auto;
+        }
+
+        .filter-field-full {
+            flex: 1 1 100%;
+        }
+
+        .quick-filters-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .quick-filters-row .form-check {
+            margin: 0;
+        }
+
+        .quick-filters-row .form-check-label {
             font-weight: 500;
-            margin-bottom: 8px;
-            font-size: 14px;
+        }
+
+        .filters-row.actions-row {
+            justify-content: flex-start;
+        }
+
+        .filters-row.actions-row .btn {
+            flex: 0 0 220px;
+        }
+
+        .search-hint {
+            display: block;
+            margin-top: -10px;
+            margin-bottom: 18px;
         }
 
         /* ===== MAP ===== */
@@ -949,6 +997,30 @@
             .filters-panel-full .filters-content {
                 padding: 20px;
             }
+
+            .filters-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-field {
+                flex-direction: column;
+                align-items: flex-start;
+                width: 100%;
+            }
+
+            .filter-field label {
+                width: 100%;
+            }
+
+            .filters-row.actions-row .btn {
+                width: 100%;
+            }
+
+            .quick-filters-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
         }
 
         /* ===== TOUCH-FRIENDLY ADJUSTMENTS ===== */
@@ -1202,85 +1274,65 @@
                 </div>
 
                 <div class="filters-content">
-                    <!-- Search -->
-                    <div class="filter-group">
-                        <label for="search-input" class="form-label">Search Airports</label>
-                        <input type="text" class="form-control" id="search-input" placeholder="ICAO, name, city, or route...">
-                        <small class="form-text text-muted">For routes: space-separated ICAO codes</small>
-                    </div>
-
-                    <!-- Route Distance -->
-                    <div class="filter-group">
-                        <label for="route-distance" class="form-label">Route Distance (nm)</label>
-                        <input type="number" class="form-control" id="route-distance" value="50" min="1" max="500" step="5">
-                    </div>
-
-                    <!-- Country Filter -->
-                    <div class="filter-group">
-                        <label for="country-filter" class="form-label">Country</label>
-                        <select class="form-select" id="country-filter">
-                            <option value="">All Countries</option>
-                        </select>
-                    </div>
-
-                    <!-- Maximum Airports Filter -->
-                    <div class="filter-group">
-                        <label for="max-airports-filter" class="form-label">Max Airports</label>
-                        <select class="form-select" id="max-airports-filter">
-                            <option value="500">500</option>
-                            <option value="1000">1000</option>
-                            <option value="2000">2000</option>
-                            <option value="5000">5000</option>
-                            <option value="10000" selected>10000</option>
-                        </select>
-                    </div>
-
-                    <!-- Checkboxes -->
-                    <div class="filter-group">
-                        <div class="row g-2">
-                            <div class="col-6">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="has-procedures">
-                                    <label class="form-check-label" for="has-procedures">
-                                        Has Procedures
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="col-6">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="has-aip-data">
-                                    <label class="form-check-label" for="has-aip-data">
-                                        Has AIP Data
-                                    </label>
-                                </div>
-                            </div>
+                    <!-- Quick Filters Row -->
+                    <div class="filters-row quick-filters-row">
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="has-procedures">
+                            <label class="form-check-label" for="has-procedures">Has Procedures</label>
                         </div>
-                        <div class="row g-2 mt-2">
-                            <div class="col-6">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="has-hard-runway">
-                                    <label class="form-check-label" for="has-hard-runway">
-                                        Has Hard Runway
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="col-6">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="border-crossing-only">
-                                    <label class="form-check-label" for="border-crossing-only">
-                                        <i class="fas fa-passport"></i> Border Crossing Only
-                                    </label>
-                                </div>
-                            </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="has-aip-data">
+                            <label class="form-check-label" for="has-aip-data">Has AIP Data</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="has-hard-runway">
+                            <label class="form-check-label" for="has-hard-runway">Has Hard Runway</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="border-crossing-only">
+                            <label class="form-check-label" for="border-crossing-only"><i class="fas fa-passport"></i> Border Crossing Only</label>
+                        </div>
+                    </div>
+
+                    <!-- Search Row -->
+                    <div class="filters-row">
+                        <div class="filter-field filter-field-full">
+                            <label for="search-input">Search Airports</label>
+                            <input type="text" class="form-control" id="search-input" placeholder="ICAO, name, city, or route...">
+                        </div>
+                    </div>
+                    <small class="form-text text-muted search-hint">For routes: space-separated ICAO codes</small>
+
+                    <!-- Route / Country / Max Airports Row -->
+                    <div class="filters-row">
+                        <div class="filter-field">
+                            <label for="route-distance">Route Distance (nm)</label>
+                            <input type="number" class="form-control" id="route-distance" value="50" min="1" max="500" step="5">
+                        </div>
+                        <div class="filter-field">
+                            <label for="country-filter">Country</label>
+                            <select class="form-select" id="country-filter">
+                                <option value="">All Countries</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="max-airports-filter">Max Airports</label>
+                            <select class="form-select" id="max-airports-filter">
+                                <option value="500">500</option>
+                                <option value="1000">1000</option>
+                                <option value="2000">2000</option>
+                                <option value="5000">5000</option>
+                                <option value="10000" selected>10000</option>
+                            </select>
                         </div>
                     </div>
 
                     <!-- Action Buttons -->
-                    <div class="filter-group">
-                        <button class="btn btn-primary w-100 mb-2" id="apply-filters">
+                    <div class="filters-row actions-row">
+                        <button class="btn btn-primary" id="apply-filters">
                             <i class="fas fa-search"></i> Apply Filters
                         </button>
-                        <button class="btn btn-outline-secondary w-100" id="reset-zoom">
+                        <button class="btn btn-outline-secondary" id="reset-zoom">
                             <i class="fas fa-expand-arrows-alt"></i> Reset Zoom
                         </button>
                     </div>
