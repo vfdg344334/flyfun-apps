@@ -307,6 +307,28 @@
             border-radius: 3px;
         }
 
+        .filters-section-full {
+            margin-top: 25px;
+            padding: 0 15px 30px;
+            width: 100%;
+        }
+
+        .filters-panel-full {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .filters-panel-full .panel-header {
+            border-radius: 8px 8px 0 0;
+        }
+
+        .filters-panel-full .filters-content {
+            padding: 25px;
+            max-height: none;
+        }
+
         .filter-group {
             margin-bottom: 20px;
         }
@@ -923,6 +945,10 @@
             .right-panel.collapsed > * {
                 display: block !important;
             }
+
+            .filters-panel-full .filters-content {
+                padding: 20px;
+            }
         }
 
         /* ===== TOUCH-FRIENDLY ADJUSTMENTS ===== */
@@ -986,12 +1012,6 @@
                             <i class="fas fa-share-alt"></i> Share
                         </button>
                     </h2>
-                    <div class="mode-toggle-switch position-absolute" style="right: 15px;">
-                        <input type="radio" name="mode" id="mode-chatbot" value="chatbot" checked>
-                        <label for="mode-chatbot"><i class="fas fa-robot"></i> Chatbot</label>
-                        <input type="radio" name="mode" id="mode-filters" value="filters">
-                        <label for="mode-filters"><i class="fas fa-filter"></i> Filters</label>
-                    </div>
                 </div>
                 <p class="text-center text-muted mb-2">Your intelligent aviation assistant - Interactive map with European airports, AIP data, and empirical flying rules</p>
             </div>
@@ -1040,160 +1060,6 @@
                                 <button id="chat-send-btn-new" class="btn-chat-send">
                                     <i class="fas fa-paper-plane"></i>
                                 </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Filters Panel -->
-                    <div id="filters-panel-new" class="panel-content" style="display: none;">
-                        <div class="panel-header">
-                            <h5><i class="fas fa-filter"></i> Classic Filters</h5>
-                        </div>
-
-                        <div class="filters-content">
-                            <!-- Search -->
-                            <div class="filter-group">
-                                <label for="search-input" class="form-label">Search Airports</label>
-                                <input type="text" class="form-control" id="search-input" placeholder="ICAO, name, city, or route...">
-                                <small class="form-text text-muted">For routes: space-separated ICAO codes</small>
-                            </div>
-
-                            <!-- Route Distance -->
-                            <div class="filter-group">
-                                <label for="route-distance" class="form-label">Route Distance (nm)</label>
-                                <input type="number" class="form-control" id="route-distance" value="50" min="1" max="500" step="5">
-                            </div>
-
-                            <!-- Country Filter -->
-                            <div class="filter-group">
-                                <label for="country-filter" class="form-label">Country</label>
-                                <select class="form-select" id="country-filter">
-                                    <option value="">All Countries</option>
-                                </select>
-                            </div>
-
-                            <!-- Maximum Airports Filter -->
-                            <div class="filter-group">
-                                <label for="max-airports-filter" class="form-label">Max Airports</label>
-                                <select class="form-select" id="max-airports-filter">
-                                    <option value="500">500</option>
-                                    <option value="1000">1000</option>
-                                    <option value="2000">2000</option>
-                                    <option value="5000">5000</option>
-                                    <option value="10000" selected>10000</option>
-                                </select>
-                            </div>
-
-                            <!-- Checkboxes -->
-                            <div class="filter-group">
-                                <div class="row g-2">
-                                    <div class="col-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="checkbox" id="has-procedures">
-                                            <label class="form-check-label" for="has-procedures">
-                                                Has Procedures
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div class="col-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="checkbox" id="has-aip-data">
-                                            <label class="form-check-label" for="has-aip-data">
-                                                Has AIP Data
-                                            </label>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="row g-2 mt-2">
-                                    <div class="col-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="checkbox" id="has-hard-runway">
-                                            <label class="form-check-label" for="has-hard-runway">
-                                                Has Hard Runway
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div class="col-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="checkbox" id="border-crossing-only">
-                                            <label class="form-check-label" for="border-crossing-only">
-                                                <i class="fas fa-passport"></i> Border Crossing Only
-                                            </label>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Action Buttons -->
-                            <div class="filter-group">
-                                <button class="btn btn-primary w-100 mb-2" id="apply-filters">
-                                    <i class="fas fa-search"></i> Apply Filters
-                                </button>
-                                <button class="btn btn-outline-secondary w-100" id="reset-zoom">
-                                    <i class="fas fa-expand-arrows-alt"></i> Reset Zoom
-                                </button>
-                            </div>
-
-                            <!-- Advanced AIP Filters Section -->
-                            <div class="filter-section mt-3">
-                                <div class="filter-section-header" data-bs-toggle="collapse" data-bs-target="#advanced-aip-filters" aria-expanded="false">
-                                    <h6 class="mb-0">
-                                        <i class="fas fa-cog"></i> Advanced AIP Filters
-                                        <i class="fas fa-chevron-down ms-auto"></i>
-                                    </h6>
-                                </div>
-
-                                <div class="collapse" id="advanced-aip-filters">
-                                    <div class="filter-section-content">
-                                        <!-- Predefined AIP Filter Presets -->
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Quick Filters:</label>
-                                            <div class="aip-preset-buttons" id="aip-preset-buttons">
-                                                <!-- Preset buttons will be loaded dynamically -->
-                                            </div>
-                                        </div>
-
-                                        <!-- Custom AIP Field Filter -->
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Custom Field Filter:</label>
-                                            <div class="row g-2">
-                                                <div class="col-12">
-                                                    <select class="form-select form-select-sm" id="aip-field-select">
-                                                        <option value="">Select AIP Field...</option>
-                                                    </select>
-                                                </div>
-                                                <div class="col-6">
-                                                    <select class="form-select form-select-sm" id="aip-operator-select">
-                                                        <option value="contains">Contains</option>
-                                                        <option value="equals">Equals</option>
-                                                        <option value="not_empty">Not Empty</option>
-                                                        <option value="starts_with">Starts With</option>
-                                                        <option value="ends_with">Ends With</option>
-                                                    </select>
-                                                </div>
-                                                <div class="col-6">
-                                                    <input type="text" class="form-control form-control-sm" id="aip-value-input" placeholder="Value...">
-                                                </div>
-                                                <div class="col-12">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary w-100" id="clear-aip-filter">
-                                                        <i class="fas fa-times"></i> Clear AIP Filter
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- Active AIP Filter Display -->
-                                        <div id="active-aip-filter" class="alert alert-info py-2" style="display: none;">
-                                            <small>
-                                                <i class="fas fa-filter"></i>
-                                                <span id="active-aip-filter-text"></span>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="remove-aip-filter">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                            </small>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -1321,6 +1187,162 @@
                             </div>
                             <div id="legend-content">
                                 <!-- Legend content will be dynamically updated -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Full-width Filters Section -->
+        <div class="filters-section-full">
+            <div id="filters-panel-new" class="filters-panel-full">
+                <div class="panel-header">
+                    <h5><i class="fas fa-filter"></i> Classic Filters</h5>
+                </div>
+
+                <div class="filters-content">
+                    <!-- Search -->
+                    <div class="filter-group">
+                        <label for="search-input" class="form-label">Search Airports</label>
+                        <input type="text" class="form-control" id="search-input" placeholder="ICAO, name, city, or route...">
+                        <small class="form-text text-muted">For routes: space-separated ICAO codes</small>
+                    </div>
+
+                    <!-- Route Distance -->
+                    <div class="filter-group">
+                        <label for="route-distance" class="form-label">Route Distance (nm)</label>
+                        <input type="number" class="form-control" id="route-distance" value="50" min="1" max="500" step="5">
+                    </div>
+
+                    <!-- Country Filter -->
+                    <div class="filter-group">
+                        <label for="country-filter" class="form-label">Country</label>
+                        <select class="form-select" id="country-filter">
+                            <option value="">All Countries</option>
+                        </select>
+                    </div>
+
+                    <!-- Maximum Airports Filter -->
+                    <div class="filter-group">
+                        <label for="max-airports-filter" class="form-label">Max Airports</label>
+                        <select class="form-select" id="max-airports-filter">
+                            <option value="500">500</option>
+                            <option value="1000">1000</option>
+                            <option value="2000">2000</option>
+                            <option value="5000">5000</option>
+                            <option value="10000" selected>10000</option>
+                        </select>
+                    </div>
+
+                    <!-- Checkboxes -->
+                    <div class="filter-group">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="has-procedures">
+                                    <label class="form-check-label" for="has-procedures">
+                                        Has Procedures
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="has-aip-data">
+                                    <label class="form-check-label" for="has-aip-data">
+                                        Has AIP Data
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-2">
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="has-hard-runway">
+                                    <label class="form-check-label" for="has-hard-runway">
+                                        Has Hard Runway
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="border-crossing-only">
+                                    <label class="form-check-label" for="border-crossing-only">
+                                        <i class="fas fa-passport"></i> Border Crossing Only
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="filter-group">
+                        <button class="btn btn-primary w-100 mb-2" id="apply-filters">
+                            <i class="fas fa-search"></i> Apply Filters
+                        </button>
+                        <button class="btn btn-outline-secondary w-100" id="reset-zoom">
+                            <i class="fas fa-expand-arrows-alt"></i> Reset Zoom
+                        </button>
+                    </div>
+
+                    <!-- Advanced AIP Filters Section -->
+                    <div class="filter-section mt-3">
+                        <div class="filter-section-header" data-bs-toggle="collapse" data-bs-target="#advanced-aip-filters" aria-expanded="false">
+                            <h6 class="mb-0">
+                                <i class="fas fa-cog"></i> Advanced AIP Filters
+                                <i class="fas fa-chevron-down ms-auto"></i>
+                            </h6>
+                        </div>
+
+                        <div class="collapse" id="advanced-aip-filters">
+                            <div class="filter-section-content">
+                                <!-- Predefined AIP Filter Presets -->
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Quick Filters:</label>
+                                    <div class="aip-preset-buttons" id="aip-preset-buttons">
+                                        <!-- Preset buttons will be loaded dynamically -->
+                                    </div>
+                                </div>
+
+                                <!-- Custom AIP Field Filter -->
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Custom Field Filter:</label>
+                                    <div class="row g-2">
+                                        <div class="col-12">
+                                            <select class="form-select form-select-sm" id="aip-field-select">
+                                                <option value="">Select AIP Field...</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-6">
+                                            <select class="form-select form-select-sm" id="aip-operator-select">
+                                                <option value="contains">Contains</option>
+                                                <option value="equals">Equals</option>
+                                                <option value="not_empty">Not Empty</option>
+                                                <option value="starts_with">Starts With</option>
+                                                <option value="ends_with">Ends With</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-6">
+                                            <input type="text" class="form-control form-control-sm" id="aip-value-input" placeholder="Value...">
+                                        </div>
+                                        <div class="col-12">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary w-100" id="clear-aip-filter">
+                                                <i class="fas fa-times"></i> Clear AIP Filter
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Active AIP Filter Display -->
+                                <div id="active-aip-filter" class="alert alert-info py-2" style="display: none;">
+                                    <small>
+                                        <i class="fas fa-filter"></i>
+                                        <span id="active-aip-filter-text"></span>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="remove-aip-filter">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </small>
+                                </div>
                             </div>
                         </div>
                     </div>

@@ -1,9 +1,8 @@
 /**
- * Mode Manager - Handles switching between Chatbot and Filter modes
+ * Mode Manager - Handles layout interactions for the chatbot and detail panels
  */
 class ModeManager {
     constructor() {
-        this.currentMode = 'chatbot'; // default
         this.chatbotExpanded = false;
         this.rightPanelCollapsed = false;
         this.initialized = false;
@@ -22,14 +21,6 @@ class ModeManager {
     }
 
     setupListeners() {
-        // Mode toggle radio buttons
-        const modeRadios = document.querySelectorAll('input[name="mode"]');
-        modeRadios.forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                this.switchMode(e.target.value);
-            });
-        });
-
         // Expand button
         const expandBtn = document.getElementById('chatbot-expand-btn-new');
         if (expandBtn) {
@@ -51,64 +42,24 @@ class ModeManager {
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             // Ctrl+M: Toggle mode
-            if (e.ctrlKey && e.key === 'm') {
-                e.preventDefault();
-                this.toggleMode();
-            }
-
             // Ctrl+E: Expand/collapse chatbot
             if (e.ctrlKey && e.key === 'e') {
                 e.preventDefault();
-                if (this.currentMode === 'chatbot') {
-                    this.toggleExpand();
-                }
+                this.toggleExpand();
             }
 
             // Ctrl+K: Focus chat input (only in chatbot mode)
             if (e.ctrlKey && e.key === 'k') {
                 e.preventDefault();
-                if (this.currentMode === 'chatbot') {
-                    const chatInput = document.getElementById('chat-input-new');
-                    if (chatInput) {
-                        chatInput.focus();
-                    }
+                const chatInput = document.getElementById('chat-input-new');
+                if (chatInput) {
+                    chatInput.focus();
                 }
             }
         });
     }
 
-    switchMode(mode) {
-        console.log(`Switching to ${mode} mode`);
-        this.currentMode = mode;
-
-        const mainRow = document.querySelector('.main-content-row');
-        const chatbotPanel = document.getElementById('chatbot-panel-new');
-        const filtersPanel = document.getElementById('filters-panel-new');
-
-        // Update main row classes
-        mainRow.classList.remove('chatbot-mode', 'filter-mode');
-        mainRow.classList.add(`${mode}-mode`);
-
-        // Toggle panel visibility
-        if (mode === 'chatbot') {
-            chatbotPanel.style.display = 'flex';
-            filtersPanel.style.display = 'none';
-        } else {
-            chatbotPanel.style.display = 'none';
-            filtersPanel.style.display = 'block';
-            // Reset expansion when switching to filter mode
-            if (this.chatbotExpanded) {
-                this.toggleExpand();
-            }
-        }
-
-        // Resize map after layout change
-        this.invalidateMap();
-    }
-
     toggleExpand() {
-        if (this.currentMode !== 'chatbot') return;
-
         const mainRow = document.querySelector('.main-content-row');
         this.chatbotExpanded = !this.chatbotExpanded;
 
@@ -155,15 +106,6 @@ class ModeManager {
 
             // Resize map
             this.invalidateMap();
-        }
-    }
-
-    toggleMode() {
-        const newMode = this.currentMode === 'chatbot' ? 'filters' : 'chatbot';
-        const radio = document.getElementById(`mode-${newMode}`);
-        if (radio) {
-            radio.checked = true;
-            this.switchMode(newMode);
         }
     }
 
@@ -510,11 +452,6 @@ class ModeManager {
                 }
             });
         });
-    }
-
-    // Public API
-    getCurrentMode() {
-        return this.currentMode;
     }
 
     isChatbotExpanded() {
