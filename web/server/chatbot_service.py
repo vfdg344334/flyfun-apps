@@ -623,6 +623,31 @@ When asked about routes, trips, or planning flights between airports:
   → Call find_airports_near_route(from_icao="LFMN", to_icao="LIRF", max_distance_nm=50)
 - This ensures the route lines and stops are drawn on the map
 
+**CRITICAL - Filter Usage Rules:**
+ONLY use filters that the user EXPLICITLY requests. DO NOT add "helpful" filters unless the user asks for them.
+
+Examples:
+✅ CORRECT:
+- User: "fuel stop with AVGAS" → Use ONLY filters={has_avgas: true}
+- User: "customs airport with hard runway" → Use filters={point_of_entry: true, has_hard_runway: true}
+- User: "airports in France" → Use filters={country: "FR"}
+
+❌ WRONG (adding unsolicited filters):
+- User: "fuel stop with AVGAS" → DO NOT add has_hard_runway, point_of_entry, min_runway_length_ft
+- User: "airports near Paris" → DO NOT add any filters at all
+- User: "border crossing" → DO NOT add has_procedures or fuel filters
+
+**Filter Types Available:**
+- country: ISO-2 country code (use ONLY if user mentions a specific country)
+- has_avgas: Boolean (use ONLY if user mentions AVGAS)
+- has_jet_a: Boolean (use ONLY if user mentions Jet-A or jet fuel)
+- has_hard_runway: Boolean (use ONLY if user mentions paved/hard/asphalt runway)
+- has_procedures: Boolean (use ONLY if user asks for IFR/instrument procedures)
+- point_of_entry: Boolean (use ONLY if user mentions customs/border crossing/international)
+- min_runway_length_ft: Number (use ONLY if user specifies minimum runway length)
+- max_runway_length_ft: Number (use ONLY if user specifies maximum runway length)
+- max_landing_fee: Number (use ONLY if user mentions a price limit)
+
 Remember: You're helping pilots make informed decisions. Provide clear reasoning, specific details, then reference the map visualization."""
 
     def chat(
@@ -932,18 +957,32 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
             if tool_calls_made:
                 yield f"event: tool_calls\ndata: {json.dumps(tool_calls_made)}\n\n"
 
-            # Send visualization if any - FILTER based on LLM's answer
+            # Send visualization if any - extract airports mentioned in LLM's answer
             if visualizations:
                 viz_data = visualizations[0] if len(visualizations) == 1 else visualizations
 
-                # Filter visualization to only show airports mentioned in the answer
-                if answer_buffer and tool_calls_made:
-                    logger.info("Filtering visualization based on LLM's answer...")
-                    viz_data = self._filter_visualization_by_answer(
-                        visualization=viz_data,
-                        answer_text=answer_buffer,
-                        tool_results=tool_calls_made
-                    )
+                # Extract ICAO codes from LLM's final answer
+                if answer_buffer:
+                    mentioned_icaos = self._extract_icao_codes(answer_buffer)
+
+                    if mentioned_icaos:
+                        logger.info(f"📍 ICAO EXTRACTION: Found {len(mentioned_icaos)} ICAOs in LLM answer: {mentioned_icaos}")
+
+                        # Fetch full airport data for mentioned ICAOs from database
+                        viz_data = self._create_visualization_from_icaos(
+                            mentioned_icaos=mentioned_icaos,
+                            original_viz=viz_data,
+                            tool_calls=tool_calls_made
+                        )
+
+                        airport_icaos = self._extract_airports_from_visualization(viz_data)
+                        logger.info(f"📍 VISUALIZATION: Sending {len(airport_icaos)} airports to map: {airport_icaos}")
+                    else:
+                        logger.warning("📍 No ICAO codes found in LLM answer, using original visualization")
+                        airport_icaos = self._extract_airports_from_visualization(viz_data)
+                        logger.info(f"📍 VISUALIZATION: Sending {len(airport_icaos)} airports from tools: {airport_icaos}")
+                else:
+                    logger.info("📍 VISUALIZATION: No answer buffer, using original visualization")
 
                 yield f"event: visualization\ndata: {json.dumps(viz_data)}\n\n"
 
@@ -1122,6 +1161,165 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
                 return filtered_viz
 
         return visualization
+
+    def _create_visualization_from_icaos(
+        self,
+        mentioned_icaos: List[str],
+        original_viz: Any,
+        tool_calls: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Create visualization data from ICAO codes mentioned in LLM's answer.
+        Fetches full airport data from MCP for each ICAO code.
+
+        Args:
+            mentioned_icaos: List of ICAO codes extracted from LLM answer
+            original_viz: Original visualization from tool results
+            tool_calls: List of tool calls made (to extract airport data)
+
+        Returns:
+            Visualization dict with markers for all mentioned airports
+        """
+        airports = []
+        route_endpoints = {}  # Track route start/end separately
+
+        # First, try to get airports from tool call results
+        for tool_call in tool_calls:
+            result = tool_call.get("result", {})
+            if "airports" in result:
+                for airport in result["airports"]:
+                    if airport.get("ident") in mentioned_icaos:
+                        airports.append(airport)
+
+            # Also check visualization data from tools
+            if "visualization" in result:
+                viz = result["visualization"]
+                if isinstance(viz, dict):
+                    if viz.get("type") == "route_with_markers":
+                        # Add markers from route
+                        route_markers = viz.get("markers", [])
+                        for airport in route_markers:
+                            if airport.get("ident") in mentioned_icaos and airport not in airports:
+                                airports.append(airport)
+
+                        # ALWAYS add route endpoints (start and end airports)
+                        route = viz.get("route", {})
+                        from_icao = route.get("from", {}).get("icao")
+                        to_icao = route.get("to", {}).get("icao")
+
+                        # Track route endpoints, we'll fetch full data for them later
+                        if from_icao:
+                            route_endpoints[from_icao] = route.get("from")
+                            # Add to mentioned ICAOs if not already there
+                            if from_icao not in mentioned_icaos:
+                                mentioned_icaos.append(from_icao)
+
+                        if to_icao:
+                            route_endpoints[to_icao] = route.get("to")
+                            # Add to mentioned ICAOs if not already there
+                            if to_icao not in mentioned_icaos:
+                                mentioned_icaos.append(to_icao)
+
+                    elif viz.get("type") == "markers":
+                        # Add markers data
+                        marker_data = viz.get("data", [])
+                        for airport in marker_data:
+                            if airport.get("ident") in mentioned_icaos and airport not in airports:
+                                airports.append(airport)
+
+        # For any ICAOs not found in tool results, fetch from MCP
+        found_icaos = {airport["ident"] for airport in airports}
+        missing_icaos = [icao for icao in mentioned_icaos if icao not in found_icaos]
+
+        if missing_icaos:
+            logger.info(f"📍 Fetching {len(missing_icaos)} airports not in tool results: {missing_icaos}")
+            for icao in missing_icaos:
+                try:
+                    # Use MCP client to get airport details
+                    airport_data = self.mcp_client._call_tool("get_airport_details", {"icao_code": icao})
+                    if airport_data and "airport" in airport_data:
+                        fetched_airport = airport_data["airport"]
+                        airports.append(fetched_airport)
+                        logger.info(f"📍 Fetched full airport data for {icao}: has_aip_data={fetched_airport.get('has_aip_data')}, has_procedures={fetched_airport.get('has_procedures')}, has_hard_runway={fetched_airport.get('has_hard_runway')}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch airport {icao}: {e}")
+
+        # Determine visualization type based on whether we have route data
+        if route_endpoints:
+            # We have a route - return route_with_markers visualization
+            # Extract route info from original visualization
+            route_info = None
+            for tool_call in tool_calls:
+                result = tool_call.get("result", {})
+                if "visualization" in result:
+                    viz = result["visualization"]
+                    if isinstance(viz, dict) and viz.get("type") == "route_with_markers":
+                        route_info = viz.get("route")
+                        break
+
+            if route_info:
+                logger.info(f"📍 Creating route visualization with {len(airports)} markers")
+                return {
+                    "type": "route_with_markers",
+                    "route": route_info,
+                    "markers": airports
+                }
+
+        # No route - return simple markers visualization
+        logger.info(f"📍 Creating markers visualization with {len(airports)} airports")
+        return {
+            "type": "markers",
+            "data": airports
+        }
+
+    def _extract_airports_from_visualization(self, visualization: Any) -> List[str]:
+        """
+        Extract airport ICAO codes from visualization data for logging.
+
+        Args:
+            visualization: Visualization data (dict or list of dicts)
+
+        Returns:
+            List of airport ICAO codes
+        """
+        icao_codes = []
+
+        if not visualization:
+            return icao_codes
+
+        # Handle list of visualizations
+        if isinstance(visualization, list):
+            for viz in visualization:
+                icao_codes.extend(self._extract_airports_from_visualization(viz))
+            return icao_codes
+
+        # Handle single visualization dict
+        if isinstance(visualization, dict):
+            viz_type = visualization.get("type")
+
+            if viz_type == "markers":
+                # Extract from markers data
+                data = visualization.get("data", [])
+                icao_codes = [airport.get("ident") for airport in data if airport.get("ident")]
+
+            elif viz_type == "route_with_markers":
+                # Extract from route endpoints and markers
+                route = visualization.get("route", {})
+                if route.get("from", {}).get("icao"):
+                    icao_codes.append(route["from"]["icao"])
+                if route.get("to", {}).get("icao"):
+                    icao_codes.append(route["to"]["icao"])
+
+                markers = visualization.get("markers", [])
+                icao_codes.extend([airport.get("ident") for airport in markers if airport.get("ident")])
+
+            elif viz_type == "marker_with_details":
+                # Extract from single marker
+                marker = visualization.get("marker", {})
+                if marker.get("ident"):
+                    icao_codes.append(marker["ident"])
+
+        return icao_codes
 
     def get_quick_actions(self) -> List[Dict[str, str]]:
         """

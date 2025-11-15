@@ -77,6 +77,9 @@ def _airport_summary(a: Airport) -> Dict[str, Any]:
         "longitude_deg": getattr(a, "longitude_deg", None),
         "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
         "point_of_entry": bool(getattr(a, "point_of_entry", False)),
+        "has_aip_data": bool(a.aip_entries) if hasattr(a, "aip_entries") else False,
+        "has_procedures": bool(a.procedures),
+        "has_hard_runway": bool(getattr(a, "has_hard_runway", False)),
     }
 
 
