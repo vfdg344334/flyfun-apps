@@ -1,5 +1,74 @@
 #!/usr/bin/env python3
 
+"""
+ForeFlight Content Pack Builder
+
+Purpose (two modes):
+  1) Map overlay (default command "airports"):
+     - Builds a content pack with:
+       - navdata/Approaches.kml → instrument procedure lines from the EuroAIP database
+       - navdata/PointOfEntry.kml → border/point-of-entry airports
+     - Intended as a visual overlay for ForeFlight maps.
+
+  2) Approach pack from Excel (command "approach"):
+     - Builds a content pack containing a CSV of relevant custom navigation points
+       for ForeFlight import, derived from an Excel spreadsheet.
+     - Intended to quickly load a curated set of fixes/waypoints in ForeFlight.
+
+Excel expectations (for "approach" mode):
+  - Reads sheet 'navdata' (required) and 'byop' (optional).
+  - Each waypoint can be defined either:
+      a) As a direct GPS point with Latitude and Longitude columns, or
+      b) Via a reference point and geometry:
+         - Reference: the name of another waypoint in the same sheet
+         - Bearing: degrees (true)
+         - Distance: nautical miles
+     The tool computes the derived waypoint’s coordinates from (b).
+  - Common columns used: Name (required), Include (1/0), Description, Latitude, Longitude,
+    Reference, Bearing, Distance. Rows with Include=1 are exported.
+  - Outputs:
+      - navdata/<NAME>.csv (Name,Description,Latitude,Longitude)
+      - <NAME>_updated.xlsx (adds Latitude_DMS/Longitude_DMS and Latitude_DM/Longitude_DM)
+
+Database selection (aligned with tools/aip.py):
+  - If --database is omitted entirely: use AIRPORTS_DB env var if set and exists,
+    otherwise use local airports.db if it exists; otherwise error.
+  - If --database is provided without a value (-d): same behavior as above.
+  - If --database PATH is provided: use the specified database file.
+
+Usage:
+  # Map overlay content pack (procedures + points of entry)
+  python tools/foreflight.py NAME
+      [--next-version] [--expiration DAYS]
+      [--procedure-distance NM]
+      [--database [PATH]]
+      [-v|--verbose]
+
+  # Approach pack from Excel (custom navigation points)
+  python tools/foreflight.py NAME -c approach
+      [--xlsx FILE]
+      [--next-version] [--expiration DAYS]
+      [--describe NAME[,NAME...]]
+      [--database [PATH]]
+      [-v|--verbose]
+
+Examples:
+  # Build map overlay from database with default DB resolution
+  python tools/foreflight.py MyOverlay
+  AIRPORTS_DB=/data/airports.db python tools/foreflight.py MyOverlay
+  python tools/foreflight.py MyOverlay -d             # AIRPORTS_DB or airports.db
+  python tools/foreflight.py MyOverlay -d /tmp/a.db
+
+  # Control version, expiration, and procedure line length (nm)
+  python tools/foreflight.py MyOverlay --next-version --expiration 180 --procedure-distance 8
+
+  # Build approach pack from Excel definitions
+  python tools/foreflight.py CustomApproach -c approach --xlsx CustomApproach.xlsx --next-version -e 120
+
+  # Inspect bearings/distances between specified Excel-defined waypoints
+  python tools/foreflight.py CustomApproach -c approach --xlsx CustomApproach.xlsx --describe WP1,IAF,MAP
+"""
+
 import sys
 import argparse
 import logging
@@ -27,6 +96,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _database_path(path: Optional[str]) -> str:
+    """
+    Resolve database path consistent with tools/aip.py:
+    - If --database omitted entirely: prefer AIRPORTS_DB env, then airports.db, else error
+    - If --database provided with no value (const=''): prefer AIRPORTS_DB env, then airports.db, else error
+    - If explicit path provided: use it
+    """
+    if path is None:
+        if os.environ.get('AIRPORTS_DB') and os.path.exists(os.environ.get('AIRPORTS_DB')):  # type: ignore[arg-type]
+            return os.environ.get('AIRPORTS_DB')  # type: ignore[return-value]
+        if os.path.exists('airports.db'):
+            return 'airports.db'
+        raise ValueError("No database file found (set AIRPORTS_DB or provide --database)")
+    if path == '':
+        if os.environ.get('AIRPORTS_DB') and os.path.exists(os.environ.get('AIRPORTS_DB')):  # type: ignore[arg-type]
+            return os.environ.get('AIRPORTS_DB')  # type: ignore[return-value]
+        if os.path.exists('airports.db'):
+            return 'airports.db'
+        raise ValueError("No database file found (set AIRPORTS_DB or create airports.db)")
+    return path
+
 class Command:
     """Command-line interface for ForeFlight export functionality."""
     
@@ -38,7 +128,8 @@ class Command:
             args: Command line arguments
         """
         self.args = args
-        self.storage = DatabaseStorage(args.database)
+        db_path = _database_path(args.database)
+        self.storage = DatabaseStorage(db_path)
         self.model = None
 
     def load_model(self):
@@ -465,7 +556,13 @@ def main():
     parser.add_argument('-c', '--command', choices=['airports', 'approach'], 
                        default='airports', help='Command to execute (default: airports)')
     parser.add_argument('-x', '--xlsx', help='Excel file with navdata and byop sheets (for approach command)')
-    parser.add_argument('-d', '--database', help='SQLite database file', default='airports.db')
+    parser.add_argument(
+        '-d', '--database',
+        nargs='?',
+        const='',
+        default=None,
+        help='SQLite database file (omit value to use AIRPORTS_DB or airports.db)'
+    )
     parser.add_argument('--describe', help='Describe information about list of waypoints (comma-separated, for approach command)')
     parser.add_argument('--procedure-distance', help='Distance in nautical miles for procedure lines (default: 10.0)', 
                        default=10.0, type=float)
