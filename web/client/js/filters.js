@@ -141,6 +141,12 @@ class FilterManager {
             this.resetZoom();
         });
 
+        // Clear filters button
+        const clearFiltersButton = document.getElementById('clear-filters');
+        clearFiltersButton.addEventListener('click', () => {
+            this.clearAllFilters();
+        });
+
         // Legend mode filter
         const legendModeFilter = document.getElementById('legend-mode-filter');
         legendModeFilter.addEventListener('change', () => {
@@ -455,8 +461,12 @@ class FilterManager {
             console.log('applyFilters - currentRoute:', this.currentRoute);
             console.log('applyFilters - currentFilters:', this.currentFilters);
 
-            // Clear any chat/locate overlays before running normal pipeline
-            this.clearChatOverlaysIfAny();
+            // Check if we have a chatbot-selected route (don't re-query, filter client-side)
+            if (this.currentRoute && this.currentRoute.isChatbotSelection && this.currentRoute.chatbotAirports) {
+                console.log('applyFilters - Filtering chatbot-selected airports client-side');
+                await this.filterChatbotAirports();
+                return;
+            }
 
             // Check if we have an active route search AND it's not null
             if (this.currentRoute && this.currentRoute.airports && this.currentRoute.airports.length > 0) {
@@ -927,6 +937,11 @@ class FilterManager {
         }
     }
 
+    // Clear all filters (alias for user-facing button)
+    clearAllFilters() {
+        this.clearFilters();
+    }
+
     // Clear all filters
     clearFilters() {
         console.log('clearFilters - Starting clear operation');
@@ -1053,6 +1068,81 @@ class FilterManager {
             airports: this.airports.length,
             timestamp: new Date().toISOString()
         };
+    }
+
+    // Filter chatbot-selected airports client-side
+    async filterChatbotAirports() {
+        try {
+            const chatbotAirports = this.currentRoute.chatbotAirports;
+            console.log(`Filtering ${chatbotAirports.length} chatbot-selected airports with filters:`, this.currentFilters);
+
+            // Apply client-side filtering
+            let filteredAirports = chatbotAirports.filter(airport => {
+                // Country filter - handle multiple property name variations
+                if (this.currentFilters.country) {
+                    const airportCountry = airport.iso_country || airport.isoCountry || airport.country;
+                    console.log(`Country filter check - Filter: ${this.currentFilters.country}, Airport ${airport.ident} country: ${airportCountry}`);
+                    if (airportCountry !== this.currentFilters.country) {
+                        return false;
+                    }
+                }
+
+                // Has procedures filter
+                if (this.currentFilters.has_procedures !== null && this.currentFilters.has_procedures !== undefined) {
+                    const hasProcedures = airport.has_procedures || (airport.procedures && airport.procedures.length > 0);
+                    if (hasProcedures !== this.currentFilters.has_procedures) {
+                        return false;
+                    }
+                }
+
+                // Has AIP data filter
+                if (this.currentFilters.has_aip_data !== null && this.currentFilters.has_aip_data !== undefined) {
+                    const hasAipData = airport.has_aip_data || (airport.aip_entries && airport.aip_entries.length > 0);
+                    if (hasAipData !== this.currentFilters.has_aip_data) {
+                        return false;
+                    }
+                }
+
+                // Has hard runway filter
+                if (this.currentFilters.has_hard_runway !== null && this.currentFilters.has_hard_runway !== undefined) {
+                    if (airport.has_hard_runway !== this.currentFilters.has_hard_runway) {
+                        return false;
+                    }
+                }
+
+                // Point of entry (border crossing) filter
+                if (this.currentFilters.point_of_entry !== null && this.currentFilters.point_of_entry !== undefined) {
+                    if (airport.point_of_entry !== this.currentFilters.point_of_entry) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            console.log(`Filtered to ${filteredAirports.length} airports from ${chatbotAirports.length} chatbot-selected airports`);
+
+            // Update the map with filtered airports
+            this.airports = filteredAirports;
+            this.updateMapWithAirports(filteredAirports, false);
+
+            // Redraw route line using displayRoute method
+            if (this.currentRoute.originalRouteAirports && this.currentRoute.airports && window.airportMap) {
+                const routeAirports = this.currentRoute.airports;
+                const distanceNm = 50; // Default distance for display
+                window.airportMap.displayRoute(routeAirports, distanceNm, true, this.currentRoute.originalRouteAirports);
+            }
+
+            // Show success message
+            this.showSuccess(`Applied filters: ${filteredAirports.length} of ${chatbotAirports.length} chatbot airports match`);
+
+        } catch (error) {
+            console.error('Error filtering chatbot airports:', error);
+            this.showError('Error filtering chatbot airports: ' + error.message);
+        } finally {
+            this.hideLoading();
+            this.resetApplyButton();
+        }
     }
 
     // Helper: clear chat/locate overlays if present

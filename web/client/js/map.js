@@ -1388,6 +1388,11 @@ class AirportMap {
     setLegendMode(mode) {
         this.legendMode = mode;
         this.updateLegend();
+
+        // Notify chat integration to update marker colors
+        if (window.chatMapIntegration && typeof window.chatMapIntegration.updateMarkerColors === 'function') {
+            window.chatMapIntegration.updateMarkerColors();
+        }
     }
 
     updateLegend() {
