@@ -1131,22 +1131,22 @@ Remember: You're helping pilots make informed decisions. Provide clear reasoning
         return [
             {
                 "title": "Search",
-                "prompt": "Find airports in Paris",
+                "prompt": "Find airports near Paris",
                 "icon": "🔍"
             },
             {
                 "title": "Route",
-                "prompt": "Plan a route from EGTF to LFMD with a fuel stop that has AVGAS",
+                "prompt": "Suggest airports along a route from EGTF to LFMD with a fuel stop that has AVGAS",
                 "icon": "🛫"
             },
             {
                 "title": "Details",
-                "prompt": "Tell me about LFPG - runways, facilities, and procedures",
+                "prompt": "Tell me about LFQA - runways, facilities, and procedures",
                 "icon": "ℹ️"
             },
             {
                 "title": "Border",
-                "prompt": "Show all border crossing airports in Germany",
+                "prompt": "Show all border crossing airports in France",
                 "icon": "🛂"
             }
         ]
