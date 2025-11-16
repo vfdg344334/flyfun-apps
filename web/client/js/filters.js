@@ -7,6 +7,7 @@ class FilterManager {
         this.autoApplyTimeout = null;
         this.aipPresets = [];
         this.aipFields = [];
+        this.locateState = null;
         
         this.initEventListeners();
         this.loadAvailableFilters();
@@ -18,6 +19,9 @@ class FilterManager {
         // Search input
         const searchInput = document.getElementById('search-input');
         searchInput.addEventListener('input', (e) => {
+            if (this.locateState && e.target.value.trim() !== this.locateState.query) {
+                this.locateState = null;
+            }
             this.handleSearch(e.target.value);
         });
 
@@ -116,6 +120,13 @@ class FilterManager {
                             // Non-fatal if chatbot not initialized
                         }
                     }
+                    if (res?.center) {
+                        this.locateState = {
+                            query,
+                            center: res.center, // {lat, lon, label}
+                            radiusNm: radius
+                        };
+                    }
                     this.showSuccess(res?.pretty || `Located airports within ${radius}nm of "${query}"`);
                 } catch (err) {
                     console.error('Locate failed:', err);
@@ -145,13 +156,49 @@ class FilterManager {
         
         // Debounce the auto-apply to prevent rapid successive API calls
         this.autoApplyTimeout = setTimeout(() => {
-            this.applyFilters();
+            const qInput = document.getElementById('search-input');
+            const currentQuery = (qInput?.value || '').trim();
+            if (this.locateState && currentQuery === this.locateState.query) {
+                this.applyLocateWithCachedCenter();
+            } else {
+                this.applyFilters();
+            }
             // Update URL after applying filters
             this.updateURL();
         }, 500); // 500ms delay
         
         // Show immediate feedback that filters are being applied
         this.showFilterChangeIndicator();
+    }
+
+    async applyLocateWithCachedCenter() {
+        try {
+            this.showLoading();
+            // Update filter state from UI
+            this.updateFilters();
+            const radiusInput = document.getElementById('route-distance');
+            const radius = parseFloat(radiusInput?.value || String(this.locateState.radiusNm)) || this.locateState.radiusNm || 50.0;
+            const res = await api.locateAirportsByCenter(this.locateState.center, radius, this.getCurrentFilters());
+            if (res?.visualization && window.chatMapIntegration) {
+                window.chatMapIntegration.visualizeData(res.visualization);
+            }
+            if (res?.filter_profile && window.chatbot) {
+                try {
+                    window.chatbot.applyFilterProfile(res.filter_profile);
+                } catch (e) {}
+            }
+            // Keep state fresh (radius may have changed)
+            if (res?.center) {
+                this.locateState.radiusNm = radius;
+            }
+            this.showSuccess(res?.pretty || `Updated results within ${radius}nm of "${this.locateState.query}"`);
+        } catch (error) {
+            console.error('Error reapplying locate:', error);
+            this.showError('Error updating locate results: ' + error.message);
+        } finally {
+            this.hideLoading();
+            this.resetApplyButton();
+        }
     }
 
     showFilterChangeIndicator() {
