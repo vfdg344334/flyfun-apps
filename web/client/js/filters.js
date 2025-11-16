@@ -455,16 +455,6 @@ class FilterManager {
             console.log('applyFilters - currentRoute:', this.currentRoute);
             console.log('applyFilters - currentFilters:', this.currentFilters);
 
-            // Check if we're in filtered mode (chatbot results showing)
-            if (window.chatMapIntegration && window.chatMapIntegration.isFilteredMode) {
-                console.log('applyFilters - Applying filters to chatbot results');
-                // Apply filters to chat airports
-                window.chatMapIntegration.applyFiltersToChatAirports(this.currentFilters);
-                this.hideLoading();
-                this.resetApplyButton();
-                return;
-            }
-
             // Check if we have an active route search AND it's not null
             if (this.currentRoute && this.currentRoute.airports && this.currentRoute.airports.length > 0) {
                 console.log('applyFilters - Reapplying route search with new filters');
@@ -695,6 +685,10 @@ class FilterManager {
     }
 
     updateMapWithAirports(airports, preserveView = false) {
+        // Ensure base airport layer is present on the map
+        if (airportMap && airportMap.map && airportMap.airportLayer && !airportMap.map.hasLayer(airportMap.airportLayer)) {
+            airportMap.airportLayer.addTo(airportMap.map);
+        }
         // Clear existing markers
         airportMap.clearMarkers();
         

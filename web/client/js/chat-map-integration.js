@@ -22,13 +22,12 @@ class ChatMapIntegration {
     visualizeData(visualization) {
         if (!visualization) return;
 
-        // Clear previous chat visualizations
+        // Clear previous chat visualizations (overlay-only)
         this.clearChatVisualizations();
 
         this.currentVisualization = visualization;
 
-        // Hide all other airports - only show chat results
-        this.hideOtherAirports();
+        // Do not hide base airports; draw as overlay to keep a single rendering pipeline
 
         // Handle array of visualizations (multi-leg routes)
         if (Array.isArray(visualization)) {
@@ -47,17 +46,7 @@ class ChatMapIntegration {
         this.visualizeSingle(visualization);
     }
 
-    /**
-     * Hide all other airports on the map (show only chat results)
-     */
-    hideOtherAirports() {
-        if (window.airportMap && window.airportMap.airportLayer && window.airportMap.map) {
-            // Remove the airport layer from the map
-            window.airportMap.airportLayer.remove();
-            this.isFilteredMode = true;
-            console.log('Hidden other airports - showing only chat results');
-        }
-    }
+    // No-op: keep base layer visible to unify rendering
 
     /**
      * Show all airports again (restore normal view)
@@ -68,7 +57,6 @@ class ChatMapIntegration {
         if (window.airportMap && window.airportMap.airportLayer && window.airportMap.map) {
             // Add the airport layer back to the map
             window.airportMap.airportLayer.addTo(window.airportMap.map);
-            this.isFilteredMode = false;
             console.log('Restored all airports view');
         } else {
             console.warn('Airport map or layer not available');
@@ -493,8 +481,7 @@ class ChatMapIntegration {
         this.currentVisualization = null;
         this.hideVisualizationInfo();
 
-        // Restore all airports
-        this.showAllAirports();
+        // Base layer was never hidden; nothing else to do
     }
 
     /**
@@ -682,13 +669,7 @@ class ChatMapIntegration {
         // Re-visualize with the current legend mode
         this.visualizeSingle(this.currentVisualization);
 
-        // Re-hide other airports if we're in filtered mode
-        if (this.isFilteredMode) {
-            console.log('Re-hiding other airports after legend change');
-            if (window.airportMap && window.airportMap.airportLayer) {
-                window.airportMap.airportLayer.remove();
-            }
-        }
+        // Base layer remains visible
     }
 
     /**

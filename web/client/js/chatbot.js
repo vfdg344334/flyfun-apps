@@ -664,9 +664,16 @@ Try the quick actions below or ask me anything!`;
             }
         }
 
-        // Note: We don't automatically apply filters here to avoid interfering with
-        // the chatbot's visualization. The user can manually apply them if they want
-        // to modify the filter criteria.
+        // Auto-apply via the unified filter pipeline
+        try {
+            if (filterProfile.search_query && typeof filterManager.handleSearch === 'function') {
+                filterManager.handleSearch(filterProfile.search_query);
+            } else if (typeof filterManager.applyFilters === 'function') {
+                filterManager.applyFilters();
+            }
+        } catch (e) {
+            console.warn('Auto-apply failed:', e);
+        }
     }
 }
 

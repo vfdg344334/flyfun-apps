@@ -458,6 +458,9 @@ class AirportMap {
             // Get ICAO codes
             const icaoCodes = airportsWithProcedures.map(airport => airport.ident);
             console.log('ICAO codes to request:', icaoCodes);
+            // Build lookup for airport objects by ident
+            const identToAirport = new Map();
+            airportsWithProcedures.forEach(a => identToAirport.set(a.ident, a));
             
             // Process in batches of 100 (backend limit)
             const batchSize = 100;
@@ -477,15 +480,20 @@ class AirportMap {
                 const bulkData = await api.getBulkProcedureLines(batch, 10.0);
                 console.log(`Batch ${i + 1} API response received:`, bulkData);
                 
-                // Process each airport's procedure lines in this batch
-                for (const airport of airportsWithProcedures) {
-                    const procedureData = bulkData[airport.ident];
-                    console.log(`Processing ${airport.ident}:`, procedureData);
+                // Process each airport's procedure lines in this batch only
+                for (const ident of batch) {
+                    const airport = identToAirport.get(ident);
+                    const procedureData = bulkData[ident];
+                    console.log(`Processing ${ident}:`, procedureData);
                     if (procedureData && procedureData.procedure_lines) {
-                        console.log(`Adding ${procedureData.procedure_lines.length} procedure lines for ${airport.ident}`);
-                        await this.addProcedureLinesFromData(airport, procedureData);
+                        console.log(`Adding ${procedureData.procedure_lines.length} procedure lines for ${ident}`);
+                        if (airport) {
+                            await this.addProcedureLinesFromData(airport, procedureData);
+                        } else {
+                            console.warn(`Airport object not found for ident ${ident} while adding procedure lines`);
+                        }
                     } else {
-                        console.log(`No procedure data for ${airport.ident}`);
+                        console.log(`No procedure data for ${ident}`);
                     }
                 }
             }
