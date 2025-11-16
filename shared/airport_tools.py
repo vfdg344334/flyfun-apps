@@ -7,9 +7,14 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, OrderedDict as OrderedDictType, TypedDict
+import os
+import urllib.parse
+import json
+import urllib.request
 
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
+from euro_aip.models.navpoint import NavPoint
 from euro_aip.storage.database_storage import DatabaseStorage
 from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
@@ -766,6 +771,157 @@ def _compare_rules_between_countries_tool(
     return result
 
 
+def _geoapify_geocode(query: str) -> Optional[Dict[str, Any]]:
+    """
+    Forward-geocode a free-text location using Geoapify.
+    Returns a dict with latitude, longitude, formatted address; None on failure.
+    """
+    api_key = os.environ.get("GEOAPIFY_API_KEY")
+    if not api_key:
+        return None
+    base_url = "https://api.geoapify.com/v1/geocode/search"
+    params = {
+        "text": query,
+        "limit": 1,
+        "format": "json",
+        "apiKey": api_key,
+    }
+    url = f"{base_url}?{urllib.parse.urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            payload = resp.read()
+            data = json.loads(payload.decode("utf-8"))
+            results = data.get("results") or []
+            if not results:
+                return None
+            top = results[0]
+            lat = top.get("lat")
+            lon = top.get("lon")
+            if lat is None or lon is None:
+                return None
+            return {
+                "lat": float(lat),
+                "lon": float(lon),
+                "formatted": top.get("formatted") or query,
+            }
+    except Exception:
+        return None
+
+
+def find_airports_near_location(
+    ctx: ToolContext,
+    location_query: str,
+    max_distance_nm: float = 50.0,
+    filters: Optional[Dict[str, Any]] = None,
+    priority_strategy: str = "cost_optimized",
+) -> Dict[str, Any]:
+    """
+    Find airports near a geographic location (free-text) within a specified distance.
+    1) Geocodes the location via Geoapify to get coordinates
+    2) Computes distance from each airport to that point and filters by max_distance_nm
+    3) Applies optional filters and priority sorting similar to find_airports_near_route
+    """
+    geocode = _geoapify_geocode(location_query)
+    if not geocode:
+        return {
+            "found": False,
+            "pretty": f"Could not geocode '{location_query}'. Ensure GEOAPIFY_API_KEY is set and the query is valid."
+        }
+
+    center_point = NavPoint(latitude=geocode["lat"], longitude=geocode["lon"], name=geocode["formatted"])
+
+    # Compute distances to all airports and filter by radius
+    candidate_airports: List[Airport] = []
+    point_distances: Dict[str, float] = {}
+    for airport in ctx.model.airports.values():
+        if not getattr(airport, "navpoint", None):
+            continue
+        try:
+            _, distance_nm = airport.navpoint.haversine_distance(center_point)
+        except Exception:
+            continue
+        if distance_nm <= float(max_distance_nm):
+            candidate_airports.append(airport)
+            point_distances[airport.ident] = float(distance_nm)
+
+    # Apply optional filters using FilterEngine
+    if filters:
+        filter_engine = FilterEngine(context=ctx)
+        candidate_airports = filter_engine.apply(candidate_airports, filters)
+
+    # Priority sort using PriorityEngine (use distances as context)
+    priority_engine = PriorityEngine(context=ctx)
+    sorted_airports = priority_engine.apply(
+        candidate_airports,
+        strategy=priority_strategy,
+        context={"point_distances": point_distances},
+        max_results=100
+    )
+
+    # Summaries with distance
+    airports: List[Dict[str, Any]] = []
+    for a in sorted_airports:
+        summary = _airport_summary(a)
+        summary["distance_nm"] = round(point_distances.get(a.ident, 0.0), 2)
+        airports.append(summary)
+
+    total_count = len(airports)
+    airports_for_llm = airports[:20] if total_count > 20 else airports
+
+    pretty = (
+        f"Found {total_count} airports within {max_distance_nm}nm of {geocode['formatted']}."
+        if total_count else
+        f"No airports within {max_distance_nm}nm of {geocode['formatted']}."
+    )
+
+    # Generate filter profile for UI synchronization
+    filter_profile: Dict[str, Any] = {
+        "location_query": location_query,
+        "radius_nm": max_distance_nm
+    }
+    if filters:
+        # Legacy filters
+        if filters.get("country"):
+            filter_profile["country"] = filters["country"]
+        if filters.get("has_procedures"):
+            filter_profile["has_procedures"] = True
+        if filters.get("has_aip_data"):
+            filter_profile["has_aip_data"] = True
+        if filters.get("has_hard_runway"):
+            filter_profile["has_hard_runway"] = True
+        if filters.get("point_of_entry"):
+            filter_profile["point_of_entry"] = True
+        # New filters
+        if filters.get("max_runway_length_ft"):
+            filter_profile["max_runway_length_ft"] = filters["max_runway_length_ft"]
+        if filters.get("min_runway_length_ft"):
+            filter_profile["min_runway_length_ft"] = filters["min_runway_length_ft"]
+        if filters.get("has_avgas"):
+            filter_profile["has_avgas"] = True
+        if filters.get("has_jet_a"):
+            filter_profile["has_jet_a"] = True
+        if filters.get("max_landing_fee"):
+            filter_profile["max_landing_fee"] = filters["max_landing_fee"]
+
+    return {
+        "found": True,
+        "count": total_count,
+        "center": {"lat": geocode["lat"], "lon": geocode["lon"], "label": geocode["formatted"]},
+        "airports": airports_for_llm,  # Limited for LLM
+        "pretty": pretty,
+        "filter_profile": filter_profile,
+        "visualization": {
+            "type": "point_with_markers",
+            "point": {
+                "label": geocode["formatted"],
+                "lat": geocode["lat"],
+                "lon": geocode["lon"],
+            },
+            "markers": airports  # Show all within radius on map
+        }
+    }
+
+
 def _tool_description(func: Callable) -> str:
     return (func.__doc__ or "").strip()
 
@@ -802,6 +958,39 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                     },
                     "required": ["query"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "find_airports_near_location",
+            {
+                "name": "find_airports_near_location",
+                "handler": find_airports_near_location,
+                "description": _tool_description(find_airports_near_location),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location_query": {
+                            "type": "string",
+                            "description": "Free-text location (e.g., 'Paris', 'Nice, France', '48.8584, 2.2945').",
+                        },
+                        "max_distance_nm": {
+                            "type": "number",
+                            "description": "Max distance from the location in nautical miles.",
+                            "default": 50.0,
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Airport filters (fuel, customs, runway length, etc.).",
+                        },
+                        "priority_strategy": {
+                            "type": "string",
+                            "description": "Priority sorting strategy (e.g., cost_optimized).",
+                            "default": "cost_optimized",
+                        },
+                    },
+                    "required": ["location_query"],
                 },
                 "expose_to_llm": True,
             },
