@@ -665,11 +665,15 @@ Try the quick actions below or ask me anything!`;
         }
 
         // Auto-apply via the unified filter pipeline
+        // IMPORTANT: Do NOT call applyFilters when chatbot visualization is active
+        // because it will clear the chat markers via clearChatOverlaysIfAny()
         try {
             if (filterProfile.search_query && typeof filterManager.handleSearch === 'function') {
                 filterManager.handleSearch(filterProfile.search_query);
-            } else if (typeof filterManager.applyFilters === 'function') {
-                filterManager.applyFilters();
+            } else {
+                // Skip applyFilters() - chatbot has already set visualization
+                // Just update the filter UI state without re-fetching airports
+                console.log('Filter profile applied to UI, skipping applyFilters to preserve chat visualization');
             }
         } catch (e) {
             console.warn('Auto-apply failed:', e);

@@ -238,9 +238,9 @@ async def get_airports_near_route(
         
         result.append({
             'airport': airport_summary.dict(),
-            'segment_distance_nm': item['segment_distance_nm'],
+            'segment_distance_nm': item.get('segment_distance_nm'),
             'enroute_distance_nm': item.get('enroute_distance_nm'),
-            'closest_segment': item['closest_segment']
+            'closest_segment': item.get('closest_segment')
         })
     
     return {
