@@ -157,20 +157,11 @@ class Chatbot {
 
 I can help you with **2,951 European airports**:
 
-🔍 **Search & Discover**
-• Find airports by name, ICAO, or city
-• Get detailed airport information (runways, facilities, procedures)
-• View database statistics
+• Search detailed airport information (runways, facilities, procedures, border crossing, etc.)
+• Search airports along a route with specific filters (fuel type, customs, distance, etc.)
 
-🗺️ **Flight Planning**
-• Plan routes with fuel stops (AVGAS/Jet A)
-• Find emergency alternate airports
-• Locate border crossing/customs airports
-
-💰 **Operational Info** (via web search)
-• Landing fees and airport charges
-• Customs and immigration procedures
-• Current NOTAMs and restrictions
+• Ask me questions about empirical rules for flying in europe.
+• This information is based on a survey of european pilots.
 
 Try the quick actions below or ask me anything!`;
 
@@ -673,9 +664,16 @@ Try the quick actions below or ask me anything!`;
             }
         }
 
-        // Note: We don't automatically apply filters here to avoid interfering with
-        // the chatbot's visualization. The user can manually apply them if they want
-        // to modify the filter criteria.
+        // Auto-apply via the unified filter pipeline
+        try {
+            if (filterProfile.search_query && typeof filterManager.handleSearch === 'function') {
+                filterManager.handleSearch(filterProfile.search_query);
+            } else if (typeof filterManager.applyFilters === 'function') {
+                filterManager.applyFilters();
+            }
+        } catch (e) {
+            console.warn('Auto-apply failed:', e);
+        }
     }
 }
 

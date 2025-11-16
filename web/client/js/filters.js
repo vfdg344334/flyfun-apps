@@ -7,6 +7,7 @@ class FilterManager {
         this.autoApplyTimeout = null;
         this.aipPresets = [];
         this.aipFields = [];
+        this.locateState = null;
         
         this.initEventListeners();
         this.loadAvailableFilters();
@@ -18,6 +19,9 @@ class FilterManager {
         // Search input
         const searchInput = document.getElementById('search-input');
         searchInput.addEventListener('input', (e) => {
+            if (this.locateState && e.target.value.trim() !== this.locateState.query) {
+                this.locateState = null;
+            }
             this.handleSearch(e.target.value);
         });
 
@@ -91,6 +95,46 @@ class FilterManager {
             this.applyFilters();
         });
 
+        // Locate button
+        const locateButton = document.getElementById('locate-button');
+        if (locateButton) {
+            locateButton.addEventListener('click', async () => {
+                try {
+                    const qInput = document.getElementById('search-input');
+                    const radiusInput = document.getElementById('route-distance');
+                    const query = (qInput?.value || '').trim();
+                    const radius = parseFloat(radiusInput?.value || '50') || 50.0;
+                    if (!query) {
+                        this.showError('Enter a place in the search box to locate near.');
+                        return;
+                    }
+                    const res = await api.locateAirports(query, radius, this.getCurrentFilters());
+                    if (res?.visualization && window.chatMapIntegration) {
+                        window.chatMapIntegration.visualizeData(res.visualization);
+                    }
+                    if (res?.filter_profile && window.chatbot) {
+                        // Reuse chatbot's filter profile sync if available
+                        try {
+                            window.chatbot.applyFilterProfile(res.filter_profile);
+                        } catch (e) {
+                            // Non-fatal if chatbot not initialized
+                        }
+                    }
+                    if (res?.center) {
+                        this.locateState = {
+                            query,
+                            center: res.center, // {lat, lon, label}
+                            radiusNm: radius
+                        };
+                    }
+                    this.showSuccess(res?.pretty || `Located airports within ${radius}nm of "${query}"`);
+                } catch (err) {
+                    console.error('Locate failed:', err);
+                    this.showError('Locate failed. Please try again.');
+                }
+            });
+        }
+
         // Reset zoom button
         const resetZoomButton = document.getElementById('reset-zoom');
         resetZoomButton.addEventListener('click', () => {
@@ -112,13 +156,49 @@ class FilterManager {
         
         // Debounce the auto-apply to prevent rapid successive API calls
         this.autoApplyTimeout = setTimeout(() => {
-            this.applyFilters();
+            const qInput = document.getElementById('search-input');
+            const currentQuery = (qInput?.value || '').trim();
+            if (this.locateState && currentQuery === this.locateState.query) {
+                this.applyLocateWithCachedCenter();
+            } else {
+                this.applyFilters();
+            }
             // Update URL after applying filters
             this.updateURL();
         }, 500); // 500ms delay
         
         // Show immediate feedback that filters are being applied
         this.showFilterChangeIndicator();
+    }
+
+    async applyLocateWithCachedCenter() {
+        try {
+            this.showLoading();
+            // Update filter state from UI
+            this.updateFilters();
+            const radiusInput = document.getElementById('route-distance');
+            const radius = parseFloat(radiusInput?.value || String(this.locateState.radiusNm)) || this.locateState.radiusNm || 50.0;
+            const res = await api.locateAirportsByCenter(this.locateState.center, radius, this.getCurrentFilters());
+            if (res?.visualization && window.chatMapIntegration) {
+                window.chatMapIntegration.visualizeData(res.visualization);
+            }
+            if (res?.filter_profile && window.chatbot) {
+                try {
+                    window.chatbot.applyFilterProfile(res.filter_profile);
+                } catch (e) {}
+            }
+            // Keep state fresh (radius may have changed)
+            if (res?.center) {
+                this.locateState.radiusNm = radius;
+            }
+            this.showSuccess(res?.pretty || `Updated results within ${radius}nm of "${this.locateState.query}"`);
+        } catch (error) {
+            console.error('Error reapplying locate:', error);
+            this.showError('Error updating locate results: ' + error.message);
+        } finally {
+            this.hideLoading();
+            this.resetApplyButton();
+        }
     }
 
     showFilterChangeIndicator() {
@@ -375,15 +455,8 @@ class FilterManager {
             console.log('applyFilters - currentRoute:', this.currentRoute);
             console.log('applyFilters - currentFilters:', this.currentFilters);
 
-            // Check if we're in filtered mode (chatbot results showing)
-            if (window.chatMapIntegration && window.chatMapIntegration.isFilteredMode) {
-                console.log('applyFilters - Applying filters to chatbot results');
-                // Apply filters to chat airports
-                window.chatMapIntegration.applyFiltersToChatAirports(this.currentFilters);
-                this.hideLoading();
-                this.resetApplyButton();
-                return;
-            }
+            // Clear any chat/locate overlays before running normal pipeline
+            this.clearChatOverlaysIfAny();
 
             // Check if we have an active route search AND it's not null
             if (this.currentRoute && this.currentRoute.airports && this.currentRoute.airports.length > 0) {
@@ -428,6 +501,9 @@ class FilterManager {
         
         // Trim the query
         query = query.trim();
+
+        // Clear overlays from previous chat/locate visualizations when entering normal search
+        this.clearChatOverlaysIfAny();
         
         // If query is empty, reset to show all airports
         if (!query) {
@@ -499,6 +575,9 @@ class FilterManager {
 
     async handleRouteSearch(routeAirports, skipFilterUpdate = false) {
         try {
+            // Clear overlays from previous chat/locate visualizations when entering route search
+            this.clearChatOverlaysIfAny();
+
             // Get distance from UI or use default
             const distanceInput = document.getElementById('route-distance') || { value: '50' };
             const distanceNm = parseFloat(distanceInput.value) || 50.0;
@@ -615,6 +694,12 @@ class FilterManager {
     }
 
     updateMapWithAirports(airports, preserveView = false) {
+        // Ensure base airport layer is present on the map
+        if (airportMap && airportMap.map && airportMap.airportLayer && !airportMap.map.hasLayer(airportMap.airportLayer)) {
+            airportMap.airportLayer.addTo(airportMap.map);
+        }
+        // Clear any chat overlays to avoid mixing lists
+        this.clearChatOverlaysIfAny();
         // Clear existing markers
         airportMap.clearMarkers();
         
@@ -968,6 +1053,17 @@ class FilterManager {
             airports: this.airports.length,
             timestamp: new Date().toISOString()
         };
+    }
+
+    // Helper: clear chat/locate overlays if present
+    clearChatOverlaysIfAny() {
+        try {
+            if (typeof chatMapIntegration !== 'undefined' && chatMapIntegration && chatMapIntegration.chatLayers) {
+                chatMapIntegration.clearChatVisualizations();
+            }
+        } catch (e) {
+            console.warn('Could not clear chat overlays:', e);
+        }
     }
 }
 

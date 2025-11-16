@@ -6,7 +6,9 @@ import logging
 
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
+from euro_aip.models.navpoint import NavPoint
 from .models import AirportSummary, AirportDetail, AIPEntryResponse
+from shared.airport_tools import ToolContext, find_airports_near_location
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +260,124 @@ async def get_airports_near_route(
             'aip_operator': aip_operator
         },
         'airports': result
+    }
+
+@router.get("/locate")
+async def locate_airports(
+    request: Request,
+    q: Optional[str] = Query(None, description="Free-text location to search around", max_length=200),
+    radius_nm: float = Query(50.0, description="Max distance from location (NM)", ge=0.1, le=500.0),
+    center_lat: Optional[float] = Query(None, description="Pre-resolved center latitude (bypass geocoding)"),
+    center_lon: Optional[float] = Query(None, description="Pre-resolved center longitude (bypass geocoding)"),
+    country: Optional[str] = Query(None, description="Filter by ISO country code", max_length=3),
+    has_procedures: Optional[bool] = Query(None, description="Filter airports with procedures"),
+    has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
+    has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
+    point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports")
+):
+    """
+    Locate airports near a free-text location, leveraging Geoapify geocoding via shared tool.
+    """
+    if not model:
+        raise HTTPException(status_code=500, detail="Model not loaded")
+    filters: Dict[str, Any] = {}
+    if country:
+        filters["country"] = country
+    if has_procedures is not None:
+        filters["has_procedures"] = has_procedures
+    if has_aip_data is not None:
+        filters["has_aip_data"] = has_aip_data
+    if has_hard_runway is not None:
+        filters["has_hard_runway"] = has_hard_runway
+    if point_of_entry is not None:
+        filters["point_of_entry"] = point_of_entry
+
+    # If center provided, bypass geocoding and compute directly
+    if center_lat is not None and center_lon is not None:
+        # Prepare center navpoint
+        center = NavPoint(latitude=center_lat, longitude=center_lon, name=q or "Center")
+        # Compute distances and filter
+        filtered_airports = []
+        for a in model.airports.values():
+            ap = getattr(a, "navpoint", None)
+            if not ap:
+                continue
+            try:
+                _, d_nm = ap.haversine_distance(center)
+            except Exception:
+                continue
+            if d_nm > float(radius_nm):
+                continue
+            # Apply filters (same semantics as route-search)
+            if country and a.iso_country != country:
+                continue
+            if has_procedures is not None and bool(a.procedures) != has_procedures:
+                continue
+            if has_aip_data is not None and bool(a.aip_entries) != has_aip_data:
+                continue
+            if has_hard_runway is not None and getattr(a, "has_hard_runway", False) != has_hard_runway:
+                continue
+            if point_of_entry is not None and getattr(a, "point_of_entry", False) != point_of_entry:
+                continue
+            filtered_airports.append((a, float(d_nm)))
+
+        # Sort by distance
+        filtered_airports.sort(key=lambda x: x[1])
+
+        # Build response
+        airports_resp = []
+        for a, d_nm in filtered_airports:
+            summary = AirportSummary.from_airport(a).dict()
+            summary["distance_nm"] = round(d_nm, 2)
+            airports_resp.append(summary)
+
+        pretty = (
+            f"Found {len(airports_resp)} airports within {radius_nm}nm of {q or 'center'}."
+            if airports_resp else
+            f"No airports within {radius_nm}nm."
+        )
+        result = {
+            "found": True,
+            "count": len(airports_resp),
+            "center": {"lat": center_lat, "lon": center_lon, "label": q or "Center"},
+            "airports": airports_resp[:20],
+            "pretty": pretty,
+            "filter_profile": {
+                "location_query": q or "",
+                "radius_nm": radius_nm,
+                **({ "country": country } if country else {}),
+                **({ "has_procedures": True } if has_procedures else {}),
+                **({ "has_aip_data": True } if has_aip_data else {}),
+                **({ "has_hard_runway": True } if has_hard_runway else {}),
+                **({ "point_of_entry": True } if point_of_entry else {}),
+            },
+            "visualization": {
+                "type": "point_with_markers",
+                "point": {"label": q or "Center", "lat": center_lat, "lon": center_lon},
+                "markers": airports_resp
+            }
+        }
+    else:
+        if not q:
+            raise HTTPException(status_code=400, detail="q (query) is required when center_lat/center_lon are not provided")
+        # Build a lightweight tool context with the existing in-memory model
+        ctx = ToolContext(model=model)
+        result = find_airports_near_location(
+            ctx,
+            location_query=q,
+            max_distance_nm=radius_nm,
+            filters=filters or None
+        )
+
+    # Pass through relevant fields for client
+    return {
+        "count": result.get("count", 0),
+        "center": result.get("center"),
+        "airports": result.get("airports") or [],
+        "pretty": result.get("pretty"),
+        "filter_profile": result.get("filter_profile"),
+        "visualization": result.get("visualization"),
+        "found": result.get("found", False)
     }
 
 @router.get("/aip-filter-presets")

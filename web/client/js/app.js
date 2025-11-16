@@ -405,15 +405,14 @@ class AirportExplorerApp {
             
             // If we applied parameters, trigger filter application
             if (hasAppliedParams && filterManager) {
-                // Apply filters with URL parameters
-                await filterManager.applyFiltersFromURL();
-                
-                // Apply search if present
                 const searchValue = document.getElementById('search-input').value;
                 if (searchValue) {
+                    // If search is present, let search own the flow
                     await filterManager.handleSearch(searchValue);
+                } else {
+                    // Otherwise apply filters from the URL-driven controls
+                    await filterManager.applyFiltersFromURL();
                 }
-                
                 console.log('Applied URL parameters successfully');
                 console.log('Applied parameters:', appliedParams.join(', '));
             }
