@@ -1403,10 +1403,8 @@ class AirportMap {
         this.legendMode = mode;
         this.updateLegend();
 
-        // Notify chat integration to update marker colors
-        if (window.chatMapIntegration && typeof window.chatMapIntegration.updateMarkerColors === 'function') {
-            window.chatMapIntegration.updateMarkerColors();
-        }
+        // Note: Chat visualizations are now handled by FilterManager,
+        // which uses airportMap.addAirport() and will automatically respect legend mode
     }
 
     updateLegend() {
