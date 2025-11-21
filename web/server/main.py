@@ -40,12 +40,10 @@ from security_config import (
 )
 
 # Import API routes
-from api import airports, procedures, filters, statistics, chatbot, rules, aviation_agent_chat
+from api import airports, procedures, filters, statistics, rules, aviation_agent_chat
 # LangChain-based chat endpoint (alternative to streaming chatbot)
 from chat import ask as chat_ask
 
-# Import chatbot service
-from chatbot_service import ChatbotService
 from shared.rules_manager import RulesManager
 
 # Configure logging with both file and console output
@@ -137,12 +135,6 @@ async def lifespan(app: FastAPI):
             logger.warning("No rules loaded from %s", rules_path)
         rules.set_rules_manager(rules_manager)
 
-        # Initialize chatbot service
-        logger.info("Initializing chatbot service...")
-        chatbot_service = ChatbotService()
-        chatbot.set_chatbot_service(chatbot_service)
-        logger.info("Chatbot service initialized")
-
         logger.info("Application startup complete")
         
     except Exception as e:
@@ -228,8 +220,7 @@ app.include_router(procedures.router, prefix="/api/procedures", tags=["procedure
 app.include_router(filters.router, prefix="/api/filters", tags=["filters"])
 app.include_router(statistics.router, prefix="/api/statistics", tags=["statistics"])
 app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
-# Chatbot endpoints: both streaming (OpenAI) and LangChain+MCP available
-app.include_router(chatbot.router, prefix="/api/chat", tags=["chatbot"])  # Streaming: /api/chat/stream
+# LangChain-based chat endpoint (legacy, may be deprecated)
 app.include_router(chat_ask.router, tags=["chat"])  # LangChain+MCP: /chat/ask, /chat/health
 
 if aviation_agent_chat.feature_enabled():

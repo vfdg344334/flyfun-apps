@@ -282,6 +282,7 @@ def find_airports_near_route(
                     "lon": getattr(to_airport, "longitude_deg", None) if to_airport else None,
                 }
             },
+            "markers": airports  # Include ALL airports for map visualization (not just LLM-limited subset)
         }
     }
 
