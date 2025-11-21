@@ -37,9 +37,62 @@ def build_planner_runnable(
 ) -> Runnable:
     """
     Create a runnable that turns conversation history into an AviationPlan.
+    
+    Uses native structured output when available (e.g., ChatOpenAI.with_structured_output),
+    which is more reliable with conversation history. Falls back to PydanticOutputParser if not available.
     """
 
     tool_catalog = render_tool_catalog(tools)
+
+    # Use native structured output when available (more reliable with conversation history)
+    # This is especially important for multi-turn conversations where PydanticOutputParser can fail
+    if hasattr(llm, 'with_structured_output'):
+        try:
+            # Use function_calling method to avoid OpenAI's strict json_schema validation
+            with_structured_output = getattr(llm, 'with_structured_output')
+            structured_llm = with_structured_output(AviationPlan, method="function_calling")
+            
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        (
+                            "You are AviationPlan, a planning agent that selects exactly one aviation tool.\n"
+                            "Tools:\n{tool_catalog}\n\n"
+                            "**Filter Extraction:**\n"
+                            "If the user mentions specific requirements (AVGAS, customs, runway length, country, etc.),\n"
+                            "extract them as a 'filters' object in the 'arguments' field. Only include filters the user explicitly requests.\n"
+                            "Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,\n"
+                            "country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee.\n\n"
+                            "Example: If user says 'fuel stop with AVGAS', set arguments.filters = {{'has_avgas': true}}\n\n"
+                            "Pick the tool that can produce the most authoritative answer for the pilot."
+                        ),
+                    ),
+                    MessagesPlaceholder(variable_name="messages"),
+                    (
+                        "human",
+                        (
+                            "Analyze the conversation above and select one tool from the manifest. "
+                            "Do not invent tools. Extract any filters the user mentioned into arguments.filters."
+                        ),
+                    ),
+                ]
+            )
+            
+            chain = prompt | structured_llm
+            
+            def _invoke(state: Dict[str, Any]) -> AviationPlan:
+                plan = chain.invoke({"messages": state["messages"], "tool_catalog": tool_catalog})
+                _validate_selected_tool(plan.selected_tool, tools)
+                return plan
+            
+            return RunnableLambda(_invoke)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to use native structured output, falling back to PydanticOutputParser: {e}", exc_info=True)
+
+    # Fallback: Use PydanticOutputParser (less reliable with conversation history)
     parser = PydanticOutputParser(pydantic_object=AviationPlan)
     format_instructions = parser.get_format_instructions()
 
@@ -56,7 +109,6 @@ def build_planner_runnable(
                     "Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,\n"
                     "country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee.\n\n"
                     "Example: If user says 'fuel stop with AVGAS', set arguments.filters = {{'has_avgas': true}}\n\n"
-                    "Always return JSON that matches this schema:\n{schema}\n"
                     "Pick the tool that can produce the most authoritative answer for the pilot."
                 ),
             ),
@@ -65,7 +117,8 @@ def build_planner_runnable(
                 "human",
                 (
                     "Analyze the conversation above and emit a JSON plan. You must use one tool "
-                    "from the manifest. Do not invent tools. Reply with JSON only.\n"
+                    "from the manifest. Do not invent tools. Return an actual plan instance with "
+                    "'selected_tool', 'arguments', and 'answer_style' fields, not the schema description.\n\n"
                     "{format_instructions}"
                 ),
             ),
@@ -76,7 +129,6 @@ def build_planner_runnable(
         return {
             "messages": state["messages"],
             "tool_catalog": tool_catalog,
-            "schema": json.dumps(AviationPlan.model_json_schema(), indent=2),
             "format_instructions": format_instructions,
         }
 

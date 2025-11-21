@@ -88,11 +88,42 @@ class AviationAgentSettings(BaseSettings):
     )
 
     def build_tool_context(self, *, load_rules: bool = True) -> ToolContext:
-        return ToolContext.create(
+        """
+        Build or retrieve cached ToolContext.
+        
+        ToolContext is expensive to create (loads entire airport database + rules),
+        so we cache it at the module level. The cache key includes db_path, rules_path,
+        and load_rules flag to ensure we create separate contexts for different configs.
+        """
+        return _cached_tool_context(
             db_path=str(self.airports_db),
             rules_path=str(self.rules_json),
             load_rules=load_rules,
         )
+
+
+@lru_cache(maxsize=1)
+def _cached_tool_context(
+    db_path: str,
+    rules_path: str,
+    load_rules: bool,
+) -> ToolContext:
+    """
+    Cached ToolContext factory.
+    
+    ToolContext creation is expensive (loads entire airport database + rules),
+    so we cache it at the module level. Only one ToolContext is created per unique
+    combination of (db_path, rules_path, load_rules).
+    
+    This matches the pattern used in:
+    - mcp_server/main.py (global _tool_context created once at startup)
+    - tests/tools/conftest.py (@lru_cache on tool_context fixture)
+    """
+    return ToolContext.create(
+        db_path=db_path,
+        rules_path=rules_path,
+        load_rules=load_rules,
+    )
 
 
 @lru_cache(maxsize=1)
