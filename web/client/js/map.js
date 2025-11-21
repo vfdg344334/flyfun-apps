@@ -686,14 +686,24 @@ class AirportMap {
     }
 
     showAirportDetailsLoading() {
+        const airportContent = document.getElementById('airport-content');
         const detailsContainer = document.getElementById('airport-details');
         const infoContainer = document.getElementById('airport-info');
         const rulesContainer = document.getElementById('rules-content');
         const rulesSummary = document.getElementById('rules-summary');
         const aipContentContainer = document.getElementById('aip-data-content');
         
-        detailsContainer.style.display = 'block';
-        document.getElementById('no-selection').style.display = 'none';
+        // Show the tabbed content container (not just the details div)
+        if (airportContent) {
+            airportContent.style.display = 'flex';
+        }
+        if (detailsContainer) {
+            detailsContainer.style.display = 'block';
+        }
+        const noSelection = document.getElementById('no-selection');
+        if (noSelection) {
+            noSelection.style.display = 'none';
+        }
         
         infoContainer.innerHTML = `
             <div class="text-center">

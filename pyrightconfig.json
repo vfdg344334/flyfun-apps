@@ -1,0 +1,32 @@
+{
+  "include": [
+    "web",
+    "shared",
+    "tools",
+    "mcp_server",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/venv",
+    "**/.venv"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.13",
+      "pythonPlatform": "Darwin",
+      "extraPaths": [
+        ".",
+        "web/server",
+        "venv/lib/python3.13/site-packages",
+        "/Users/brice/Developer/public/rzflight/euro_aip"
+      ]
+    }
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false
+}
+

@@ -1,7 +1,0 @@
----
-alwaysApply: true
----
-
-- always run python commands after source venv/bin/activate
-- always be careful to review, abstract common logic. 
-- search for existing logic before duplicating and avoid code duplication

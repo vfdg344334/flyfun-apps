@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from fastapi import APIRouter, Query, HTTPException, Request, Path, Body
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union, TypeAlias
 import logging
 
 from euro_aip.models.euro_aip_model import EuroAipModel
@@ -9,6 +9,9 @@ from euro_aip.models.airport import Airport
 from euro_aip.models.navpoint import NavPoint
 from .models import AirportSummary, AirportDetail, AIPEntryResponse
 from shared.airport_tools import ToolContext, find_airports_near_location
+
+# Type alias for route airports (can be ICAO codes or NavPoint objects)
+Route: TypeAlias = List[Union[str, NavPoint]]
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +25,7 @@ def set_model(m: EuroAipModel):
     global model
     model = m
 
-def _matches_aip_field(airport: Airport, field_name: str, value: str = None, operator: str = "contains") -> bool:
+def _matches_aip_field(airport: Airport, field_name: str, value: Optional[str] = None, operator: str = "contains") -> bool:
     """
     Check if an airport matches AIP field criteria.
     
@@ -89,7 +92,7 @@ async def get_airports(
     # New AIP field filters
     aip_field: Optional[str] = Query(None, description="AIP standardized field name to filter by", max_length=100),
     aip_value: Optional[str] = Query(None, description="Value to search for in the AIP field", max_length=200),
-    aip_operator: Optional[str] = Query("contains", description="Operator for AIP field filtering: contains, equals, not_empty, starts_with, ends_with", max_length=20),
+    aip_operator: str = Query("contains", description="Operator for AIP field filtering: contains, equals, not_empty, starts_with, ends_with", max_length=20),
     limit: int = Query(1000, description="Maximum number of airports to return", ge=1, le=10000),
     offset: int = Query(0, description="Number of airports to skip", ge=0, le=100000)
 ):
@@ -152,7 +155,7 @@ async def get_airports_near_route(
     # New AIP field filters
     aip_field: Optional[str] = Query(None, description="AIP standardized field name to filter by", max_length=100),
     aip_value: Optional[str] = Query(None, description="Value to search for in the AIP field", max_length=200),
-    aip_operator: Optional[str] = Query("contains", description="Operator for AIP field filtering: contains, equals, not_empty, starts_with, ends_with", max_length=20)
+    aip_operator: str = Query("contains", description="Operator for AIP field filtering: contains, equals, not_empty, starts_with, ends_with", max_length=20)
 ):
     """Find airports within a specified distance from a route defined by airport ICAO codes, with optional filtering."""
     if not model:
@@ -160,7 +163,7 @@ async def get_airports_near_route(
     
     # Parse airport codes
     try:
-        route_airports = [code.strip().upper() for code in airports.split(',') if code.strip()]
+        route_airports: Route = [code.strip().upper() for code in airports.split(',') if code.strip()]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid airport codes format: {str(e)}")
     
@@ -168,7 +171,11 @@ async def get_airports_near_route(
         raise HTTPException(status_code=400, detail="Route must contain at least 1 airport")
     
     # Validate airport codes
-    for icao in route_airports:
+    # Type narrowing: we know all elements are strings since we just created them
+    for item in route_airports:
+        if not isinstance(item, str):
+            raise HTTPException(status_code=400, detail=f"Invalid route item type: expected str, got {type(item)}")
+        icao = item
         if len(icao) != 4:
             raise HTTPException(status_code=400, detail=f"Invalid ICAO code: {icao}")
         if not model.get_airport(icao):
@@ -183,15 +190,18 @@ async def get_airports_near_route(
     # Apply additional filters
     filtered_airports = []
     # Prepare enroute distance context if needed
-    from_airport = model.get_airport(route_airports[0]) if enroute_distance_max_nm is not None else None
+    first_route_item = route_airports[0]
+    if not isinstance(first_route_item, str):
+        raise HTTPException(status_code=400, detail="First route item must be a string ICAO code")
+    from_airport = model.get_airport(first_route_item) if enroute_distance_max_nm is not None else None
     for item in nearby_airports:
         airport = item['airport']
         
         # Apply enroute (trip) distance max filter from first route airport
         if from_airport is not None:
             try:
-                _, gc_distance_nm = from_airport.navpoint.haversine_distance(airport.navpoint)
-                if gc_distance_nm > float(enroute_distance_max_nm):
+                _, gc_distance_nm = from_airport.navpoint.haversine_distance(airport.navpoint) if from_airport.navpoint and airport.navpoint else (0, 0)
+                if gc_distance_nm > float(enroute_distance_max_nm or 0):
                     continue
             except Exception:
                 # If distance can't be computed, conservatively include
