@@ -158,6 +158,10 @@ class Application {
           const airportsChanged = currentAirportsHash !== lastAirportsHash;
           const legendModeChanged = state.visualization.legendMode !== lastLegendMode;
           
+          // Capture previous legend mode BEFORE updating it (needed for procedure lines clearing)
+          const wasProcedurePrecision = lastLegendMode === 'procedure-precision';
+          const isProcedurePrecision = state.visualization.legendMode === 'procedure-precision';
+          
           if (airportsChanged || legendModeChanged) {
             console.log('Store subscription: Updating markers', {
               airportCount: state.filteredAirports.length,
@@ -204,13 +208,12 @@ class Application {
           }
           
           // Handle procedure lines based on legend mode
-          // Capture previous mode BEFORE updating lastLegendMode (which happens above)
-          const wasProcedurePrecision = lastLegendMode === 'procedure-precision';
-          const isProcedurePrecision = state.visualization.legendMode === 'procedure-precision';
-          
           if (legendModeChanged && wasProcedurePrecision && !isProcedurePrecision) {
             // Clear procedure lines when switching away from procedure-precision mode
-            console.log('Clearing procedure lines - legend mode changed away from procedure-precision');
+            console.log('Clearing procedure lines - legend mode changed away from procedure-precision', {
+              previousMode: lastLegendMode,
+              newMode: state.visualization.legendMode
+            });
             this.visualizationEngine.clearProcedureLines();
             lastProcedureLinesHash = ''; // Reset hash
           } else if (isProcedurePrecision && state.visualization.showProcedureLines) {
