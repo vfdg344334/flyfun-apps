@@ -8,6 +8,7 @@ import { APIAdapter } from './adapters/api-adapter';
 import { VisualizationEngine } from './engines/visualization-engine';
 import { UIManager } from './managers/ui-manager';
 import { LLMIntegration } from './adapters/llm-integration';
+import { ChatbotManager } from './managers/chatbot-manager';
 import type { AppState, RouteState, MapView, FilterConfig } from './store/types';
 
 // Global instances (for debugging/window access)
@@ -29,6 +30,7 @@ class Application {
   private visualizationEngine: VisualizationEngine;
   private uiManager: UIManager;
   private llmIntegration: LLMIntegration;
+  private chatbotManager: ChatbotManager;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
   private storeUnsubscribe?: () => void; // Store unsubscribe function
   
@@ -48,11 +50,15 @@ class Application {
     // Initialize LLM integration
     this.llmIntegration = new LLMIntegration(this.store, this.apiAdapter, this.uiManager);
     
+    // Initialize chatbot manager
+    this.chatbotManager = new ChatbotManager(this.llmIntegration);
+    
     // Expose to window for debugging
     window.appState = this.store as any;
     window.visualizationEngine = this.visualizationEngine;
     window.uiManager = this.uiManager;
     window.llmIntegration = this.llmIntegration;
+    (window as any).chatbotManager = this.chatbotManager;
   }
   
   /**
@@ -145,13 +151,25 @@ class Application {
       updateTimeout = window.setTimeout(() => {
         try {
           // Update markers if airports changed
-          if (state.filteredAirports !== lastAirports || state.visualization.legendMode !== lastLegendMode) {
+          // Use JSON comparison to detect actual changes, not just reference changes
+          const currentAirportsHash = JSON.stringify(state.filteredAirports.map(a => a.ident).sort());
+          const lastAirportsHash = JSON.stringify(lastAirports.map((a: any) => a.ident).sort());
+          const airportsChanged = currentAirportsHash !== lastAirportsHash;
+          const legendModeChanged = state.visualization.legendMode !== lastLegendMode;
+          
+          if (airportsChanged || legendModeChanged) {
+            console.log('Store subscription: Updating markers', {
+              airportCount: state.filteredAirports.length,
+              legendMode: state.visualization.legendMode,
+              airportsChanged,
+              legendModeChanged
+            });
             this.visualizationEngine.updateMarkers(
               state.filteredAirports,
               state.visualization.legendMode
             );
             
-            lastAirports = state.filteredAirports;
+            lastAirports = [...state.filteredAirports]; // Copy array for comparison
             lastLegendMode = state.visualization.legendMode;
           }
           

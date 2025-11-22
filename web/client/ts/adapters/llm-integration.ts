@@ -95,12 +95,24 @@ export class LLMIntegration {
     const airports = viz.data || viz.markers || [];
     
     if (!Array.isArray(airports) || airports.length === 0) {
-      console.error('markers visualization missing valid airports array');
+      console.error('LLMIntegration: markers visualization missing valid airports array', viz);
       return false;
     }
     
-    // Update store with airports
-    (this.store as any).getState().setAirports(airports);
+    console.log('LLMIntegration: Handling markers visualization', {
+      type: viz.type,
+      airportCount: airports.length,
+      airports: airports.slice(0, 3).map(a => a.ident) // Log first 3 ICAOs
+    });
+    
+    // Update store with airports - this should trigger the map update via store subscription
+    const store = this.store as any;
+    store.getState().setAirports(airports);
+    
+    console.log('LLMIntegration: Set airports in store', {
+      storeAirportCount: store.getState().airports.length,
+      storeFilteredCount: store.getState().filteredAirports.length
+    });
     
     // Apply filter profile if provided
     const filterProfile = viz.filter_profile as Partial<FilterConfig> | undefined;
