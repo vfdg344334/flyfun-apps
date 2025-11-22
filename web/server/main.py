@@ -232,20 +232,17 @@ else:
 
 # Serve static files for client assets
 client_dir = Path(__file__).parent.parent / "client"
-js_dir = client_dir / "js"
 
 # Debug logging to verify paths
 logger.info(f"Client directory: {client_dir}")
-logger.info(f"JS directory: {js_dir}")
-logger.info(f"JS directory exists: {js_dir.exists()}")
 
 # Add cache control middleware for development
 @app.middleware("http")
 async def add_cache_control_headers(request: Request, call_next):
     response = await call_next(request)
     
-    # Add cache control headers for JavaScript files in development
-    if request.url.path.endswith('.js'):
+    # Add cache control headers for JavaScript/TypeScript files in development
+    if request.url.path.endswith(('.js', '.ts')):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -254,8 +251,19 @@ async def add_cache_control_headers(request: Request, call_next):
 
 # Mount static files
 css_dir = os.path.join(client_dir, "css")
-app.mount("/js", StaticFiles(directory=js_dir, html=True), name="js")
 app.mount("/css", StaticFiles(directory=css_dir, html=True), name="css")
+
+# Mount TypeScript build output (for production)
+ts_dist_dir = client_dir / "dist"
+if ts_dist_dir.exists():
+    app.mount("/dist", StaticFiles(directory=str(ts_dist_dir), html=True), name="dist")
+    logger.info(f"TypeScript dist directory mounted: {ts_dist_dir}")
+
+# Mount TypeScript source (for development - Vite handles this, but fallback)
+ts_dir = client_dir / "ts"
+if ts_dir.exists():
+    app.mount("/ts", StaticFiles(directory=str(ts_dir), html=True), name="ts")
+    logger.info(f"TypeScript source directory mounted: {ts_dir}")
 
 @app.get("/")
 async def read_root():
