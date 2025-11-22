@@ -625,6 +625,16 @@ export class ChatbotManager {
             : 'fas fa-expand';
         }
       }
+      
+      // Invalidate map size after layout change (with delay to allow CSS transition)
+      setTimeout(() => {
+        if ((window as any).visualizationEngine) {
+          const map = (window as any).visualizationEngine.getMap();
+          if (map && typeof map.invalidateSize === 'function') {
+            map.invalidateSize();
+          }
+        }
+      }, 300); // Match CSS transition duration
     }
   }
   

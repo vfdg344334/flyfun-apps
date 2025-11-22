@@ -307,6 +307,13 @@ class Application {
    * Initialize event listeners
    */
   private initEventListeners(): void {
+    // Right panel collapse button
+    const rightPanelCollapseBtn = document.getElementById('right-panel-collapse');
+    if (rightPanelCollapseBtn) {
+      rightPanelCollapseBtn.addEventListener('click', () => {
+        this.toggleRightPanel();
+      });
+    }
     // Reset zoom event
     window.addEventListener('reset-zoom', () => {
       this.visualizationEngine.fitBounds();
@@ -497,6 +504,43 @@ class Application {
   private async loadProcedureLines(airports: any[]): Promise<void> {
     // This will be called automatically when legend mode is 'procedure-precision'
     await this.visualizationEngine.loadBulkProcedureLines(airports, this.apiAdapter);
+  }
+  
+  /**
+   * Toggle right panel collapse
+   */
+  private toggleRightPanel(): void {
+    const rightPanel = document.querySelector('.right-panel');
+    const rightPanelCol = document.querySelector('.right-panel-col');
+    const mapCol = document.querySelector('.map-column-col');
+    const leftPanelCol = document.querySelector('.left-panel-col');
+
+    if (rightPanel && rightPanelCol && mapCol && leftPanelCol) {
+      // Toggle collapsed state
+      const isCollapsed = rightPanel.classList.contains('collapsed');
+      
+      rightPanel.classList.toggle('collapsed');
+      rightPanelCol.classList.toggle('collapsed');
+      mapCol.classList.toggle('map-expanded');
+      leftPanelCol.classList.toggle('with-expanded-map');
+
+      console.log(`Right panel ${!isCollapsed ? 'collapsed' : 'expanded'}`);
+
+      // Invalidate map size after panel resize (with delay to allow CSS transition)
+      setTimeout(() => {
+        this.invalidateMapSize();
+      }, 300); // Match CSS transition duration
+    }
+  }
+  
+  /**
+   * Invalidate map size (call after layout changes)
+   */
+  private invalidateMapSize(): void {
+    const map = this.visualizationEngine.getMap();
+    if (map && typeof map.invalidateSize === 'function') {
+      map.invalidateSize();
+    }
   }
   
   /**
