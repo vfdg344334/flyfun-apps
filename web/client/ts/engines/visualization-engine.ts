@@ -68,7 +68,7 @@ export class VisualizationEngine {
   /**
    * Update markers based on airports and legend mode
    */
-  updateMarkers(airports: Airport[], legendMode: LegendMode): void {
+  updateMarkers(airports: Airport[], legendMode: LegendMode, shouldFitBounds: boolean = false): void {
     if (!this.map || !this.airportLayer) return;
     
     const currentIcaos = new Set(this.markers.keys());
@@ -91,6 +91,14 @@ export class VisualizationEngine {
         this.addMarker(airport, legendMode);
       }
     });
+    
+    // Fit bounds if requested and we have markers
+    if (shouldFitBounds && this.markers.size > 0) {
+      // Use setTimeout to ensure markers are rendered before fitting bounds
+      setTimeout(() => {
+        this.fitBounds();
+      }, 100);
+    }
   }
   
   /**
@@ -506,10 +514,39 @@ export class VisualizationEngine {
    * Fit bounds to show all markers
    */
   fitBounds(): void {
-    if (!this.map || this.markers.size === 0) return;
+    if (!this.map || this.markers.size === 0) {
+      console.warn('VisualizationEngine: Cannot fit bounds - no map or markers');
+      return;
+    }
     
-    const group = L.featureGroup(Array.from(this.markers.values()).map(e => e.marker));
-    this.map.fitBounds(group.getBounds().pad(0.1));
+    try {
+      const markers = Array.from(this.markers.values()).map(e => e.marker).filter(m => m != null);
+      if (markers.length === 0) {
+        console.warn('VisualizationEngine: No valid markers to fit bounds');
+        return;
+      }
+      
+      const group = L.featureGroup(markers);
+      const bounds = group.getBounds();
+      
+      // Ensure bounds are valid
+      if (!bounds.isValid()) {
+        console.warn('VisualizationEngine: Invalid bounds, skipping fitBounds');
+        return;
+      }
+      
+      // Fit bounds with padding (10% padding around all markers)
+      this.map.fitBounds(bounds.pad(0.1), {
+        maxZoom: 12 // Don't zoom in too close
+      });
+      
+      console.log('VisualizationEngine: Fitted bounds to show all markers', {
+        markerCount: markers.length,
+        bounds: bounds.toBBoxString()
+      });
+    } catch (error) {
+      console.error('VisualizationEngine: Error fitting bounds', error);
+    }
   }
   
   /**

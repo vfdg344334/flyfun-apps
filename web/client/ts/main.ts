@@ -47,8 +47,8 @@ class Application {
     // Initialize UI manager
     this.uiManager = new UIManager(this.store, this.apiAdapter);
     
-    // Initialize LLM integration
-    this.llmIntegration = new LLMIntegration(this.store, this.apiAdapter, this.uiManager);
+    // Initialize LLM integration (pass visualization engine for fitBounds)
+    this.llmIntegration = new LLMIntegration(this.store, this.apiAdapter, this.uiManager, this.visualizationEngine);
     
     // Initialize chatbot manager
     this.chatbotManager = new ChatbotManager(this.llmIntegration);
@@ -164,9 +164,12 @@ class Application {
               airportsChanged,
               legendModeChanged
             });
+            
+            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0;
             this.visualizationEngine.updateMarkers(
               state.filteredAirports,
-              state.visualization.legendMode
+              state.visualization.legendMode,
+              shouldFitBounds // Auto-fit bounds when airports change from chatbot
             );
             
             lastAirports = [...state.filteredAirports]; // Copy array for comparison

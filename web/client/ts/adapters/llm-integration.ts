@@ -30,11 +30,20 @@ export class LLMIntegration {
   private store: ReturnType<typeof useStore>;
   private apiAdapter: APIAdapter;
   private uiManager: any; // UIManager reference (to avoid circular dependency)
+  private visualizationEngine: any; // VisualizationEngine reference (to avoid circular dependency)
   
-  constructor(store: ReturnType<typeof useStore>, apiAdapter: APIAdapter, uiManager: any) {
+  constructor(store: ReturnType<typeof useStore>, apiAdapter: APIAdapter, uiManager: any, visualizationEngine?: any) {
     this.store = store;
     this.apiAdapter = apiAdapter;
     this.uiManager = uiManager;
+    this.visualizationEngine = visualizationEngine;
+  }
+  
+  /**
+   * Set visualization engine (called after initialization)
+   */
+  setVisualizationEngine(engine: any): void {
+    this.visualizationEngine = engine;
   }
   
   /**
@@ -114,6 +123,15 @@ export class LLMIntegration {
       storeFilteredCount: store.getState().filteredAirports.length
     });
     
+    // Fit bounds will be handled automatically by updateMarkers via store subscription
+    // But we can also fit bounds here as a backup after a delay
+    if (this.visualizationEngine && airports.length > 0) {
+      setTimeout(() => {
+        this.visualizationEngine.fitBounds();
+        console.log('LLMIntegration: Fitted map bounds to show all airports');
+      }, 300); // Delay to ensure markers are rendered via store subscription
+    }
+    
     // Apply filter profile if provided
     const filterProfile = viz.filter_profile as Partial<FilterConfig> | undefined;
     if (filterProfile) {
@@ -178,6 +196,14 @@ export class LLMIntegration {
     // Update store with chatbot's selected airports
     store.getState().setAirports(airports);
     
+    // Fit bounds to show all airports after markers are updated
+    if (this.visualizationEngine && airports.length > 0) {
+      setTimeout(() => {
+        this.visualizationEngine.fitBounds();
+        console.log('LLMIntegration: Fitted map bounds for route with airports');
+      }, 300);
+    }
+    
     // Apply filter profile if provided
     if (viz.filter_profile) {
       this.applyFilterProfile(viz.filter_profile);
@@ -231,6 +257,14 @@ export class LLMIntegration {
     // Update store with airports
     const store = this.store as any;
     store.getState().setAirports(airports as Airport[]);
+    
+    // Fit bounds to show all airports after markers are updated
+    if (this.visualizationEngine && airports.length > 0) {
+      setTimeout(() => {
+        this.visualizationEngine.fitBounds();
+        console.log('LLMIntegration: Fitted map bounds for point with airports');
+      }, 300);
+    }
     
     // Set locate state if point provided
     if (pointData) {

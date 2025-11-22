@@ -130,11 +130,19 @@ export class ChatbotManager {
    * Send message with streaming
    */
   private async sendMessageStreaming(message: string, loadingId: string): Promise<void> {
+    let doneReceived = false;
+    
     // Build messages array from history + current message
     const messages = [...this.messageHistory];
     messages.push({
       role: 'user',
       content: message
+    });
+    
+    console.log('ChatbotManager: Sending message with history', {
+      messageHistoryLength: this.messageHistory.length,
+      messagesLength: messages.length,
+      sessionId: this.sessionId
     });
     
     // Call aviation agent streaming API
@@ -220,10 +228,20 @@ export class ChatbotManager {
         try {
           // Parse SSE format: "event: <type>\ndata: <json>"
           const eventMatch = eventBlock.match(/^event: (.+)\ndata: (.+)$/s);
-          if (!eventMatch) continue;
+          if (!eventMatch) {
+            // Try alternative format: just "data: <json>" (default event type)
+            const dataMatch = eventBlock.match(/^data: (.+)$/s);
+            if (dataMatch) {
+              const eventData = JSON.parse(dataMatch[1]);
+              console.warn('ChatbotManager: Received SSE event without event type', eventData);
+            }
+            continue;
+          }
           
           const eventType = eventMatch[1].trim();
           const eventData = JSON.parse(eventMatch[2]);
+          
+          console.log('ChatbotManager: Received SSE event', { eventType, hasContent: !!eventData.content });
           
           switch (eventType) {
             case 'thinking':
@@ -258,6 +276,11 @@ export class ChatbotManager {
                 loadingRemoved = true;
               }
               
+              // Ensure message div is in DOM (might not be added yet if no thinking event)
+              if (this.chatMessages && !this.chatMessages.contains(messageDiv)) {
+                this.chatMessages.appendChild(messageDiv);
+              }
+              
               // Auto-collapse thinking when first real answer content arrives
               if (messageContent === '' && thinkingSection.style.display === 'block') {
                 thinkingSection.classList.remove('expanded');
@@ -265,12 +288,20 @@ export class ChatbotManager {
               }
               
               // Accumulate answer content
-              messageContent += eventData.content || '';
+              const chunk = eventData.content || '';
+              messageContent += chunk;
               
-              // Only show answer if we have substantial content
-              if (messageContent.trim().length > 0) {
+              // Always show answer section and update content whenever we receive a chunk
+              // Even if it's just whitespace, show it - formatting will handle it
+              if (chunk !== null && chunk !== undefined) {
                 contentDiv.style.display = 'block';
                 contentDiv.innerHTML = this.formatMessage(messageContent);
+                console.log('ChatbotManager: Updated message content', {
+                  chunkLength: chunk.length,
+                  chunk: chunk.substring(0, 50) + (chunk.length > 50 ? '...' : ''),
+                  totalLength: messageContent.length,
+                  hasContent: messageContent.trim().length > 0
+                });
               }
               
               this.scrollToBottom();
@@ -312,7 +343,11 @@ export class ChatbotManager {
               break;
               
             case 'done':
-              // Message complete
+              // Message complete - reset button state immediately
+              doneReceived = true;
+              this.isProcessing = false;
+              this.updateSendButton(false);
+              
               if (!loadingRemoved) {
                 this.removeLoadingIndicator(loadingId);
                 if (this.chatMessages) {
@@ -320,11 +355,32 @@ export class ChatbotManager {
                 }
               }
               
-              // Add to history
-              if (messageContent || thinkingContent) {
+              // Ensure message div is added to DOM before finishing
+              if (this.chatMessages && !this.chatMessages.contains(messageDiv)) {
+                this.chatMessages.appendChild(messageDiv);
+              }
+              
+              // Ensure content div is visible if we have content
+              if (messageContent && contentDiv.style.display === 'none') {
+                contentDiv.style.display = 'block';
+                contentDiv.innerHTML = this.formatMessage(messageContent);
+              }
+              
+              // Add to history (use trimmed content)
+              const assistantContent = messageContent.trim() || thinkingContent.trim();
+              if (assistantContent) {
                 this.messageHistory.push({
                   role: 'assistant',
-                  content: messageContent || thinkingContent
+                  content: assistantContent
+                });
+                console.log('ChatbotManager: Added assistant message to history', {
+                  contentLength: assistantContent.length,
+                  historyLength: this.messageHistory.length
+                });
+              } else {
+                console.warn('ChatbotManager: No assistant content to add to history', {
+                  messageContent: messageContent,
+                  thinkingContent: thinkingContent
                 });
               }
               
@@ -343,13 +399,64 @@ export class ChatbotManager {
                 this.llmIntegration.applyFilterProfile(visualization.filter_profile);
               }
               
-              return;
+              // Break out of inner loop
+              break;
           }
         } catch (e) {
-          console.warn('Failed to parse SSE event:', eventBlock, e);
+          console.error('ChatbotManager: Failed to parse SSE event', {
+            eventBlock: eventBlock.substring(0, 200), // Log first 200 chars
+            error: e,
+            errorMessage: e instanceof Error ? e.message : String(e)
+          });
+          // Don't break on parse errors - continue processing other events
+        }
+        
+        // If we processed a 'done' event, exit the loop
+        if (doneReceived) {
+          break;
         }
       }
+      
+      // Exit outer loop if done
+      if (doneReceived) {
+        break;
+      }
     }
+    
+    // Ensure message div is in DOM with content before finishing
+    if (this.chatMessages && messageDiv && !this.chatMessages.contains(messageDiv)) {
+      console.log('ChatbotManager: Adding message div to DOM at end of stream');
+      this.chatMessages.appendChild(messageDiv);
+    }
+    
+    // Ensure content is visible if we have any (final check)
+    if (messageContent) {
+      contentDiv.style.display = 'block';
+      contentDiv.innerHTML = this.formatMessage(messageContent);
+      console.log('ChatbotManager: Final message content update', {
+        contentLength: messageContent.length,
+        content: messageContent.substring(0, 100) + (messageContent.length > 100 ? '...' : '')
+      });
+    } else if (!messageContent && !thinkingContent) {
+      console.warn('ChatbotManager: Stream completed with no content!', {
+        loadingRemoved,
+        messageDivInDOM: this.chatMessages?.contains(messageDiv)
+      });
+    }
+    
+    // Ensure button is reset even if done event wasn't received properly
+    if (this.isProcessing) {
+      console.warn('Stream completed but button still processing - resetting');
+      this.isProcessing = false;
+      this.updateSendButton(false);
+    }
+    
+    console.log('ChatbotManager: Streaming complete', {
+      doneReceived,
+      messageContentLength: messageContent.length,
+      thinkingContentLength: thinkingContent.length,
+      finalHistoryLength: this.messageHistory.length
+    });
   }
   
   /**
