@@ -53,11 +53,13 @@ export class VisualizationEngine {
     }).addTo(this.map);
     
     // Create layer groups
-    this.airportLayer = L.layerGroup().addTo(this.map);
-    this.procedureLayer = L.layerGroup().addTo(this.map);
-    this.routeLayer = L.layerGroup().addTo(this.map);
-    this.highlightLayer = L.layerGroup().addTo(this.map);
-    this.overlayLayer = L.layerGroup().addTo(this.map);
+    // Order matters: layers added first render below layers added later
+    // We want highlights (reference points) below airport markers so legend colors are visible
+    this.highlightLayer = L.layerGroup().addTo(this.map); // Reference points (locate center, route airports)
+    this.airportLayer = L.layerGroup().addTo(this.map);   // Airport markers (on top of highlights)
+    this.procedureLayer = L.layerGroup().addTo(this.map); // Procedure lines
+    this.routeLayer = L.layerGroup().addTo(this.map);     // Route lines
+    this.overlayLayer = L.layerGroup().addTo(this.map);   // Other overlays
     
     // Add scale control
     L.control.scale().addTo(this.map);
@@ -328,18 +330,37 @@ export class VisualizationEngine {
    * Add highlight
    */
   private addHighlight(highlight: Highlight): void {
+    // Reference points (locate center, route airports) use larger blue dots
+    // Default styling for reference points vs other highlights
+    const isReferencePoint = highlight.id.startsWith('locate-center') || highlight.id.startsWith('route-airport-');
+    
+    const radius = highlight.radius || (isReferencePoint ? 14 : 15);
+    const fillColor = highlight.color || (isReferencePoint ? '#007bff' : '#ff0000');
+    const weight = isReferencePoint ? 3 : 3;
+    const fillOpacity = isReferencePoint ? 0.6 : 0.7; // Slightly transparent so airport colors show through
+    
     const marker = L.circleMarker([highlight.lat, highlight.lng], {
-      radius: highlight.radius || 15,
-      fillColor: highlight.color || '#ff0000',
-      color: '#fff',
-      weight: 3,
+      radius,
+      fillColor,
+      color: '#ffffff',
+      weight,
       opacity: 1,
-      fillOpacity: 0.7,
-      id: highlight.id
+      fillOpacity,
+      id: highlight.id,
+      // Ensure reference points are clickable but don't interfere with airport markers
+      interactive: true
     });
     
     if (highlight.popup) {
       marker.bindPopup(highlight.popup);
+    } else if (isReferencePoint) {
+      // Add default popup for reference points
+      if (highlight.id.startsWith('locate-center')) {
+        marker.bindPopup('<b>Locate Center</b><br>Search origin point');
+      } else if (highlight.id.startsWith('route-airport-')) {
+        const icao = highlight.id.replace('route-airport-', '');
+        marker.bindPopup(`<b>Route Airport: ${icao}</b><br>Input airport`);
+      }
     }
     
     marker.addTo(this.highlightLayer);

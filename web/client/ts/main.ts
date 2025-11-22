@@ -138,6 +138,7 @@ class Application {
     let lastLegendMode: string = '';
     let lastHighlightsHash: string = '';
     let lastRouteHash: string = '';
+    let lastLocateHash: string = '';
     let lastProcedureLinesHash: string = ''; // Track loaded procedure lines
     
     // Zustand's subscribe - listens to all state changes
@@ -181,7 +182,41 @@ class Application {
             lastLegendMode = state.visualization.legendMode;
           }
           
-          // Update highlights (only if changed)
+          // Build reference point highlights from route/locate state
+          // These are automatically maintained based on route and locate state
+          const referenceHighlights = new globalThis.Map<string, any>();
+          
+          // Add locate center highlight if present
+          if (state.locate && state.locate.center) {
+            const center = state.locate.center;
+            referenceHighlights.set('locate-center', {
+              id: 'locate-center',
+              type: 'point' as const,
+              lat: center.lat,
+              lng: center.lng,
+              color: '#007bff',
+              radius: 14,
+              popup: `<b>Locate Center</b><br>${center.label || 'Search origin'}<br>Radius: ${state.locate.radiusNm}nm`
+            });
+          }
+          
+          // Add route airport highlights if present
+          if (state.route && state.route.originalRouteAirports) {
+            state.route.originalRouteAirports.forEach((airport) => {
+              const id = `route-airport-${airport.icao}`;
+              referenceHighlights.set(id, {
+                id,
+                type: 'airport' as const,
+                lat: airport.lat,
+                lng: airport.lng,
+                color: '#007bff',
+                radius: 14,
+                popup: `<b>Route Airport: ${airport.icao}</b><br>Input airport for route search`
+              });
+            });
+          }
+          
+          // Merge reference highlights with user highlights (user highlights take precedence)
           let highlights: any = state.visualization.highlights;
           if (!highlights) {
             highlights = new globalThis.Map();
@@ -190,9 +225,23 @@ class Application {
             const entries = Object.entries(highlights as Record<string, any>);
             highlights = new globalThis.Map(entries);
           }
-          const highlightsHash = JSON.stringify(Array.from((highlights as globalThis.Map<string, any>).entries()));
+          
+          // Remove old reference highlights that are no longer valid
+          const combinedHighlights = new globalThis.Map<string, any>(highlights);
+          // Remove any old reference highlights
+          combinedHighlights.forEach((_, id: string) => {
+            if (id.startsWith('locate-center') || id.startsWith('route-airport-')) {
+              combinedHighlights.delete(id);
+            }
+          });
+          // Add current reference highlights
+          referenceHighlights.forEach((highlight, id) => {
+            combinedHighlights.set(id, highlight);
+          });
+          
+          const highlightsHash = JSON.stringify(Array.from(combinedHighlights.entries()));
           if (highlightsHash !== lastHighlightsHash) {
-            this.visualizationEngine.updateHighlights(highlights as any);
+            this.visualizationEngine.updateHighlights(combinedHighlights as any);
             lastHighlightsHash = highlightsHash;
           }
           
