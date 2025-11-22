@@ -62,6 +62,266 @@ export class UIManager {
     // Initial UI update
     const initialState = this.store.getState();
     this.updateUI(initialState);
+    
+    // Load filter metadata (countries, AIP fields, presets)
+    this.loadFilterMetadata();
+  }
+  
+  /**
+   * Load filter metadata (countries, AIP fields, presets)
+   */
+  private async loadFilterMetadata(): Promise<void> {
+    try {
+      // Load countries for dropdown
+      await this.loadCountries();
+      
+      // Load AIP fields and presets
+      await this.loadAIPFilters();
+    } catch (error: any) {
+      console.error('Error loading filter metadata:', error);
+    }
+  }
+  
+  /**
+   * Load countries for dropdown
+   */
+  private async loadCountries(): Promise<void> {
+    try {
+      const filtersData = await this.apiAdapter.getAllFilters();
+      const countries = filtersData?.countries || [];
+      
+      const countrySelect = document.getElementById('country-filter') as HTMLSelectElement;
+      if (countrySelect) {
+        // Clear existing options except "All Countries"
+        countrySelect.innerHTML = '<option value="">All Countries</option>';
+        
+        // Add countries
+        countries.forEach((country: string) => {
+          const option = document.createElement('option');
+          option.value = country;
+          option.textContent = country;
+          countrySelect.appendChild(option);
+        });
+        
+        // Update selected value if set in store
+        const currentCountry = this.store.getState().filters.country;
+        if (currentCountry) {
+          countrySelect.value = currentCountry;
+        }
+      }
+    } catch (error: any) {
+      console.error('Error loading countries:', error);
+    }
+  }
+  
+  /**
+   * Load AIP filters (fields and presets)
+   */
+  private async loadAIPFilters(): Promise<void> {
+    try {
+      const [fields, presets] = await Promise.all([
+        this.apiAdapter.getAvailableAIPFields(),
+        this.apiAdapter.getAIPFilterPresets()
+      ]);
+      
+      // Populate AIP field select
+      const aipFieldSelect = document.getElementById('aip-field-select') as HTMLSelectElement;
+      if (aipFieldSelect) {
+        aipFieldSelect.innerHTML = '<option value="">Select AIP Field...</option>';
+        
+        fields.forEach((field: any) => {
+          const option = document.createElement('option');
+          option.value = field.field || field.std_field || field.name || '';
+          option.textContent = field.name || field.field || field.std_field || '';
+          option.dataset.fieldId = field.std_field_id || '';
+          aipFieldSelect.appendChild(option);
+        });
+      }
+      
+      // Populate AIP preset buttons
+      const presetContainer = document.getElementById('aip-preset-buttons');
+      if (presetContainer && Array.isArray(presets)) {
+        presetContainer.innerHTML = '';
+        
+        presets.forEach((preset: any) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'aip-preset-btn';
+          button.dataset.field = preset.field || preset.std_field || '';
+          button.dataset.operator = preset.operator || 'contains';
+          button.dataset.value = preset.value || '';
+          button.textContent = preset.name || `${preset.field}: ${preset.value}`;
+          button.addEventListener('click', () => {
+            this.applyAIPPreset(preset);
+          });
+          presetContainer.appendChild(button);
+        });
+      }
+      
+      // Wire up AIP filter controls
+      this.wireUpAIPFilters();
+    } catch (error: any) {
+      console.error('Error loading AIP filters:', error);
+    }
+  }
+  
+  /**
+   * Wire up AIP filter controls
+   */
+  private wireUpAIPFilters(): void {
+    // AIP field select
+    const aipFieldSelect = document.getElementById('aip-field-select');
+    if (aipFieldSelect) {
+      aipFieldSelect.addEventListener('change', () => {
+        this.handleAIPFieldChange();
+      });
+    }
+    
+    // AIP operator select
+    const aipOperatorSelect = document.getElementById('aip-operator-select');
+    if (aipOperatorSelect) {
+      aipOperatorSelect.addEventListener('change', () => {
+        this.handleAIPFieldChange();
+      });
+    }
+    
+    // AIP value input
+    const aipValueInput = document.getElementById('aip-value-input');
+    if (aipValueInput) {
+      aipValueInput.addEventListener('input', () => {
+        this.handleAIPFieldChange();
+      });
+    }
+    
+    // Clear AIP filter button
+    const clearAIPFilterBtn = document.getElementById('clear-aip-filter');
+    if (clearAIPFilterBtn) {
+      clearAIPFilterBtn.addEventListener('click', () => {
+        this.clearAIPFilter();
+      });
+    }
+    
+    // Remove AIP filter button
+    const removeAIPFilterBtn = document.getElementById('remove-aip-filter');
+    if (removeAIPFilterBtn) {
+      removeAIPFilterBtn.addEventListener('click', () => {
+        this.clearAIPFilter();
+      });
+    }
+  }
+  
+  /**
+   * Handle AIP field change
+   */
+  private handleAIPFieldChange(): void {
+    const aipFieldSelect = document.getElementById('aip-field-select') as HTMLSelectElement;
+    const aipOperatorSelect = document.getElementById('aip-operator-select') as HTMLSelectElement;
+    const aipValueInput = document.getElementById('aip-value-input') as HTMLInputElement;
+    
+    if (!aipFieldSelect || !aipOperatorSelect || !aipValueInput) return;
+    
+    const field = aipFieldSelect.value;
+    const operator = aipOperatorSelect.value;
+    const value = aipValueInput.value.trim();
+    
+    if (!field) {
+      this.clearAIPFilter();
+      return;
+    }
+    
+    // Update store
+    const updates: Partial<FilterConfig> = {
+      aip_field: field,
+      aip_operator: operator as any
+    };
+    
+    // Handle "not_empty" operator (no value needed)
+    if (operator === 'not_empty') {
+      updates.aip_value = null;
+    } else {
+      updates.aip_value = value || null;
+    }
+    
+    this.store.getState().setFilters(updates);
+    
+    // Update active filter display
+    this.updateActiveAIPFilter(field, operator, value);
+  }
+  
+  /**
+   * Apply AIP preset
+   */
+  private applyAIPPreset(preset: any): void {
+    const aipFieldSelect = document.getElementById('aip-field-select') as HTMLSelectElement;
+    const aipOperatorSelect = document.getElementById('aip-operator-select') as HTMLSelectElement;
+    const aipValueInput = document.getElementById('aip-value-input') as HTMLInputElement;
+    
+    if (aipFieldSelect) aipFieldSelect.value = preset.field || preset.std_field || '';
+    if (aipOperatorSelect) aipOperatorSelect.value = preset.operator || 'contains';
+    if (aipValueInput) aipValueInput.value = preset.value || '';
+    
+    this.handleAIPFieldChange();
+    
+    // Highlight active preset button
+    const presetButtons = document.querySelectorAll('.aip-preset-btn');
+    presetButtons.forEach(btn => {
+      if ((btn as HTMLElement).dataset.field === preset.field) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  }
+  
+  /**
+   * Clear AIP filter
+   */
+  private clearAIPFilter(): void {
+    const aipFieldSelect = document.getElementById('aip-field-select') as HTMLSelectElement;
+    const aipOperatorSelect = document.getElementById('aip-operator-select') as HTMLSelectElement;
+    const aipValueInput = document.getElementById('aip-value-input') as HTMLInputElement;
+    
+    if (aipFieldSelect) aipFieldSelect.value = '';
+    if (aipOperatorSelect) aipOperatorSelect.value = 'contains';
+    if (aipValueInput) aipValueInput.value = '';
+    
+    // Clear from store
+    this.store.getState().setFilters({
+      aip_field: null,
+      aip_value: null,
+      aip_operator: 'contains'
+    });
+    
+    // Hide active filter display
+    const activeFilterDiv = document.getElementById('active-aip-filter');
+    if (activeFilterDiv) {
+      activeFilterDiv.style.display = 'none';
+    }
+    
+    // Remove active state from preset buttons
+    const presetButtons = document.querySelectorAll('.aip-preset-btn');
+    presetButtons.forEach(btn => btn.classList.remove('active'));
+  }
+  
+  /**
+   * Update active AIP filter display
+   */
+  private updateActiveAIPFilter(field: string, operator: string, value: string): void {
+    const activeFilterDiv = document.getElementById('active-aip-filter');
+    const activeFilterText = document.getElementById('active-aip-filter-text');
+    
+    if (!activeFilterDiv || !activeFilterText) return;
+    
+    if (operator === 'not_empty') {
+      activeFilterText.textContent = `${field} is not empty`;
+    } else if (value) {
+      activeFilterText.textContent = `${field} ${operator} "${value}"`;
+    } else {
+      activeFilterDiv.style.display = 'none';
+      return;
+    }
+    
+    activeFilterDiv.style.display = 'block';
   }
   
   /**
@@ -267,6 +527,33 @@ export class UIManager {
     const maxAirports = document.getElementById('max-airports-filter') as HTMLSelectElement;
     if (maxAirports) {
       maxAirports.value = filters.limit ? String(filters.limit) : '';
+    }
+    
+    // Update AIP filters
+    if (filters.aip_field) {
+      const aipFieldSelect = document.getElementById('aip-field-select') as HTMLSelectElement;
+      const aipOperatorSelect = document.getElementById('aip-operator-select') as HTMLSelectElement;
+      const aipValueInput = document.getElementById('aip-value-input') as HTMLInputElement;
+      
+      if (aipFieldSelect) aipFieldSelect.value = filters.aip_field;
+      if (aipOperatorSelect && filters.aip_operator) {
+        aipOperatorSelect.value = filters.aip_operator;
+      }
+      if (aipValueInput && filters.aip_value) {
+        aipValueInput.value = filters.aip_value;
+      }
+      
+      this.updateActiveAIPFilter(
+        filters.aip_field,
+        filters.aip_operator || 'contains',
+        filters.aip_value || ''
+      );
+    } else {
+      // Clear AIP filter display if no filter
+      const activeFilterDiv = document.getElementById('active-aip-filter');
+      if (activeFilterDiv) {
+        activeFilterDiv.style.display = 'none';
+      }
     }
   }
   
