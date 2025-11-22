@@ -26,6 +26,12 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    host: true,
+    allowedHosts: ['ovh.zhaoqian.me', 'localhost', '127.0.0.1'],
+    hmr: {
+      // Disable full page reload - only update modules
+      overlay: true
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

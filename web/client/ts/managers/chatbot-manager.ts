@@ -171,6 +171,8 @@ export class ChatbotManager {
     let messageContent = '';
     let visualization: any = null;
     let filterProfile: any = null;
+    let visualizationApplied = false;
+    let filterProfileApplied = false;
     
     // Create message div for streaming
     const messageDiv = document.createElement('div');
@@ -317,15 +319,21 @@ export class ChatbotManager {
                 vizDiv.className = 'message-visualization-indicator';
                 vizDiv.innerHTML = '<small><i class="fas fa-map-marked-alt"></i> Results shown on map</small>';
                 messageDiv.appendChild(vizDiv);
-                
+
                 // Apply visualization immediately (don't wait for 'done' event)
-                this.llmIntegration.handleVisualization(visualization);
+                if (!visualizationApplied) {
+                  this.llmIntegration.handleVisualization(visualization);
+                  visualizationApplied = true;
+                }
               }
-              
+
               if (eventData.filter_profile) {
                 filterProfile = eventData.filter_profile;
                 // Apply filter profile immediately
-                this.llmIntegration.applyFilterProfile(filterProfile);
+                if (!filterProfileApplied) {
+                  this.llmIntegration.applyFilterProfile(filterProfile);
+                  filterProfileApplied = true;
+                }
               }
               break;
               
@@ -384,19 +392,22 @@ export class ChatbotManager {
                 });
               }
               
-              // Apply visualization if present
-              if (visualization) {
+              // Apply visualization if present (only if not already applied)
+              if (visualization && !visualizationApplied) {
                 this.llmIntegration.handleVisualization(visualization);
+                visualizationApplied = true;
               }
-              
-              // Apply filter profile if present
-              if (filterProfile) {
+
+              // Apply filter profile if present (only if not already applied)
+              if (filterProfile && !filterProfileApplied) {
                 this.llmIntegration.applyFilterProfile(filterProfile);
+                filterProfileApplied = true;
               }
-              
+
               // Also apply from ui_payload if not already applied
-              if (visualization && visualization.filter_profile) {
+              if (visualization && visualization.filter_profile && !filterProfileApplied) {
                 this.llmIntegration.applyFilterProfile(visualization.filter_profile);
+                filterProfileApplied = true;
               }
               
               // Break out of inner loop

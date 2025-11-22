@@ -62,25 +62,49 @@ const initialState: AppState = {
 function filterAirports(airports: Airport[], filters: Partial<FilterConfig>): Airport[] {
   // TODO: Integrate with shared/filtering/FilterEngine
   // For now, basic filtering
-  return airports.filter(airport => {
-    if (filters.country && airport.iso_country !== filters.country) {
+  console.log('filterAirports called:', {
+    airportCount: airports.length,
+    filters: filters,
+    sampleAirport: airports[0] ? { ident: airports[0].ident, iso_country: airports[0].iso_country, country: (airports[0] as any).country } : null
+  });
+
+  const result = airports.filter(airport => {
+    // Check country - handle both 'iso_country' (from API) and 'country' (from chatbot)
+    const airportCountry = airport.iso_country || (airport as any).country;
+    if (filters.country && airportCountry !== filters.country) {
       return false;
     }
-    if (filters.has_procedures !== null && airport.has_procedures !== filters.has_procedures) {
+    // Use truthy checks to handle undefined/null properties
+    if (filters.has_procedures === true && !airport.has_procedures) {
       return false;
     }
-    if (filters.has_aip_data !== null && airport.has_aip_data !== filters.has_aip_data) {
+    if (filters.has_procedures === false && airport.has_procedures === true) {
       return false;
     }
-    if (filters.has_hard_runway !== null && airport.has_hard_runway !== filters.has_hard_runway) {
+    if (filters.has_aip_data === true && !airport.has_aip_data) {
       return false;
     }
-    if (filters.point_of_entry !== null && airport.point_of_entry !== filters.point_of_entry) {
+    if (filters.has_aip_data === false && airport.has_aip_data === true) {
+      return false;
+    }
+    if (filters.has_hard_runway === true && !airport.has_hard_runway) {
+      return false;
+    }
+    if (filters.has_hard_runway === false && airport.has_hard_runway === true) {
+      return false;
+    }
+    if (filters.point_of_entry === true && !airport.point_of_entry) {
+      return false;
+    }
+    if (filters.point_of_entry === false && airport.point_of_entry === true) {
       return false;
     }
     // TODO: Add more filters (has_avgas, has_jet_a, runway length, landing fee)
     return true;
   });
+
+  console.log('filterAirports result:', result.length, 'airports');
+  return result;
 }
 
 /**
