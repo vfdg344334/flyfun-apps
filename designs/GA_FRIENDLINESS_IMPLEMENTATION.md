@@ -32,7 +32,8 @@ shared/ga_friendliness/
 ├── __init__.py                 # Public API exports
 ├── config.py                   # Configuration loading (JSON, env vars)
 ├── models.py                   # Pydantic models for ontology, personas, reviews
-├── database.py                 # SQLite schema creation, connection management
+├── exceptions.py               # Exception hierarchy
+├── database.py                 # SQLite schema creation, connection management, migrations
 ├── storage.py                  # Read/write operations for ga_meta.sqlite
 ├── ontology.py                 # Ontology loading, validation, aspect/label lookup
 ├── personas.py                 # Persona loading, validation, score computation
@@ -51,12 +52,57 @@ tools/
 
 data/
 ├── ontology.json               # Ontology definition (versioned)
-└── personas.json               # Persona definitions (versioned)
+├── personas.json               # Persona definitions (versioned)
+└── feature_mappings.json       # Feature mapping configurations (versioned)
 ```
 
 ---
 
-## 2. Core Models & Data Structures
+## 2. Exception Hierarchy
+
+### 2.1 Exception Classes (`exceptions.py`)
+
+```python
+# exceptions.py - Exception hierarchy for ga_friendliness library
+
+class GAFriendlinessError(Exception):
+    """Base exception for ga_friendliness library."""
+    pass
+
+class OntologyValidationError(GAFriendlinessError):
+    """Raised when ontology validation fails."""
+    pass
+
+class PersonaValidationError(GAFriendlinessError):
+    """Raised when persona validation fails."""
+    pass
+
+class ReviewExtractionError(GAFriendlinessError):
+    """Raised when LLM extraction fails."""
+    pass
+
+class StorageError(GAFriendlinessError):
+    """Raised when database operations fail."""
+    pass
+
+class FeatureMappingError(GAFriendlinessError):
+    """Raised when feature mapping fails."""
+    pass
+
+class BuildError(GAFriendlinessError):
+    """Raised when build process fails."""
+    pass
+```
+
+**Design Decision: Exception Hierarchy**
+
+- **Why:** Clear error types for better error handling and debugging
+- **Usage:** Components raise specific exceptions, caller can handle appropriately
+- **Pattern:** Base exception + specific subclasses for each domain
+
+---
+
+## 3. Core Models & Data Structures
 
 ### 2.1 Pydantic Models (`models.py`)
 
@@ -132,7 +178,7 @@ class AirportStats(BaseModel):
 
 ---
 
-## 3. Configuration Management
+## 4. Configuration Management
 
 ### 3.1 Config Loading (`config.py`)
 
@@ -195,16 +241,28 @@ def get_settings() -> GAFriendlinessSettings:
 
 ---
 
-## 4. Database Schema & Storage
+## 5. Database Schema & Storage
 
-### 4.1 Schema Creation (`database.py`)
+### 5.1 Schema Creation & Versioning (`database.py`)
 
 ```python
-# database.py - SQLite schema and connection management
+# database.py - SQLite schema and connection management with versioning
+
+SCHEMA_VERSION = "1.0"
+
+def get_schema_version(conn: sqlite3.Connection) -> Optional[str]:
+    """
+    Get current schema version from database.
+    
+    Returns:
+        Schema version string (e.g., "1.0") or None if not set.
+    """
+    # Query ga_meta_info for 'schema_version' key
+    # Return version or None
 
 def create_schema(conn: sqlite3.Connection) -> None:
     """
-    Create all tables in ga_meta.sqlite.
+    Create all tables in ga_meta.sqlite and set schema version.
     
     Tables:
         - ga_airfield_stats (main query table)
@@ -214,65 +272,219 @@ def create_schema(conn: sqlite3.Connection) -> None:
         - ga_meta_info (versioning metadata)
     
     Also creates indexes for performance.
+    Sets schema_version in ga_meta_info.
     """
     # Execute CREATE TABLE statements
     # Create indexes on icao, (icao, aspect) for ga_review_ner_tags
+    # Insert schema_version into ga_meta_info
+
+def migrate_schema(
+    conn: sqlite3.Connection,
+    from_version: str,
+    to_version: str
+) -> None:
+    """
+    Migrate schema from one version to another.
+    
+    Handles:
+        - Adding new columns (ALTER TABLE ADD COLUMN)
+        - Modifying existing columns (via table recreation if needed)
+        - Data transformations if required
+    
+    Raises:
+        StorageError if migration fails.
+    """
+    # Check if migration path exists (from_version -> to_version)
+    # Execute migration steps
+    # Update schema_version in ga_meta_info
+    # Commit transaction
+
+def ensure_schema_version(conn: sqlite3.Connection) -> None:
+    """
+    Ensure database schema is at current version.
+    
+    If schema doesn't exist, creates it.
+    If schema exists but is older version, migrates it.
+    If schema is newer version, raises error.
+    """
+    current_version = get_schema_version(conn)
+    
+    if current_version is None:
+        # No schema, create it
+        create_schema(conn)
+    elif current_version == SCHEMA_VERSION:
+        # Schema is current, nothing to do
+        pass
+    elif current_version < SCHEMA_VERSION:
+        # Schema is older, migrate
+        migrate_schema(conn, current_version, SCHEMA_VERSION)
+    else:
+        # Schema is newer (shouldn't happen), raise error
+        raise StorageError(
+            f"Database schema version {current_version} is newer than "
+            f"library version {SCHEMA_VERSION}. Please upgrade library."
+        )
 
 def get_connection(db_path: Path) -> sqlite3.Connection:
     """
     Get a connection to ga_meta.sqlite.
     
     Creates the database and schema if it doesn't exist.
+    Ensures schema is at current version.
+    
+    Returns:
+        Connection with schema at current version.
     """
     # Create parent dirs if needed
-    # Create schema if tables don't exist
+    # Create database if doesn't exist
+    # Call ensure_schema_version()
     # Return connection
 ```
 
-### 4.2 Storage Operations (`storage.py`)
+### 5.2 Storage Operations (`storage.py`)
 
 ```python
-# storage.py - Read/write operations for ga_meta.sqlite
+# storage.py - Read/write operations for ga_meta.sqlite with transaction support
+
+import threading
+from contextlib import contextmanager
 
 class GAMetaStorage:
-    """Handles all database operations for ga_meta.sqlite."""
+    """
+    Handles all database operations for ga_meta.sqlite.
+    
+    Supports:
+        - Transaction management (context manager)
+        - Thread-safe operations
+        - Batch writes for efficiency
+        - Resource cleanup
+    """
     
     def __init__(self, db_path: Path):
         """
         Initialize storage.
         
         Creates database and schema if needed.
+        Ensures schema is at current version.
         """
-        # Store db_path, get connection
+        # Store db_path
+        # Get connection (ensures schema version)
+        # Create thread lock for thread-safety
+    
+    def __enter__(self):
+        """Context manager entry: begin transaction."""
+        # Begin transaction
+        # Return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit: commit or rollback.
+        
+        Commits on success, rolls back on exception.
+        """
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+        # Don't suppress exceptions
+    
+    def close(self) -> None:
+        """Close database connection and cleanup resources."""
+        # Close connection if open
+        # Cleanup resources
     
     def write_airfield_stats(self, stats: AirportStats) -> None:
-        """Insert or update a row in ga_airfield_stats."""
-        # UPSERT pattern (INSERT OR REPLACE)
+        """
+        Insert or update a row in ga_airfield_stats.
+        
+        Uses UPSERT pattern (INSERT OR REPLACE).
+        Thread-safe.
+        """
+        with self._lock:
+            # UPSERT pattern (INSERT OR REPLACE)
+            # Raise StorageError on failure
     
     def write_review_tags(self, icao: str, tags: List[ReviewExtraction]) -> None:
         """
         Write review tags to ga_review_ner_tags.
         
         Clears existing tags for this icao first (idempotent rebuild).
+        Thread-safe.
         """
-        # DELETE existing tags for icao
-        # INSERT new tags
+        with self._lock:
+            # DELETE existing tags for icao
+            # INSERT new tags (use executemany for efficiency)
+            # Raise StorageError on failure
+    
+    def write_review_tags_batch(
+        self,
+        tags_by_icao: Dict[str, List[ReviewExtraction]]
+    ) -> None:
+        """
+        Write tags for multiple airports in a single transaction.
+        
+        More efficient than individual writes.
+        Thread-safe.
+        """
+        with self._lock:
+            # For each icao:
+            #   DELETE existing tags
+            #   INSERT new tags
+            # All in single transaction
+            # Raise StorageError on failure
     
     def write_review_summary(self, icao: str, summary_text: str, tags_json: List[str]) -> None:
         """Insert or update ga_review_summary for an airport."""
-        # UPSERT
+        with self._lock:
+            # UPSERT
+            # Raise StorageError on failure
     
     def write_meta_info(self, key: str, value: str) -> None:
         """Write to ga_meta_info table."""
-        # INSERT OR REPLACE
+        with self._lock:
+            # INSERT OR REPLACE
+            # Raise StorageError on failure
     
     def get_airfield_stats(self, icao: str) -> Optional[AirportStats]:
         """Read stats for a single airport."""
         # SELECT and map to AirportStats
+        # Return None if not found
     
     def get_all_icaos(self) -> List[str]:
         """Get list of all ICAOs in ga_airfield_stats."""
         # SELECT DISTINCT icao
+        # Return list
+    
+    def get_last_processed_timestamp(self, icao: str) -> Optional[datetime]:
+        """
+        Get when airport was last processed.
+        
+        Returns:
+            Timestamp from ga_meta_info or ga_airfield_stats.last_review_utc,
+            or None if airport not processed.
+        """
+        # Query for last processed timestamp
+        # Return datetime or None
+    
+    def has_changes(
+        self,
+        icao: str,
+        reviews: List[RawReview]
+    ) -> bool:
+        """
+        Check if airport has new/changed reviews.
+        
+        Compares review timestamps with last processed time.
+        
+        Returns:
+            True if reviews have changed since last processing.
+        """
+        last_processed = self.get_last_processed_timestamp(icao)
+        if last_processed is None:
+            return True  # Never processed
+        
+        # Check if any review has timestamp > last_processed
+        # Return True if changes detected
     
     def attach_euro_aip(self, conn: sqlite3.Connection, euro_aip_path: Path) -> None:
         """
@@ -284,13 +496,14 @@ class GAMetaStorage:
             # Now can query: SELECT * FROM aip.airport JOIN ga.ga_airfield_stats ...
         """
         # Execute: ATTACH DATABASE 'euro_aip_path' AS aip
+        # Raise StorageError on failure
 ```
 
 ---
 
-## 5. Caching Layer
+## 6. Caching Layer
 
-### 5.1 Caching Utility (`cache.py`)
+### 6.1 Caching Utility (`cache.py`)
 
 ```python
 # cache.py - Caching utility for remote data sources
@@ -522,9 +735,9 @@ class AirfieldDirectorySource(ReviewSource, CachedDataLoader):
 
 ---
 
-## 6. Ontology & Persona Management
+## 7. Ontology & Persona Management
 
-### 5.1 Ontology (`ontology.py`)
+### 7.1 Ontology (`ontology.py`)
 
 ```python
 # ontology.py - Ontology validation and lookup
@@ -614,9 +827,9 @@ class PersonaManager:
 
 ---
 
-## 7. NLP Pipeline (LangChain 1.0)
+## 8. NLP Pipeline (LangChain 1.0)
 
-### 7.1 Review Tag Extraction (`nlp/extractor.py`)
+### 8.1 Review Tag Extraction (`nlp/extractor.py`)
 
 ```python
 # nlp/extractor.py - LLM-based review tag extraction
@@ -624,27 +837,41 @@ class PersonaManager:
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 class ReviewExtractor:
-    """Extracts structured tags from free-text reviews using LLM."""
+    """
+    Extracts structured tags from free-text reviews using LLM.
+    
+    Features:
+        - Retry logic for transient failures
+        - Token usage tracking
+        - Error handling with specific exceptions
+    """
     
     def __init__(
         self,
         ontology: OntologyConfig,
         llm_model: str,
         llm_temperature: float,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        max_retries: int = 3
     ):
         """
         Initialize extractor with LLM.
         
         Creates LangChain chain:
             prompt -> llm -> PydanticOutputParser(ReviewExtraction)
+        
+        Args:
+            max_retries: Maximum number of retry attempts for LLM calls
         """
         # Build prompt template with ontology embedded
         # Create ChatOpenAI instance
         # Create PydanticOutputParser for ReviewExtraction
         # Chain: prompt | llm | parser
+        # Store max_retries for retry logic
+        # Initialize token usage tracking
     
     def extract(self, review_text: str, review_id: Optional[str] = None) -> ReviewExtraction:
         """
@@ -654,11 +881,14 @@ class ReviewExtractor:
             ReviewExtraction with aspect-label pairs.
         
         Raises:
-            ValidationError if LLM output doesn't match schema.
+            ReviewExtractionError if LLM call fails or output doesn't match schema.
         """
         # Invoke chain with review_text
+        # Track token usage
+        # Handle retries for transient failures
         # Set review_id on result
         # Return ReviewExtraction
+        # Raise ReviewExtractionError on failure
     
     def extract_batch(
         self,
@@ -686,7 +916,7 @@ class ReviewExtractor:
   - **Cons:** More API calls
 - **Choice:** Start with Option B (sequential with batch), add Option A as optimization later.
 
-### 7.2 Tag Aggregation (`nlp/aggregator.py`)
+### 8.2 Tag Aggregation (`nlp/aggregator.py`)
 
 ```python
 # nlp/aggregator.py - Aggregate tags into feature scores
@@ -739,7 +969,7 @@ class TagAggregator:
         # Return dict
 ```
 
-### 7.3 Summary Generation (`nlp/summarizer.py`)
+### 8.3 Summary Generation (`nlp/summarizer.py`)
 
 ```python
 # nlp/summarizer.py - LLM-based airport summary generation
@@ -794,34 +1024,68 @@ class SummaryGenerator:
 
 ---
 
-## 8. Feature Engineering
+## 9. Feature Engineering
 
-### 8.1 Feature Score Mapping (`features.py`)
+### 9.1 Feature Score Mapping (`features.py`)
 
 ```python
 # features.py - Map label distributions to normalized feature scores
 
+class FeatureMappingConfig(BaseModel):
+    """Configuration for a single feature mapping."""
+    aspect: str
+    label_weights: Dict[str, float]  # label -> weight (0.0-1.0)
+
+class FeatureMappingsConfig(BaseModel):
+    """Loaded feature_mappings.json structure."""
+    version: str
+    mappings: Dict[str, FeatureMappingConfig]  # feature_name -> mapping
+
 class FeatureMapper:
-    """Maps ontology label distributions to normalized feature scores."""
+    """
+    Maps ontology label distributions to normalized feature scores.
     
-    def __init__(self, ontology: OntologyConfig):
-        """Initialize with ontology."""
+    Supports configurable mappings from JSON file, with hard-coded defaults
+    as fallback.
+    """
+    
+    def __init__(
+        self,
+        ontology: OntologyConfig,
+        mappings_path: Optional[Path] = None
+    ):
+        """
+        Initialize with ontology and optional mappings config.
+        
+        Args:
+            ontology: Ontology configuration
+            mappings_path: Optional path to feature_mappings.json.
+                          If None, uses hard-coded default mappings.
+        """
         # Store ontology
+        # Load mappings from JSON if provided
+        # Validate mappings against ontology
+        # Store mappings (or use defaults)
     
     def map_cost_score(self, distribution: Dict[str, float]) -> float:
         """
         Map 'cost' aspect labels to ga_cost_score [0, 1].
         
-        Mapping:
+        Uses mapping from config if available, otherwise defaults:
             - cheap -> 1.0
             - reasonable -> 0.6
             - expensive -> 0.0
             - unclear -> 0.5 (neutral)
         
         Returns weighted average based on distribution.
+        
+        Raises:
+            FeatureMappingError if mapping fails.
         """
-        # Apply mapping weights
+        # Get mapping config for 'ga_cost_score' (or use default)
+        # Apply label weights to distribution
         # Return normalized score
+        # Raise FeatureMappingError on failure
     
     def map_hassle_score(self, distribution: Dict[str, float]) -> float:
         """
@@ -905,75 +1169,177 @@ class FeatureMapper:
   - **Cons:** Caller must fetch AIP data
 - **Choice:** Option B (optional parameter). Builder will fetch AIP data when available.
 
+**Design Decision: Configurable Feature Mappings**
+
+- **Why:** Hard-coded mappings are hard to modify without code changes
+- **Solution:** Load mappings from `feature_mappings.json` if provided
+- **Fallback:** Use hard-coded defaults if config not provided
+- **Validation:** Validate mappings against ontology on load
+- **Versioning:** Mappings config has version field for tracking changes
+
 ---
 
-## 9. Main Pipeline Orchestrator
+## 10. Main Pipeline Orchestrator
 
-### 9.1 Builder (`builder.py`)
+### 10.1 Builder (`builder.py`)
 
 ```python
 # builder.py - Main pipeline orchestrator
 
+import structlog
+from typing import Optional
+from datetime import datetime
+from dataclasses import dataclass, field
+
+logger = structlog.get_logger(__name__)
+
+@dataclass
+class BuildMetrics:
+    """Track build statistics."""
+    airports_processed: int = 0
+    reviews_extracted: int = 0
+    llm_calls: int = 0
+    llm_tokens_used: int = 0
+    errors: int = 0
+    failed_icaos: List[str] = field(default_factory=list)
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+@dataclass
+class BuildResult:
+    """Result of build operation."""
+    success: bool
+    metrics: BuildMetrics
+    error: Optional[Exception] = None
+
 class GAFriendlinessBuilder:
-    """Orchestrates the full pipeline to build ga_meta.sqlite."""
+    """
+    Orchestrates the full pipeline to build ga_meta.sqlite.
     
-    def __init__(self, settings: GAFriendlinessSettings):
+    Supports:
+        - Full rebuild
+        - Incremental updates
+        - Dependency injection for testing
+        - Progress tracking
+        - Error handling with partial failure support
+    """
+    
+    def __init__(
+        self,
+        settings: GAFriendlinessSettings,
+        *,
+        storage: Optional[GAMetaStorage] = None,
+        extractor: Optional[ReviewExtractor] = None,
+        aggregator: Optional[TagAggregator] = None,
+        feature_mapper: Optional[FeatureMapper] = None,
+        persona_manager: Optional[PersonaManager] = None
+    ):
         """
-        Initialize builder with settings.
+        Initialize builder with settings and optional dependency injection.
+        
+        If dependencies not provided, creates them from settings.
+        Useful for testing with mocks.
         
         Loads:
             - Ontology
             - Personas
+            - Feature mappings (if configured)
             - Creates storage instance
             - Initializes NLP components
         """
+        # Store settings
         # Load ontology and personas
-        # Create GAMetaStorage
-        # Create ReviewExtractor, SummaryGenerator
-        # Create TagAggregator, FeatureMapper
-        # Create PersonaManager
+        # Load feature mappings if configured
+        # Create or use injected dependencies:
+        #   - storage
+        #   - extractor
+        #   - aggregator
+        #   - feature_mapper
+        #   - persona_manager
+        # Initialize metrics
     
     def build(
         self,
-        reviews_source: ReviewSource,  # See below for interface
-        euro_aip_path: Optional[Path] = None
-    ) -> None:
+        reviews_source: ReviewSource,
+        euro_aip_path: Optional[Path] = None,
+        incremental: bool = False,
+        since: Optional[datetime] = None,
+        icaos: Optional[List[str]] = None
+    ) -> BuildResult:
         """
         Main entry point: build ga_meta.sqlite from reviews.
         
         Pipeline:
             1. Load reviews from source
             2. Group reviews by ICAO
-            3. For each ICAO:
-                a. Extract tags (LLM)
+            3. Filter for incremental update if requested
+            4. For each ICAO:
+                a. Extract tags (LLM) with retry logic
                 b. Aggregate tags → feature scores
                 c. Generate summary (LLM)
                 d. Optionally fetch AIP data for ops scores
                 e. Compute persona scores
-                f. Write to database
-            4. Write metadata (versions, timestamps)
+                f. Write to database (in transaction)
+            5. Write metadata (versions, timestamps)
+            6. Return build result with metrics
         
         Args:
             reviews_source: Provides reviews (see ReviewSource interface)
             euro_aip_path: Optional path to euro_aip.sqlite for AIP data
+            incremental: If True, only process airports with changes
+            since: For incremental mode, only process reviews updated since this date
+            icaos: Optional list of specific ICAOs to process
+        
+        Returns:
+            BuildResult with success status, metrics, and any errors
         """
-        # Load reviews
-        # Group by ICAO
-        # Process each ICAO (with progress logging)
-        # Write metadata
-        # Log completion
+        metrics = BuildMetrics()
+        metrics.start_time = datetime.utcnow()
+        
+        try:
+            # Load reviews
+            # Group by ICAO
+            # Filter for incremental if requested:
+            #   - Check storage.has_changes() for each ICAO
+            #   - Filter by since date if provided
+            #   - Filter by icaos if provided
+            
+            # Process each ICAO (with progress tracking)
+            with self.storage:  # Transaction context
+                for icao, airport_reviews in by_icao.items():
+                    try:
+                        logger.info("processing_airport", icao=icao, review_count=len(airport_reviews))
+                        self.process_airport(icao, airport_reviews, ...)
+                        metrics.airports_processed += 1
+                        logger.info("airport_processed", icao=icao)
+                    except Exception as e:
+                        logger.error("airport_failed", icao=icao, error=str(e))
+                        metrics.errors += 1
+                        metrics.failed_icaos.append(icao)
+                        # Continue processing other airports
+            
+            # Write metadata (versions, timestamps)
+            # Log completion
+            metrics.end_time = datetime.utcnow()
+            return BuildResult(success=True, metrics=metrics)
+            
+        except Exception as e:
+            logger.error("build_failed", error=str(e))
+            metrics.end_time = datetime.utcnow()
+            return BuildResult(success=False, metrics=metrics, error=e)
     
     def process_airport(
         self,
         icao: str,
-        reviews: List[RawReview],  # See below
+        reviews: List[RawReview],
         aip_data: Optional[Dict] = None,
-        airport_stats: Optional[Dict] = None  # From airfield.directory individual JSON
+        airport_stats: Optional[Dict] = None
     ) -> None:
         """
         Process a single airport: extract, aggregate, summarize, score, write.
         
         This is the core per-airport processing logic.
+        All operations are within the storage transaction context.
         
         Args:
             icao: Airport ICAO code
@@ -983,14 +1349,23 @@ class GAFriendlinessBuilder:
                 - average_rating: float
                 - landing_fees: Dict by aircraft type
                 - fuel_prices: Dict
+        
+        Raises:
+            BuildError if processing fails (extraction, aggregation, etc.)
         """
-        # Extract tags from reviews
-        # Aggregate tags → feature scores
-        # Incorporate airport_stats (average_rating, landing fees) if available
-        # Generate summary
-        # Compute persona scores
-        # Build AirportStats (include rating_avg, fee_band_* from airport_stats)
-        # Write to storage
+        try:
+            # Extract tags from reviews (with retry logic)
+            # Track LLM token usage
+            # Aggregate tags → feature scores
+            # Incorporate airport_stats (average_rating, landing fees) if available
+            # Generate summary (with retry logic)
+            # Compute persona scores
+            # Build AirportStats (include rating_avg, fee_band_* from airport_stats)
+            # Write to storage (within transaction)
+            # Update last_processed_timestamp in metadata
+        except Exception as e:
+            logger.error("airport_processing_failed", icao=icao, error=str(e))
+            raise BuildError(f"Failed to process airport {icao}: {e}") from e
     
     def fetch_aip_data(self, icao: str, euro_aip_path: Path) -> Optional[Dict]:
         """
@@ -1004,7 +1379,7 @@ class GAFriendlinessBuilder:
         # Return structured dict
 ```
 
-### 9.2 Review Source Interface
+### 10.2 Review Source Interface
 
 ```python
 # Abstract interface for review sources
@@ -1049,7 +1424,7 @@ class ReviewSource(ABC):
 - **CLI tool** will provide a concrete implementation (e.g., `CSVReviewSource`)
 - **Multiple sources:** Can combine sources using `CompositeReviewSource` (see below)
 
-### 9.2.1 Combining Multiple Sources
+### 10.2.1 Combining Multiple Sources
 
 ```python
 # Composite pattern for combining multiple review sources
@@ -1125,7 +1500,7 @@ builder.build(composite, euro_aip_path)
   - Scraped data (with proper licensing)
   - User-submitted reviews from your own platform
 
-### 9.3 AirfieldDirectorySource Implementation
+### 10.3 AirfieldDirectorySource Implementation
 
 Based on the actual airfield.directory API structure, here's the concrete implementation:
 
@@ -1272,9 +1647,9 @@ class RawReview(BaseModel):
 
 ---
 
-## 10. CLI Tool
+## 11. CLI Tool
 
-### 10.1 CLI Structure (`tools/build_ga_friendliness.py`)
+### 11.1 CLI Structure (`tools/build_ga_friendliness.py`)
 
 ```python
 # tools/build_ga_friendliness.py - CLI tool for rebuilding ga_meta.sqlite
@@ -1298,7 +1673,10 @@ def main():
             [--batch-size 50] \
             [--cache-dir path/to/cache] \
             [--force-refresh] \
-            [--never-refresh]
+            [--never-refresh] \
+            [--incremental] \
+            [--since YYYY-MM-DD] \
+            [--icaos ICAO1,ICAO2,...]
         
         # From CSV (for testing/manual data):
         python tools/build_ga_friendliness.py \
@@ -1383,9 +1761,9 @@ def create_composite_source(
 
 ---
 
-## 11. Integration with euro_aip
+## 12. Integration with euro_aip
 
-### 11.1 Dependency Management
+### 12.1 Dependency Management
 
 **Decision:** `ga_friendliness` library should **not** have a hard dependency on `euro_aip`.
 
@@ -1399,7 +1777,7 @@ def create_composite_source(
 - When AIP data is needed (for feature engineering), caller provides it
 - Storage layer can ATTACH euro_aip.sqlite for queries, but doesn't require it
 
-### 11.2 Integration Points
+### 12.2 Integration Points
 
 ```python
 # In builder.py or feature mapper:
@@ -1433,9 +1811,9 @@ def fetch_aip_data_for_features(icao: str, euro_aip_path: Path) -> Optional[Dict
 
 ---
 
-## 12. Web App Integration (Future)
+## 13. Web App Integration (Future)
 
-### 12.1 API Endpoints (Conceptual)
+### 13.1 API Endpoints (Conceptual)
 
 ```python
 # web/server/api/ga_friendliness.py (future)
@@ -1478,7 +1856,7 @@ def find_ga_friendly_along_route(
     # Return structured response
 ```
 
-### 12.2 Integration with Existing Tools
+### 13.2 Integration with Existing Tools
 
 ```python
 # In shared/airport_tools.py (future extension)
@@ -1508,9 +1886,9 @@ def find_airports_near_route_with_ga_friendliness(
 
 ---
 
-## 13. Testing Strategy
+## 14. Testing Strategy
 
-### 13.1 Unit Tests
+### 14.1 Unit Tests
 
 ```python
 # tests/ga_friendliness/test_ontology.py
@@ -1534,7 +1912,7 @@ def test_schema_creation()
 def test_write_read_airfield_stats()
 ```
 
-### 13.2 Integration Tests
+### 14.2 Integration Tests
 
 ```python
 # tests/ga_friendliness/test_builder.py
@@ -1546,7 +1924,7 @@ def test_joint_query_with_euro_aip()
 def test_feature_engineering_with_aip_data()
 ```
 
-### 13.3 Golden Data Tests
+### 14.3 Golden Data Tests
 
 ```python
 # tests/ga_friendliness/test_golden_airports.py
@@ -1559,41 +1937,41 @@ def test_known_expensive_airport_scores()
 
 ---
 
-## 14. Key Design Decisions Summary
+## 15. Key Design Decisions Summary
 
-### 14.1 Library Structure
+### 15.1 Library Structure
 - **Choice:** Standalone library in `shared/ga_friendliness/`
 - **Rationale:** Clean separation, reusable, follows existing patterns
 
-### 14.2 Configuration Format
+### 15.2 Configuration Format
 - **Choice:** JSON (not YAML)
 - **Rationale:** Simpler parsing, no extra dependency, consistent with project
 
-### 14.3 LLM Framework
+### 15.3 LLM Framework
 - **Choice:** LangChain 1.0
 - **Rationale:** Already in project, modern API, good Pydantic integration
 
-### 14.4 Database Linking
+### 15.4 Database Linking
 - **Choice:** ICAO codes as external keys, ATTACH DATABASE for queries
 - **Rationale:** No hard dependency on euro_aip, flexible runtime usage
 
-### 14.5 Persona Scores Storage
+### 15.5 Persona Scores Storage
 - **Choice:** Hybrid: one primary persona denormalized, others computed at runtime
 - **Rationale:** Balance between query performance and flexibility
 
-### 14.6 Review Source Abstraction
+### 15.6 Review Source Abstraction
 - **Choice:** Abstract ReviewSource interface, concrete implementations in CLI
 - **Rationale:** Library stays source-agnostic, easy to add new sources
 
-### 14.7 Feature Engineering AIP Integration
+### 15.7 Feature Engineering AIP Integration
 - **Choice:** Optional AIP data parameter, fetched by builder when available
 - **Rationale:** Works with or without euro_aip, flexible
 
-### 14.8 Batch Processing
+### 15.8 Batch Processing
 - **Choice:** Sequential with LangChain batch() for parallelization
 - **Rationale:** Better error handling, can optimize later
 
-### 14.9 Caching Strategy
+### 15.9 Caching Strategy
 - **Choice:** Independent `CachedDataLoader` utility (not reusing euro_aip's CachedSource)
 - **Rationale:** 
   - Maintains library independence (design principle)
@@ -1605,66 +1983,115 @@ def test_known_expensive_airport_scores()
   - Individual airport JSON (30-day cache)
 - **CLI flags:** `--force-refresh`, `--never-refresh`, `--cache-dir`
 
+### 15.10 Error Handling & Resilience
+- **Choice:** Exception hierarchy with specific error types
+- **Rationale:** Clear error handling, better debugging, retry logic support
+- **Implementation:** Base `GAFriendlinessError` with domain-specific subclasses
+
+### 15.11 Transaction Management
+- **Choice:** Context manager pattern for transactions
+- **Rationale:** Atomic operations, automatic rollback on errors, thread-safe
+- **Implementation:** Storage class supports `with` statement, batch writes
+
+### 15.12 Configurable Feature Mappings
+- **Choice:** Load mappings from JSON with hard-coded defaults
+- **Rationale:** Easy to modify without code changes, versioned config
+- **Implementation:** `feature_mappings.json` with validation against ontology
+
+### 15.13 Incremental Updates
+- **Choice:** Support incremental mode with change detection
+- **Rationale:** Efficient updates when only some airports change, faster rebuilds
+- **Implementation:** `has_changes()` method, `--incremental` CLI flag, `--since` date filter
+
+### 15.14 Schema Versioning
+- **Choice:** Track schema version, support migrations
+- **Rationale:** Safe schema evolution, backward compatibility
+- **Implementation:** Version in `ga_meta_info`, migration framework
+
+### 15.15 Resource Management
+- **Choice:** Context managers for database connections and LLM clients
+- **Rationale:** Automatic cleanup, proper resource handling
+- **Implementation:** `__enter__`/`__exit__` methods, `close()` methods
+
+### 15.16 Dependency Injection
+- **Choice:** Optional dependency injection in Builder constructor
+- **Rationale:** Testability with mocks, flexible component replacement
+- **Implementation:** Optional parameters with defaults that create dependencies
+
+### 15.17 Structured Logging
+- **Choice:** Use structlog for structured logging with context
+- **Rationale:** Better observability, easier debugging, progress tracking
+- **Implementation:** Structured log events with context (icao, review_count, etc.)
+
 ---
 
-## 15. Open Questions & Decisions
+## 16. Open Questions & Decisions
 
 *Note: As decisions are made, replace "Suggestion:" with "Decision:" and add rationale if different from suggestion.*
 
-### 15.1 Non-ICAO Fields
+### 16.1 Non-ICAO Fields
 - **Question:** How to handle non-ICAO strips?
 - **Suggestion:** Start with ICAO-only, add pseudo-ICAO mapping later if needed
 - **Decision:** Start with ICAO only
 
-### 15.2 Missing Data Handling
+### 16.2 Missing Data Handling
 - **Question:** Neutral score (0.5) vs NULL for airports without reviews?
 - **Suggestion:** NULL with flag, let UI decide how to display
 - **Decision:**  NULL with flag, so we can decide later
 
-### 15.3 Persona Explosion
+### 16.3 Persona Explosion
 - **Question:** How many personas to support in UI?
 - **Suggestion:** Start with 3 (IFR touring, VFR budget, training), add more as needed
 - **Decision:** yes start with these 3
 
-### 15.4 Learned Weights
+### 16.4 Learned Weights
 - **Question:** ML-based persona weights from user feedback?
 - **Suggestion:** Phase 2 feature, keep hand-tuned weights for now
 - **Decision:** yes, hand-tuned for now, we'll see later
 
-### 15.5 Review Text Storage
+### 16.5 Review Text Storage
 - **Question:** Store raw review text excerpts or only tags?
 - **Suggestion:** Start with tags only (privacy/licensing), add excerpts later if needed
 - **Decision:** tag only
 
 ---
 
-## 16. Implementation Phases
+## 17. Implementation Phases
 
 ### Phase 1: Core Infrastructure & Caching
 1. Create library structure
-2. Implement models (Pydantic)
-3. Implement caching utility (CachedDataLoader)
-4. Implement database schema and storage
-5. Implement ontology and persona loading
-6. Unit tests for core components
+2. Implement exception hierarchy
+3. Implement models (Pydantic)
+4. Implement caching utility (CachedDataLoader)
+5. Implement database schema with versioning
+6. Implement storage with transaction support
+7. Implement ontology and persona loading
+8. Implement feature mappings loading
+9. Unit tests for core components
 
 ### Phase 2: NLP Pipeline
-1. Implement ReviewExtractor with LangChain
+1. Implement ReviewExtractor with LangChain (with retry logic)
 2. Implement TagAggregator
-3. Implement SummaryGenerator
-4. Integration tests with mock LLM
+3. Implement SummaryGenerator (with retry logic)
+4. Add token usage tracking
+5. Integration tests with mock LLM
 
 ### Phase 3: Feature Engineering
-1. Implement FeatureMapper
+1. Implement FeatureMapper with configurable mappings
 2. Implement scoring functions
 3. Integration with optional AIP data
-4. Golden data tests
+4. Add feature mapping validation
+5. Golden data tests
 
 ### Phase 4: Builder & CLI
-1. Implement GAFriendlinessBuilder
-2. Implement CSVReviewSource
-3. Create CLI tool
-4. End-to-end test with sample data
+1. Implement GAFriendlinessBuilder with dependency injection
+2. Add incremental update support
+3. Add structured logging and progress tracking
+4. Add error handling and partial failure support
+5. Implement CSVReviewSource
+6. Create CLI tool with all flags
+7. Add resource management (context managers)
+8. End-to-end test with sample data
 
 ### Phase 5: Web Integration (Future)
 1. API endpoints
