@@ -375,11 +375,30 @@ export class UIManager {
    */
   private initEventListeners(): void {
     // Filter controls
+    // Helper to handle filter changes - if route/locate active, re-run search
+    const handleFilterChange = (filterUpdate: Partial<FilterConfig>) => {
+      // Update filters first
+      this.store.getState().setFilters(filterUpdate);
+      
+      // Check current state after filter update
+      const state = this.store.getState();
+      
+      // If we have an active route or locate, re-run the search with new filters
+      if (state.route && state.route.airports && !state.route.isChatbotSelection) {
+        // Active route search - re-run with new filters
+        this.applyFilters();
+      } else if (state.locate && state.locate.center) {
+        // Active locate search - re-run with new filters
+        this.applyFilters();
+      }
+      // Otherwise, just client-side filtering is fine (normal mode)
+    };
+    
     const countrySelect = document.getElementById('country-filter');
     if (countrySelect) {
       countrySelect.addEventListener('change', (e) => {
       const target = e.target as HTMLSelectElement;
-      this.store.getState().setFilters({ country: target.value || null });
+      handleFilterChange({ country: target.value || null });
       });
     }
     
@@ -387,7 +406,7 @@ export class UIManager {
     if (hasProcedures) {
       hasProcedures.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
-      this.store.getState().setFilters({ has_procedures: target.checked || null });
+      handleFilterChange({ has_procedures: target.checked || null });
       });
     }
     
@@ -395,7 +414,7 @@ export class UIManager {
     if (hasAipData) {
       hasAipData.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
-      this.store.getState().setFilters({ has_aip_data: target.checked || null });
+      handleFilterChange({ has_aip_data: target.checked || null });
       });
     }
     
@@ -403,7 +422,7 @@ export class UIManager {
     if (hasHardRunway) {
       hasHardRunway.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
-      this.store.getState().setFilters({ has_hard_runway: target.checked || null });
+      handleFilterChange({ has_hard_runway: target.checked || null });
       });
     }
     
@@ -411,7 +430,7 @@ export class UIManager {
     if (borderCrossing) {
       borderCrossing.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
-      this.store.getState().setFilters({ point_of_entry: target.checked || null });
+      handleFilterChange({ point_of_entry: target.checked || null });
       });
     }
     
@@ -420,7 +439,7 @@ export class UIManager {
       maxAirports.addEventListener('change', (e) => {
       const target = e.target as HTMLSelectElement;
       const limit = target.value ? parseInt(target.value, 10) : null;
-      this.store.getState().setFilters({ limit: limit || 1000 });
+      handleFilterChange({ limit: limit || 1000 });
       });
     }
     
