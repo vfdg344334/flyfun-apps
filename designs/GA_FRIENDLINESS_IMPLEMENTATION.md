@@ -849,6 +849,7 @@ class ReviewExtraction(BaseModel):
     review_id: Optional[str]
     aspects: List[AspectLabel]
     raw_text_excerpt: Optional[str]  # For transparency/debugging
+    timestamp: Optional[str] = None  # ISO format timestamp from source review (for time decay)
 
 class OntologyConfig(BaseModel):
     """Loaded ontology.json structure."""
@@ -876,6 +877,18 @@ class PersonasConfig(BaseModel):
     """Loaded personas.json structure."""
     version: str
     personas: Dict[str, PersonaConfig]  # persona_id -> PersonaConfig
+
+class AggregationContext(BaseModel):
+    """
+    Context for aggregation (enables time decay and Bayesian smoothing extensions).
+    
+    All fields are optional to maintain backward compatibility.
+    When None, extensions are disabled and behavior matches original implementation.
+    """
+    sample_count: int  # Number of reviews/tags contributing to aggregation
+    reference_time: Optional[datetime] = None  # Reference time for time decay calculations (usually build time)
+    global_priors: Optional[Dict[str, float]] = None  # Global average scores for Bayesian smoothing
+    # Future: other metadata (source weights, confidence thresholds, etc.)
 
 class AirportFeatureScores(BaseModel):
     """Normalized feature scores for an airport."""
@@ -934,6 +947,17 @@ class GAFriendlinessSettings(BaseSettings):
     # Processing settings
     confidence_threshold: float = 0.5  # Min confidence for tag inclusion
     batch_size: int = 50  # Reviews per LLM batch
+    
+    # Time decay settings (disabled by default)
+    enable_time_decay: bool = False  # Apply time decay to review weights
+    time_decay_half_life_days: float = 365.0  # Half-life for exponential decay (1 year default)
+    time_decay_reference_time: Optional[datetime] = None  # None = use build time
+    
+    # Bayesian smoothing settings (disabled by default)
+    enable_bayesian_smoothing: bool = False  # Apply Bayesian smoothing to feature scores
+    bayesian_smoothing_strength: float = 10.0  # k parameter (higher = more smoothing toward prior)
+    compute_global_priors: bool = True  # Compute priors from all airports, or use fixed values
+    global_priors: Optional[Dict[str, float]] = None  # Fixed priors if compute_global_priors=False
     
     # Versioning
     source_version: str  # e.g., "airfield.directory-2025-11-01"
@@ -1291,6 +1315,55 @@ class GAMetaStorage:
         """
         # Execute: ATTACH DATABASE 'euro_aip_path' AS aip
         # Raise StorageError on failure
+    
+    def compute_global_priors(self) -> Dict[str, float]:
+        """
+        Compute global average scores across all airports.
+        
+        Used as priors for Bayesian smoothing.
+        Computes average for each feature score from ga_airfield_stats.
+        
+        Returns:
+            Dict mapping feature_name -> global average score
+            Example: {
+                'ga_cost_score': 0.52,
+                'ga_hassle_score': 0.61,
+                'ga_review_score': 0.68,
+                ...
+            }
+        """
+        # Query: SELECT 
+        #   AVG(ga_cost_score) as ga_cost_score,
+        #   AVG(ga_hassle_score) as ga_hassle_score,
+        #   AVG(ga_review_score) as ga_review_score,
+        #   AVG(ga_ops_ifr_score) as ga_ops_ifr_score,
+        #   AVG(ga_ops_vfr_score) as ga_ops_vfr_score,
+        #   AVG(ga_access_score) as ga_access_score,
+        #   AVG(ga_fun_score) as ga_fun_score
+        # FROM ga_airfield_stats
+        # WHERE ga_cost_score IS NOT NULL  # Only airports with data
+        # Return dict with averages (handle NULLs as 0.5 default)
+    
+    def store_global_priors(self, priors: Dict[str, float]) -> None:
+        """
+        Store computed global priors in ga_meta_info for future use.
+        
+        Args:
+            priors: Dict mapping feature_name -> average score
+        """
+        # Store as JSON in ga_meta_info with key 'global_priors'
+        # Format: json.dumps(priors)
+    
+    def get_global_priors(self) -> Optional[Dict[str, float]]:
+        """
+        Get stored global priors from ga_meta_info.
+        
+        Returns:
+            Dict of priors or None if not stored
+        """
+        # Query ga_meta_info for key 'global_priors'
+        # Parse JSON and return dict
+        # Return None if not found
 ```
 
 ---
@@ -1667,12 +1740,22 @@ class ReviewExtractor:
         # Store max_retries for retry logic
         # Initialize token usage tracking
     
-    def extract(self, review_text: str, review_id: Optional[str] = None) -> ReviewExtraction:
+    def extract(
+        self,
+        review_text: str,
+        review_id: Optional[str] = None,
+        timestamp: Optional[str] = None
+    ) -> ReviewExtraction:
         """
         Extract tags from a single review.
         
+        Args:
+            review_text: Review text to extract tags from
+            review_id: Optional review ID from source
+            timestamp: Optional timestamp from source review (for time decay)
+        
         Returns:
-            ReviewExtraction with aspect-label pairs.
+            ReviewExtraction with aspect-label pairs and preserved timestamp.
         
         Raises:
             ReviewExtractionError if LLM call fails or output doesn't match schema.
@@ -1680,24 +1763,28 @@ class ReviewExtractor:
         # Invoke chain with review_text
         # Track token usage
         # Handle retries for transient failures
-        # Set review_id on result
+        # Set review_id and timestamp on result
         # Return ReviewExtraction
         # Raise ReviewExtractionError on failure
     
     def extract_batch(
         self,
-        reviews: List[Tuple[str, Optional[str]]]  # (text, review_id)
+        reviews: List[Tuple[str, Optional[str], Optional[str]]]  # (text, review_id, timestamp)
     ) -> List[ReviewExtraction]:
         """
         Extract tags from multiple reviews (batched for efficiency).
         
         Can batch multiple reviews into single LLM call if model supports,
         or process sequentially with retries.
+        
+        Args:
+            reviews: List of (review_text, review_id, timestamp) tuples
         """
         # Option 1: Single prompt with multiple reviews (if LLM supports)
         # Option 2: Process sequentially with batch() for parallelization
+        # Preserve timestamp from input tuple
         # Apply confidence threshold
-        # Return list of ReviewExtraction
+        # Return list of ReviewExtraction (with timestamps preserved)
 ```
 
 **Design Decision: Batch Processing**
@@ -1725,15 +1812,16 @@ class TagAggregator:
     def aggregate_tags(
         self,
         icao: str,
-        tags: List[ReviewExtraction]
+        tags: List[ReviewExtraction],
+        context: Optional[AggregationContext] = None
     ) -> AirportFeatureScores:
         """
         Aggregate tags for an airport into feature scores.
         
         Process:
             1. Group tags by aspect
-            2. Count label distributions (weighted by confidence)
-            3. Map distributions to normalized scores [0, 1]
+            2. Count label distributions (weighted by confidence, optionally with time decay)
+            3. Map distributions to normalized scores [0, 1] (optionally with Bayesian smoothing)
             4. Return AirportFeatureScores
         
         Feature mappings (examples):
@@ -1741,25 +1829,74 @@ class TagAggregator:
             - ga_hassle_score: from 'bureaucracy' aspect (simple=1.0, complex=0.0)
             - ga_review_score: from 'overall_experience' aspect
             - ga_fun_score: from 'food', 'overall_experience' aspects
+        
+        Args:
+            icao: Airport ICAO code
+            tags: List of review extractions with tags
+            context: Optional aggregation context (for time decay and Bayesian smoothing)
         """
         # Group by aspect
-        # For each aspect, compute weighted label distribution
-        # Map to feature scores using mapping rules
+        # For each aspect, compute weighted label distribution (pass context to compute_label_distribution)
+        # Map to feature scores using mapping rules (pass context to FeatureMapper methods)
         # Return AirportFeatureScores
+    
+    def _apply_time_decay(
+        self,
+        tags: List[AspectLabel],
+        reference_time: datetime,
+        half_life_days: float = 365.0
+    ) -> List[Tuple[AspectLabel, float]]:
+        """
+        Apply time decay weights to tags based on their age.
+        
+        Uses inverse decay function: weight = 1 / (1 + age_days / half_life_days)
+        - Recent tags (age = 0): weight = 1.0
+        - Tags at half-life: weight = 0.5
+        - Very old tags (age >> half_life): weight approaches 0
+        
+        Args:
+            tags: List of aspect labels (must have timestamp in parent ReviewExtraction)
+            reference_time: Reference time for computing age
+            half_life_days: Half-life in days (default: 365 days = 1 year)
+        
+        Returns:
+            List of (tag, weight) tuples where weight is decay factor [0, 1]
+        
+        Note: Tags without timestamps get weight 1.0 (no decay).
+        """
+        # For each tag, extract timestamp from parent ReviewExtraction
+        # Compute age in days: (reference_time - tag_timestamp).days
+        # Apply decay: weight = 1 / (1 + age_days / half_life_days)
+        # Return list of (tag, weight) tuples
     
     def compute_label_distribution(
         self,
         aspect: str,
-        tags: List[AspectLabel]
+        tags: List[AspectLabel],
+        context: Optional[AggregationContext] = None
     ) -> Dict[str, float]:
         """
         Compute weighted distribution of labels for an aspect.
         
+        If context provided with reference_time, applies time decay weights.
+        Tracks sample_count in context for Bayesian smoothing.
+        
+        Args:
+            aspect: Aspect name to filter tags
+            tags: List of aspect labels
+            context: Optional aggregation context (for time decay and sample tracking)
+        
         Returns:
-            Dict mapping label -> weighted count (sum of confidences)
+            Dict mapping label -> weighted count (sum of confidences, optionally with time decay)
         """
         # Filter tags for this aspect
-        # Sum confidences per label
+        # If context and context.reference_time provided:
+        #   - Apply time decay weights using _apply_time_decay()
+        #   - Multiply confidence by decay weight
+        # Otherwise:
+        #   - Use confidence directly
+        # Sum weighted confidences per label
+        # Update context.sample_count if context provided
         # Return dict
 ```
 
@@ -1964,7 +2101,8 @@ class FeatureMapper:
     def __init__(
         self,
         ontology: OntologyConfig,
-        mappings_path: Optional[Path] = None
+        mappings_path: Optional[Path] = None,
+        smoothing_strength: float = 10.0
     ):
         """
         Initialize with ontology and optional mappings config.
@@ -1973,13 +2111,19 @@ class FeatureMapper:
             ontology: Ontology configuration
             mappings_path: Optional path to feature_mappings.json.
                           If None, uses hard-coded default mappings.
+            smoothing_strength: k parameter for Bayesian smoothing (default: 10.0)
         """
         # Store ontology
         # Load mappings from JSON if provided
         # Validate mappings against ontology
         # Store mappings (or use defaults)
+        # Store smoothing_strength for Bayesian smoothing
     
-    def map_cost_score(self, distribution: Dict[str, float]) -> float:
+    def map_cost_score(
+        self,
+        distribution: Dict[str, float],
+        context: Optional[AggregationContext] = None
+    ) -> float:
         """
         Map 'cost' aspect labels to ga_cost_score [0, 1].
         
@@ -1989,17 +2133,41 @@ class FeatureMapper:
             - expensive -> 0.0
             - unclear -> 0.5 (neutral)
         
-        Returns weighted average based on distribution.
+        If context provided with global_priors and sample_count:
+            - Applies Bayesian smoothing: (local_score * n + prior * k) / (n + k)
+            - n = sample_count, k = smoothing_strength from settings
+            - prior = global_priors.get('ga_cost_score', 0.5)
+        
+        Args:
+            distribution: Label distribution (label -> weighted count)
+            context: Optional aggregation context (for Bayesian smoothing)
+        
+        Returns:
+            Normalized score [0, 1], optionally smoothed
         
         Raises:
             FeatureMappingError if mapping fails.
         """
         # Get mapping config for 'ga_cost_score' (or use default)
         # Apply label weights to distribution
-        # Return normalized score
+        # Compute local_score (weighted average)
+        
+        # If context and context.global_priors and context.sample_count > 0:
+        #   - Get prior = context.global_priors.get('ga_cost_score', 0.5)
+        #   - Get k = self.smoothing_strength (from settings)
+        #   - n = context.sample_count
+        #   - smoothed_score = (local_score * n + prior * k) / (n + k)
+        #   - Return smoothed_score
+        # Otherwise:
+        #   - Return local_score
+        
         # Raise FeatureMappingError on failure
     
-    def map_hassle_score(self, distribution: Dict[str, float]) -> float:
+    def map_hassle_score(
+        self,
+        distribution: Dict[str, float],
+        context: Optional[AggregationContext] = None
+    ) -> float:
         """
         Map 'bureaucracy' aspect labels to ga_hassle_score [0, 1].
         
@@ -2007,10 +2175,16 @@ class FeatureMapper:
             - simple -> 1.0
             - moderate -> 0.5
             - complex -> 0.0
+        
+        Supports Bayesian smoothing if context provided (same as map_cost_score).
         """
-        # Similar to map_cost_score
+        # Similar to map_cost_score (with optional Bayesian smoothing)
     
-    def map_review_score(self, distribution: Dict[str, float]) -> float:
+    def map_review_score(
+        self,
+        distribution: Dict[str, float],
+        context: Optional[AggregationContext] = None
+    ) -> float:
         """
         Map 'overall_experience' aspect labels to ga_review_score [0, 1].
         
@@ -2020,8 +2194,10 @@ class FeatureMapper:
             - neutral -> 0.5
             - negative -> 0.25
             - very_negative -> 0.0
+        
+        Supports Bayesian smoothing if context provided.
         """
-        # Similar pattern
+        # Similar pattern (with optional Bayesian smoothing)
     
     def map_ops_ifr_score(
         self,
@@ -2054,24 +2230,35 @@ class FeatureMapper:
         """Similar to map_ops_ifr_score but for VFR operations."""
         # Similar pattern
     
-    def map_access_score(self, distribution: Dict[str, float]) -> float:
+    def map_access_score(
+        self,
+        distribution: Dict[str, float],
+        context: Optional[AggregationContext] = None
+    ) -> float:
         """
         Map 'transport' aspect labels to ga_access_score [0, 1].
         
         How easy is it to get to/from the airport?
+        
+        Supports Bayesian smoothing if context provided.
         """
-        # Similar pattern
+        # Similar pattern (with optional Bayesian smoothing)
     
     def map_fun_score(
         self,
-        tags: List[ReviewExtraction]
+        tags: List[ReviewExtraction],
+        context: Optional[AggregationContext] = None
     ) -> float:
         """
         Map 'food', 'overall_experience' aspects to ga_fun_score [0, 1].
         
         Combines multiple aspects for "vibe" / enjoyment factor.
+        
+        Supports Bayesian smoothing if context provided.
         """
         # Combine food, overall_experience distributions
+        # Compute composite score
+        # Apply Bayesian smoothing if context provided
         # Return composite score
 ```
 
@@ -2093,6 +2280,32 @@ class FeatureMapper:
 - **Fallback:** Use hard-coded defaults if config not provided
 - **Validation:** Validate mappings against ontology on load
 - **Versioning:** Mappings config has version field for tracking changes
+
+**Design Decision: Time Decay and Bayesian Smoothing**
+
+- **Why:** Improve score quality by weighting recent reviews more and handling small sample sizes
+- **Implementation:** Both features implemented but disabled by default
+- **Time Decay:**
+  - Applies exponential decay to review weights based on age
+  - Formula: `weight = 1 / (1 + age_days / half_life_days)`
+  - Recent reviews (age=0): weight=1.0, at half-life: weight=0.5
+  - Enabled via `enable_time_decay=True` in settings
+  - Requires timestamps in `ReviewExtraction` (preserved from `RawReview`)
+- **Bayesian Smoothing:**
+  - Smooths scores toward global prior for airports with few reviews
+  - Formula: `smoothed = (local_score * n + prior * k) / (n + k)`
+  - n = sample_count, k = smoothing_strength (default: 10.0)
+  - Enabled via `enable_bayesian_smoothing=True` in settings
+  - Global priors computed from all airports or provided as fixed values
+- **Backward Compatibility:**
+  - All new parameters are optional (`context: Optional[...] = None`)
+  - When disabled (default), behavior matches original implementation
+  - No breaking changes to existing code
+- **Testing:**
+  - Unit tests verify decay weights decrease with age
+  - Unit tests verify smoothing moves scores toward prior with small samples
+  - Integration tests verify extensions work together
+  - Golden data tests verify known airports behave correctly
 
 ---
 
@@ -2447,8 +2660,37 @@ class GAFriendlinessBuilder:
         """
         try:
             # Extract tags from reviews (with retry logic)
+            #   - Preserve timestamp from RawReview in ReviewExtraction
             # Track LLM token usage
-            # Aggregate tags → feature scores
+            
+            # Create aggregation context if extensions enabled
+            context = None
+            if self.settings.enable_time_decay or self.settings.enable_bayesian_smoothing:
+                reference_time = (
+                    self.settings.time_decay_reference_time 
+                    if self.settings.time_decay_reference_time 
+                    else datetime.utcnow()
+                )
+                
+                global_priors = None
+                if self.settings.enable_bayesian_smoothing:
+                    if self.settings.compute_global_priors:
+                        # Compute from all airports in database
+                        global_priors = self.storage.compute_global_priors()
+                    else:
+                        # Use fixed priors from settings
+                        global_priors = self.settings.global_priors or {}
+                
+                context = AggregationContext(
+                    sample_count=len(reviews),
+                    reference_time=reference_time if self.settings.enable_time_decay else None,
+                    global_priors=global_priors
+                )
+            
+            # Aggregate tags → feature scores (pass context if provided)
+            #   - TagAggregator.compute_label_distribution() applies time decay if context.reference_time provided
+            #   - FeatureMapper methods apply Bayesian smoothing if context.global_priors provided
+            
             # Incorporate airport_stats (average_rating, landing fees) if available
             # Aggregate landing fees into fee bands:
             #   - Map aircraft type (e.g., "C172", "SR22") to known MTOW using standard mapping
