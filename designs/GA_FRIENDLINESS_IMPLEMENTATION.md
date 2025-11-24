@@ -42,7 +42,13 @@ shared/ga_friendliness/
 │   ├── __init__.py
 │   ├── extractor.py           # LLM-based review tag extraction
 │   ├── aggregator.py           # Tag aggregation → feature scores
-│   └── summarizer.py           # LLM-based airport summary generation
+│   ├── summarizer.py           # LLM-based airport summary generation
+│   └── aip_rule_extractor.py   # LLM-based AIP rule parsing (notification, handling, etc.)
+├── aip/
+│   ├── __init__.py
+│   ├── aip_source.py           # Source for AIP data from euro_aip.sqlite
+│   ├── rule_parser.py          # Parse structured rules from AIP text
+│   └── rule_summarizer.py      # Generate high-level summaries from detailed rules
 ├── features.py                 # Feature engineering (label distributions → scores)
 ├── scoring.py                  # Persona-based scoring functions
 └── builder.py                  # Main pipeline orchestrator
@@ -53,12 +59,735 @@ tools/
 data/
 ├── ontology.json               # Ontology definition (versioned)
 ├── personas.json               # Persona definitions (versioned)
-└── feature_mappings.json       # Feature mapping configurations (versioned)
+├── feature_mappings.json       # Feature mapping configurations (versioned)
+└── aip_rule_schema.json       # Schema for AIP rule extraction (notification patterns, etc.)
 ```
 
 ---
 
-## 2. Exception Hierarchy
+## 2. AIP Rule Parsing Extension
+
+### 2.1 Overview
+
+**Goal:** Parse structured rules from euro_aip database (notification requirements, handling rules, etc.) into detailed structured data and high-level summaries for scoring.
+
+**Key Requirements:**
+- Parse complex notification rules (weekday-specific, time-based, conditional)
+- Store detailed breakdown for operational use
+- Generate high-level summary for scoring
+- Separate NLP pipeline (different from review extraction)
+- Support incremental updates
+- Optional feature (works with or without euro_aip)
+
+**Design Principles:**
+- **Separation:** AIP parsing is separate module, optional step in pipeline
+- **Two-stage processing:** Extract details → Summarize for scoring
+- **Incremental:** Track processed AIP entries, only reparse changed ones
+- **Extensible:** Can add other AIP rule types (handling, customs, etc.)
+
+### 2.2 Module Structure
+
+```
+shared/ga_friendliness/aip/
+├── __init__.py
+├── aip_source.py           # Load AIP text from euro_aip.sqlite
+├── rule_parser.py          # Parse structured rules using LLM
+└── rule_summarizer.py      # Generate high-level summaries
+```
+
+### 2.3 Database Schema Extensions
+
+**New Table: `ga_notification_requirements`**
+
+```sql
+CREATE TABLE ga_notification_requirements (
+    id                  INTEGER PRIMARY KEY,
+    icao                TEXT NOT NULL,
+    rule_type           TEXT NOT NULL,  -- 'ppr', 'pn', 'customs_notification', 'handling_ppr'
+    weekday_start       INTEGER,         -- 0=Monday, 6=Sunday, NULL=all days
+    weekday_end         INTEGER,         -- NULL=single day, or end of range (inclusive)
+    notification_hours  INTEGER,         -- Hours before flight (24, 48, etc.), NULL if not hours-based
+    notification_type   TEXT NOT NULL,  -- 'hours', 'business_day', 'specific_time', 'on_request', 'h24'
+    specific_time        TEXT,           -- e.g., "1300" for "before 1300", NULL if not applicable
+    business_day_offset  INTEGER,        -- e.g., -1 for "last business day before", NULL if not applicable
+    is_obligatory        INTEGER,        -- 0/1, whether notification is mandatory
+    conditions_json     TEXT,            -- JSON for complex conditions (holidays, seasons, etc.)
+    raw_text             TEXT,            -- Original AIP text this rule was extracted from
+    source_field         TEXT,            -- Which AIP field this came from
+    source_section       TEXT,            -- Which AIP section (customs, handling, etc.)
+    source_std_field_id   INTEGER,        -- euro_aip std_field_id (e.g., 302 for customs)
+    aip_entry_id         TEXT,            -- Reference to euro_aip entry (if available)
+    confidence           REAL,            -- LLM extraction confidence [0, 1]
+    created_utc          TEXT,
+    updated_utc           TEXT
+);
+
+CREATE INDEX idx_notification_icao ON ga_notification_requirements(icao);
+CREATE INDEX idx_notification_type ON ga_notification_requirements(icao, rule_type);
+CREATE INDEX idx_notification_weekday ON ga_notification_requirements(icao, weekday_start, weekday_end);
+```
+
+**Examples of stored rules:**
+
+For text: "PPR 24 HR weekdays, 48 HR weekends"
+- Row 1: `rule_type='ppr'`, `weekday_start=0`, `weekday_end=4`, `notification_hours=24`, `notification_type='hours'`
+- Row 2: `rule_type='ppr'`, `weekday_start=5`, `weekday_end=6`, `notification_hours=48`, `notification_type='hours'`
+
+For text: "Last business day before 1300"
+- Row: `rule_type='ppr'`, `weekday_start=NULL`, `weekday_end=NULL`, `notification_type='business_day'`, `business_day_offset=-1`, `specific_time='1300'`
+
+For text: "Tue-Fri: 24h, Sat-Mon: 48h"
+- Row 1: `rule_type='ppr'`, `weekday_start=1`, `weekday_end=4`, `notification_hours=24`
+- Row 2: `rule_type='ppr'`, `weekday_start=5`, `weekday_end=0`, `notification_hours=48` (Sat-Mon wraps)
+
+**New Table: `ga_aip_rule_summary`**
+
+```sql
+CREATE TABLE ga_aip_rule_summary (
+    icao                TEXT PRIMARY KEY,
+    notification_summary TEXT,     -- High-level summary: "24h weekdays, 48h weekends"
+    hassle_level        TEXT,      -- 'low', 'moderate', 'high', 'very_high'
+    notification_score  REAL,      -- Normalized score [0, 1] for scoring
+    last_updated_utc    TEXT
+);
+```
+
+**Update `ga_airfield_stats`:**
+
+Add column:
+```sql
+ALTER TABLE ga_airfield_stats ADD COLUMN notification_hassle_score REAL;
+-- Derived from ga_aip_rule_summary.notification_score
+```
+
+### 2.4 AIP Source (`aip/aip_source.py`)
+
+```python
+# aip/aip_source.py - Load AIP text from euro_aip.sqlite
+
+class AIPSource:
+    """
+    Loads AIP text data from euro_aip.sqlite for rule parsing.
+    
+    Extracts relevant fields:
+        - Customs/immigration notification requirements
+        - Handling/PPR requirements
+        - Other structured rules
+    """
+    
+    def __init__(self, euro_aip_path: Path):
+        """
+        Initialize AIP source.
+        
+        Args:
+            euro_aip_path: Path to euro_aip.sqlite
+        """
+        # Store path
+        # Validate database exists
+    
+    def get_airport_aip_text(self, icao: str) -> Optional[Dict[str, str]]:
+        """
+        Get AIP text fields for an airport.
+        
+        Queries euro_aip.sqlite for relevant sections:
+            - Customs/immigration (section='customs')
+            - Handling (section='handling')
+            - Other relevant sections
+        
+        Returns:
+            Dict mapping section -> field -> text value
+            Example:
+                {
+                    'customs': {
+                        'notification': 'PPR 24 HR weekdays, 48 HR weekends',
+                        'availability': 'H24'
+                    },
+                    'handling': {
+                        'ppr_required': 'PPR 2 HR',
+                        'services': 'Available on PPR'
+                    }
+                }
+        """
+        # ATTACH euro_aip.sqlite
+        # Query aip_entries table for airport
+        # Filter by relevant sections (customs, handling)
+        # Group by section and field
+        # Return structured dict
+    
+    def get_all_airports(self) -> List[str]:
+        """Get list of all ICAOs in euro_aip.sqlite."""
+        # Query euro_aip for distinct ICAOs
+        # Return list
+    
+    def get_last_aip_change_timestamp(self, icao: str) -> Optional[datetime]:
+        """
+        Get when AIP data was last changed for this airport.
+        
+        Queries euro_aip change tracking tables.
+        
+        Returns:
+            Timestamp of last change, or None if not found.
+        """
+        # Query aip_entries_changes for max(changed_at)
+        # Return datetime or None
+```
+
+### 2.5 AIP Rule Parser (`aip/rule_parser.py`)
+
+**Design Decision: LLM vs. Regex for Rule Parsing**
+
+- **Option A:** Use regex patterns (like euro_aip's CustomInterpreter)
+  - **Pros:** Fast, deterministic, no LLM costs
+  - **Cons:** Hard to handle complex/ambiguous rules, brittle
+- **Option B:** Use LLM for rule extraction
+  - **Pros:** Handles complex rules, natural language variations, extensible
+  - **Cons:** LLM costs, potential inconsistencies
+- **Choice:** Option B (LLM) for flexibility, but can fall back to regex for simple cases
+
+**Hybrid Approach:**
+- Try regex patterns first (fast path for common patterns)
+- Fall back to LLM for complex/ambiguous cases
+- Cache LLM results to avoid reprocessing
+
+```python
+# aip/rule_parser.py - Parse structured rules from AIP text
+
+from typing import List, Optional
+from pydantic import BaseModel
+
+class NotificationRule(BaseModel):
+    """Structured representation of a notification requirement."""
+    rule_type: str  # 'ppr', 'pn', 'customs_notification'
+    weekday_start: Optional[int] = None  # 0=Monday, 6=Sunday
+    weekday_end: Optional[int] = None  # For ranges
+    notification_hours: Optional[int] = None  # Hours before (24, 48, etc.)
+    notification_type: str  # 'hours', 'business_day', 'specific_time'
+    specific_time: Optional[str] = None  # e.g., "1300"
+    business_day_offset: Optional[int] = None  # e.g., -1 for "last business day"
+    conditions: Optional[Dict] = None  # Additional conditions
+
+class ParsedAIPRules(BaseModel):
+    """Complete parsed rules for an airport."""
+    icao: str
+    notification_rules: List[NotificationRule]
+    handling_rules: List[Dict]  # Future: handling-specific rules
+    source_fields: Dict[str, str]  # Map rule -> source field text
+
+class AIPRuleParser:
+    """
+    Parses structured rules from AIP text using LLM.
+    
+    Uses specialized prompt for rule extraction (different from review extraction).
+    Handles complex patterns:
+        - "PPR 24 HR weekdays, 48 HR weekends"
+        - "Last business day before 1300"
+        - "Tue-Fri: 24h, Sat-Mon: 48h"
+    """
+    
+    def __init__(
+        self,
+        llm_model: str,
+        llm_temperature: float = 0.0,
+        api_key: Optional[str] = None,
+        max_retries: int = 3
+    ):
+        """
+        Initialize rule parser with LLM.
+        
+        Creates LangChain chain for structured rule extraction.
+        """
+        # Build prompt template for rule extraction
+        # Create ChatOpenAI instance
+        # Create PydanticOutputParser for ParsedAIPRules
+        # Chain: prompt | llm | parser
+        # Initialize token usage tracking
+    
+    def parse_rules(self, icao: str, aip_text: Dict[str, str]) -> ParsedAIPRules:
+        """
+        Parse rules from AIP text.
+        
+        Uses hybrid approach:
+            1. Try regex patterns for common cases (fast path)
+            2. Fall back to LLM for complex/ambiguous rules
+        
+        Args:
+            icao: Airport ICAO code
+            aip_text: Dict of section -> field -> text (from AIPSource)
+            Example:
+                {
+                    'customs': {
+                        'notification': 'PPR 24 HR weekdays, 48 HR weekends',
+                        'availability': 'H24'
+                    }
+                }
+        
+        Returns:
+            ParsedAIPRules with structured notification and handling rules
+        
+        Raises:
+            AIPRuleParsingError if parsing fails
+        """
+        notification_rules = []
+        
+        # Extract notification rules from each section
+        for section, fields in aip_text.items():
+            for field_name, field_text in fields.items():
+                # Try regex patterns first (common cases)
+                regex_rules = self._try_regex_extraction(field_text, section, field_name)
+                if regex_rules:
+                    notification_rules.extend(regex_rules)
+                else:
+                    # Fall back to LLM for complex cases
+                    llm_rules = self._llm_extract_rules(icao, field_text, section, field_name)
+                    notification_rules.extend(llm_rules)
+        
+        return ParsedAIPRules(
+            icao=icao,
+            notification_rules=notification_rules,
+            handling_rules=[],  # Future: parse handling rules
+            source_fields={rule.source_field: aip_text.get(rule.source_section, {}).get(rule.source_field, '')
+                          for rule in notification_rules}
+        )
+    
+    def _try_regex_extraction(
+        self,
+        text: str,
+        section: str,
+        field_name: str
+    ) -> List[NotificationRule]:
+        """
+        Try to extract rules using regex patterns (fast path).
+        
+        Handles common patterns:
+            - "PPR 24 HR"
+            - "PPR 24 HR weekdays, 48 HR weekends"
+            - "H24"
+            - "O/R"
+        
+        Returns:
+            List of NotificationRule if patterns match, empty list otherwise
+        """
+        # Use regex patterns similar to euro_aip CustomInterpreter
+        # Extract weekday/weekend patterns
+        # Return structured rules or empty list
+    
+    def _llm_extract_rules(
+        self,
+        icao: str,
+        text: str,
+        section: str,
+        field_name: str
+    ) -> List[NotificationRule]:
+        """
+        Extract rules using LLM (for complex/ambiguous cases).
+        
+        Prompt includes:
+            - Example patterns and expected output
+            - Schema for NotificationRule
+            - Instructions to handle:
+                - Weekday ranges (Mon-Fri, Tue-Thu, etc.)
+                - Business day requirements
+                - Specific times
+                - Conditional rules (holidays, seasons)
+        """
+        # Build prompt with text and examples
+        # Invoke LLM chain
+        # Parse structured output
+        # Track token usage
+        # Return list of NotificationRule
+```
+
+### 2.6 Rule Summarizer (`aip/rule_summarizer.py`)
+
+**Purpose:** Convert detailed structured rules into:
+1. **Human-readable summary** for UI (e.g., "24h weekdays, 48h weekends")
+2. **Normalized hassle score** [0, 1] for feature engineering
+
+**Scoring Logic:**
+- Base score from `notification_hours`:
+  - No notification (H24, O/R) → 1.0 (low hassle)
+  - 48+ hours → 0.7
+  - 24 hours → 0.5
+  - 12 hours → 0.3
+  - < 12 hours → 0.1 (high hassle)
+- Complexity penalties:
+  - Multiple rules → -0.1 per additional rule
+  - Weekday-specific → -0.1
+  - Business day requirements → -0.15
+  - Specific time requirements → -0.1
+- Final score clamped to [0, 1]
+
+```python
+# aip/rule_summarizer.py - Generate high-level summaries from detailed rules
+
+class RuleSummary(BaseModel):
+    """High-level summary of notification requirements."""
+    notification_summary: str  # Human-readable: "24h weekdays, 48h weekends"
+    hassle_level: str  # 'low', 'moderate', 'high', 'very_high'
+    notification_score: float  # Normalized [0, 1] for scoring
+
+class AIPRuleSummarizer:
+    """
+    Generates high-level summaries from detailed notification rules.
+    
+    Two purposes:
+        1. Human-readable summary for UI
+        2. Normalized score for ga_hassle_score feature
+    """
+    
+    def __init__(
+        self,
+        llm_model: str,
+        llm_temperature: float = 0.0,
+        api_key: Optional[str] = None
+    ):
+        """
+        Initialize summarizer with LLM.
+        
+        Creates LangChain chain for rule summarization.
+        """
+        # Build prompt template
+        # Create ChatOpenAI instance
+        # Create JSON output parser
+        # Chain: prompt | llm | parser
+    
+    def summarize_rules(
+        self,
+        icao: str,
+        rules: ParsedAIPRules
+    ) -> RuleSummary:
+        """
+        Generate high-level summary from detailed rules.
+        
+        Args:
+            icao: Airport ICAO code
+            rules: Parsed notification rules
+        
+        Returns:
+            RuleSummary with summary text, hassle level, and score
+        
+        Process:
+            1. Analyze rule complexity (number of rules, time requirements)
+            2. Generate human-readable summary
+            3. Assign hassle level based on complexity
+            4. Calculate normalized score [0, 1]
+                - 0.0 = no notification required
+                - 1.0 = very complex (multiple rules, short notice, weekday-specific)
+        """
+        # Build prompt with rules
+        # Invoke LLM for summary text and hassle level
+        # Calculate score from rules:
+        #   - Base score from notification_hours (shorter = higher hassle)
+        #   - Complexity penalty (multiple rules, weekday-specific)
+        #   - Business day requirements add complexity
+        #   - Specific time requirements add complexity
+        #   - Clamp to [0, 1]
+        # Return RuleSummary
+    
+    def calculate_hassle_score(self, rules: List[NotificationRule]) -> float:
+        """
+        Calculate normalized hassle score from rules.
+        
+        Returns:
+            Score [0, 1] where 1.0 = low hassle, 0.0 = high hassle
+        """
+        if not rules:
+            return 1.0  # No rules = no hassle
+        
+        # Find minimum notification hours (most restrictive)
+        min_hours = min(
+            (r.notification_hours for r in rules 
+             if r.notification_hours is not None and r.notification_type == 'hours'),
+            default=None
+        )
+        
+        # Base score from hours
+        if min_hours is None:
+            # Check for H24 or O/R
+            if any(r.notification_type in ['h24', 'on_request'] for r in rules):
+                base_score = 1.0
+            else:
+                base_score = 0.5  # Unknown/ambiguous
+        else:
+            # Map hours to score
+            if min_hours >= 48:
+                base_score = 0.7
+            elif min_hours >= 24:
+                base_score = 0.5
+            elif min_hours >= 12:
+                base_score = 0.3
+            else:
+                base_score = 0.1
+        
+        # Complexity penalties
+        penalty = 0.0
+        if len(rules) > 1:
+            penalty += 0.1 * (len(rules) - 1)  # Multiple rules
+        if any(r.weekday_start is not None or r.weekday_end is not None for r in rules):
+            penalty += 0.1  # Weekday-specific
+        if any(r.notification_type == 'business_day' for r in rules):
+            penalty += 0.15  # Business day requirements
+        if any(r.specific_time is not None for r in rules):
+            penalty += 0.1  # Specific time requirements
+        
+        # Apply penalty and clamp
+        final_score = max(0.0, min(1.0, base_score - penalty))
+        return final_score
+```
+
+### 2.7 Integration with Builder
+
+```python
+# In builder.py
+
+class GAFriendlinessBuilder:
+    def __init__(self, ..., enable_aip_parsing: bool = False):
+        """
+        Args:
+            enable_aip_parsing: If True, parse AIP rules in addition to reviews
+        """
+        # ... existing initialization ...
+        # If enable_aip_parsing:
+        #   Create AIPSource, AIPRuleParser, AIPRuleSummarizer
+    
+    def build(
+        self,
+        reviews_source: ReviewSource,
+        euro_aip_path: Optional[Path] = None,
+        parse_aip_rules: bool = False,
+        ...
+    ) -> BuildResult:
+        """
+        Args:
+            parse_aip_rules: If True, parse AIP rules from euro_aip.sqlite
+        """
+        # ... existing review processing ...
+        
+        # Optional: Parse AIP rules
+        if parse_aip_rules and euro_aip_path:
+            self.process_aip_rules(euro_aip_path, incremental=incremental, since=since)
+    
+    def process_aip_rules(
+        self,
+        euro_aip_path: Path,
+        incremental: bool = False,
+        since: Optional[datetime] = None,
+        icaos: Optional[List[str]] = None
+    ) -> None:
+        """
+        Process AIP rules for airports.
+        
+        Pipeline:
+            1. Load AIP text from euro_aip.sqlite
+            2. Filter for incremental if requested
+            3. For each airport:
+                a. Parse rules (LLM)
+                b. Store detailed rules in ga_notification_requirements
+                c. Generate summary (LLM)
+                d. Store summary in ga_aip_rule_summary
+                e. Update ga_airfield_stats.notification_hassle_score
+        4. Update metadata
+        
+        Args:
+            euro_aip_path: Path to euro_aip.sqlite
+            incremental: Only process changed airports
+            since: Only process if AIP changed since this date
+            icaos: Optional list of specific ICAOs
+        """
+        aip_source = AIPSource(euro_aip_path)
+        
+        # Get airports to process
+        if icaos:
+            airports = icaos
+        else:
+            airports = aip_source.get_all_airports()
+        
+        # Filter for incremental
+        if incremental:
+            filtered_airports = []
+            for icao in airports:
+                # Check if AIP data changed
+                last_aip_change = aip_source.get_last_aip_change_timestamp(icao)
+                last_processed = self.storage.get_last_aip_processed_timestamp(icao)
+                
+                # Process if:
+                #   - Never processed (last_processed is None)
+                #   - AIP changed since last processed
+                #   - Since date provided and AIP changed after since
+                should_process = (
+                    last_processed is None or
+                    (last_aip_change and last_aip_change > last_processed) or
+                    (since and last_aip_change and last_aip_change > since)
+                )
+                
+                if should_process:
+                    filtered_airports.append(icao)
+            airports = filtered_airports
+            logger.info(
+                "aip_incremental_filter",
+                airports_before=len(airports) + (len(filtered_airports) - len(airports)),
+                airports_after=len(filtered_airports),
+                since=since.isoformat() if since else None
+            )
+        
+        # Process each airport
+        with self.storage:
+            for icao in airports:
+                try:
+                    # Get AIP text
+                    aip_text = aip_source.get_airport_aip_text(icao)
+                    if not aip_text:
+                        continue
+                    
+                    # Parse rules
+                    parsed_rules = self.aip_rule_parser.parse_rules(icao, aip_text)
+                    
+                    # Store detailed rules
+                    self.storage.write_notification_requirements(icao, parsed_rules.notification_rules)
+                    
+                    # Generate summary
+                    summary = self.aip_rule_summarizer.summarize_rules(icao, parsed_rules)
+                    
+                    # Store summary
+                    self.storage.write_aip_rule_summary(icao, summary)
+                    
+                    # Update ga_airfield_stats.notification_hassle_score
+                    # This feeds into ga_hassle_score feature
+                    self.storage.update_notification_hassle_score(icao, summary.notification_score)
+                    
+                    # Update last processed timestamp
+                    self.storage.update_last_aip_processed_timestamp(icao, datetime.utcnow())
+                    
+                except Exception as e:
+                    logger.error("aip_rule_processing_failed", icao=icao, error=str(e))
+                    # Handle based on failure_mode
+```
+
+### 2.8 Storage Extensions
+
+```python
+# In storage.py
+
+class GAMetaStorage:
+    def write_notification_requirements(
+        self,
+        icao: str,
+        rules: List[NotificationRule]
+    ) -> None:
+        """
+        Write notification requirements to ga_notification_requirements.
+        
+        Clears existing rules for this icao first (idempotent rebuild).
+        """
+        # DELETE existing rules for icao
+        # INSERT new rules
+        # Use executemany for efficiency
+    
+    def write_aip_rule_summary(
+        self,
+        icao: str,
+        summary: RuleSummary
+    ) -> None:
+        """Insert or update ga_aip_rule_summary."""
+        # UPSERT
+    
+    def update_notification_hassle_score(
+        self,
+        icao: str,
+        score: float
+    ) -> None:
+        """Update notification_hassle_score in ga_airfield_stats."""
+        # UPDATE ga_airfield_stats SET notification_hassle_score = ? WHERE icao = ?
+    
+    def get_last_aip_processed_timestamp(self, icao: str) -> Optional[datetime]:
+        """Get when AIP rules were last processed for this airport."""
+        # Query ga_meta_info for 'last_aip_processed_{icao}'
+        # Return datetime or None
+    
+    def update_last_aip_processed_timestamp(self, icao: str, timestamp: datetime) -> None:
+        """Update last processed timestamp for AIP rules."""
+        # Store in ga_meta_info: key='last_aip_processed_{icao}', value=ISO timestamp
+```
+
+### 2.9 Feature Integration
+
+```python
+# In features.py
+
+class FeatureMapper:
+    def map_hassle_score(
+        self,
+        distribution: Dict[str, float],  # From review tags
+        notification_hassle_score: Optional[float] = None  # From AIP rules
+    ) -> float:
+        """
+        Map 'bureaucracy' aspect + AIP notification rules to ga_hassle_score.
+        
+        Combines:
+            - Review tags about bureaucracy (from distribution)
+            - AIP notification requirements (from notification_hassle_score)
+        
+        Returns [0, 1] where 1.0 = low hassle, 0.0 = high hassle.
+        """
+        # Get score from review distribution (existing logic)
+        review_score = self._map_bureaucracy_from_reviews(distribution)
+        
+        # Combine with AIP notification score if available
+        if notification_hassle_score is not None:
+            # Weighted combination (e.g., 70% reviews, 30% AIP rules)
+            combined = 0.7 * review_score + 0.3 * notification_hassle_score
+            return combined
+        
+        return review_score
+```
+
+### 2.10 Design Decisions
+
+**Separation of Concerns:**
+- AIP parsing is **optional** and **separate** from review processing
+- Can run independently or together
+- Different NLP pipeline (rule extraction vs. sentiment extraction)
+
+**Two-Stage Processing:**
+- **Stage 1:** Extract detailed structured rules (for operational use)
+- **Stage 2:** Summarize to high-level score (for feature engineering)
+- Both stored for different use cases
+
+**Incremental Updates:**
+- Track `last_aip_processed_{icao}` in ga_meta_info
+- Check `aip_entries_changes` table in euro_aip for changes
+- Only reprocess airports with AIP changes
+
+**Extensibility:**
+- Can add other rule types (handling, customs, etc.)
+- Same pattern: extract → summarize → score
+- Modular design allows adding new rule parsers
+
+**Integration with Feature Engineering:**
+- `notification_hassle_score` from AIP rules feeds into `ga_hassle_score`
+- Combined with review-based bureaucracy tags
+- Weighted combination (e.g., 70% reviews, 30% AIP rules)
+- See `FeatureMapper.map_hassle_score()` for implementation
+
+**Incremental Updates:**
+- Track `last_aip_processed_{icao}` in ga_meta_info
+- Check `aip_entries_changes` table in euro_aip for changes
+- Only reprocess airports with AIP changes
+- Works independently from review processing
+
+**CLI Integration:**
+```bash
+# Parse AIP rules in addition to reviews
+python tools/build_ga_friendliness.py \
+    --airfield-directory-export ... \
+    --euro-aip-db path/to/euro_aip.sqlite \
+    --parse-aip-rules \
+    --incremental
+```
+
+---
+
+## 3. Exception Hierarchy
 
 ### 2.1 Exception Classes (`exceptions.py`)
 
@@ -460,31 +1189,84 @@ class GAMetaStorage:
         Get when airport was last processed.
         
         Returns:
-            Timestamp from ga_meta_info or ga_airfield_stats.last_review_utc,
+            Timestamp from ga_meta_info key 'last_processed_{icao}' or
+            max(ga_airfield_stats.last_review_utc) for this airport,
             or None if airport not processed.
         """
-        # Query for last processed timestamp
+        # Try ga_meta_info first: 'last_processed_{icao}'
+        # If not found, query max(last_review_utc) from ga_airfield_stats
+        # Parse ISO timestamp string to datetime
         # Return datetime or None
+    
+    def get_processed_review_ids(self, icao: str) -> Set[str]:
+        """
+        Get set of review_ids already processed for this airport.
+        
+        Returns:
+            Set of review_id strings that have been extracted and stored.
+        """
+        # Query ga_review_ner_tags for distinct review_ids for this icao
+        # Return set of review_ids
     
     def has_changes(
         self,
         icao: str,
-        reviews: List[RawReview]
+        reviews: List[RawReview],
+        since: Optional[datetime] = None
     ) -> bool:
         """
         Check if airport has new/changed reviews.
         
-        Compares review timestamps with last processed time.
+        Strategy:
+            1. If airport never processed → return True
+            2. If since date provided → check if any review timestamp > since
+            3. Compare review_ids → check for new review_ids
+            4. Compare timestamps → check for updated reviews (same ID, newer timestamp)
+        
+        Args:
+            icao: Airport ICAO code
+            reviews: List of reviews to check
+            since: Optional date filter (only check reviews after this date)
         
         Returns:
             True if reviews have changed since last processing.
         """
+        # Get last processed timestamp
         last_processed = self.get_last_processed_timestamp(icao)
         if last_processed is None:
             return True  # Never processed
         
-        # Check if any review has timestamp > last_processed
-        # Return True if changes detected
+        # Get already processed review_ids
+        processed_ids = self.get_processed_review_ids(icao)
+        
+        # Filter reviews by since date if provided
+        if since:
+            reviews = [r for r in reviews 
+                      if r.timestamp and parse_timestamp(r.timestamp) > since]
+        
+        # Check for new reviews (review_id not in processed_ids)
+        for review in reviews:
+            if review.review_id not in processed_ids:
+                return True  # New review found
+        
+        # Check for updated reviews (same ID but newer timestamp)
+        for review in reviews:
+            if review.review_id in processed_ids and review.timestamp:
+                review_time = parse_timestamp(review.timestamp)
+                if review_time > last_processed:
+                    return True  # Review was updated
+        
+        return False  # No changes detected
+    
+    def update_last_processed_timestamp(self, icao: str, timestamp: datetime) -> None:
+        """
+        Update last processed timestamp for an airport.
+        
+        Stores in ga_meta_info with key 'last_processed_{icao}'.
+        Also updates ga_airfield_stats.last_review_utc if newer.
+        """
+        # Store in ga_meta_info: key='last_processed_{icao}', value=ISO timestamp
+        # Update ga_airfield_stats.last_review_utc if this timestamp is newer
     
     def attach_euro_aip(self, conn: sqlite3.Connection, euro_aip_path: Path) -> None:
         """
@@ -1402,16 +2184,30 @@ class GAFriendlinessBuilder:
             if incremental:
                 filtered_by_icao = {}
                 for icao, airport_reviews in by_icao.items():
+                    # Filter by specific ICAOs if provided
                     if icaos and icao not in icaos:
                         continue
-                    if since:
-                        # Filter reviews by since date
-                        airport_reviews = [r for r in airport_reviews 
-                                         if r.timestamp and parse_timestamp(r.timestamp) > since]
-                    if self.storage.has_changes(icao, airport_reviews):
-                        filtered_by_icao[icao] = airport_reviews
+                    
+                    # Check if airport has changes (includes since date check)
+                    if self.storage.has_changes(icao, airport_reviews, since=since):
+                        # Filter reviews by since date if provided
+                        if since:
+                            airport_reviews = [
+                                r for r in airport_reviews 
+                                if r.timestamp and parse_timestamp(r.timestamp) > since
+                            ]
+                        # Only include if there are reviews to process
+                        if airport_reviews:
+                            filtered_by_icao[icao] = airport_reviews
+                
                 by_icao = filtered_by_icao
                 metrics.airports_total = len(by_icao)
+                logger.info(
+                    "incremental_filter",
+                    airports_before=len(by_icao) + (metrics.airports_total - len(by_icao)),
+                    airports_after=len(by_icao),
+                    since=since.isoformat() if since else None
+                )
             elif icaos:
                 # Filter by specific ICAOs
                 by_icao = {icao: by_icao[icao] for icao in icaos if icao in by_icao}
@@ -1523,7 +2319,13 @@ class GAFriendlinessBuilder:
             # Compute persona scores
             # Build AirportStats (include rating_avg, fee_band_* from airport_stats)
             # Write to storage (within transaction)
-            # Update last_processed_timestamp in metadata
+            # Update last_processed_timestamp for this airport
+            # Use max(review.timestamp) as the processed timestamp
+            max_review_time = max(
+                (parse_timestamp(r.timestamp) for r in reviews if r.timestamp),
+                default=datetime.utcnow()
+            )
+            self.storage.update_last_processed_timestamp(icao, max_review_time)
         except Exception as e:
             logger.error("airport_processing_failed", icao=icao, error=str(e))
             raise BuildError(f"Failed to process airport {icao}: {e}") from e
@@ -1839,7 +2641,9 @@ def main():
             [--since YYYY-MM-DD] \
             [--icaos ICAO1,ICAO2,...] \
             [--failure-mode {continue,fail_fast,skip}] \
-            [--metrics-output path/to/metrics.json]
+            [--metrics-output path/to/metrics.json] \
+            [--euro-aip-db path/to/euro_aip.sqlite] \
+            [--parse-aip-rules]
         
         # From CSV (for testing/manual data):
         python tools/build_ga_friendliness.py \
@@ -1861,7 +2665,10 @@ def main():
     #   - If --reviews-csv: CSVReviewSource
     # Parse failure_mode from args (default: continue)
     # Create GAFriendlinessBuilder with failure_mode
-    # Call builder.build()
+    # Call builder.build() with:
+    #   - reviews_source
+    #   - euro_aip_path (if --euro-aip-db provided)
+    #   - parse_aip_rules (if --parse-aip-rules flag set)
     # Print summary with metrics:
     #   - Success/failure status
     #   - Airports processed/total
@@ -2130,6 +2937,142 @@ def find_airports_near_route_with_ga_friendliness(
 - Existing tools should work **without** ga_meta.sqlite
 - GA friendliness is **opt-in** enhancement
 - Use LEFT JOIN so airports without GA data still appear
+
+---
+
+## 13.1 Incremental Update Strategy
+
+### 13.1.1 Change Detection Methods
+
+The incremental update system uses **multiple strategies** to detect changes:
+
+1. **Review ID Tracking:**
+   - Store processed `review_id`s in `ga_review_ner_tags` table
+   - Compare incoming reviews against stored review_ids
+   - New review_ids → new reviews to process
+
+2. **Timestamp Comparison:**
+   - Track `last_processed_timestamp` per airport in `ga_meta_info`
+   - Compare review timestamps against last processed time
+   - Updated reviews (same ID, newer timestamp) → need reprocessing
+
+3. **Date Filtering:**
+   - `--since` flag filters reviews by date before change detection
+   - Useful for processing only recent reviews
+
+### 13.1.2 Storage Strategy
+
+**Where to track processed reviews:**
+
+- **Option A:** Use `ga_review_ner_tags.review_id` (already stored)
+  - **Pros:** No extra table, review_ids already indexed
+  - **Cons:** Need to query distinct review_ids per airport
+  
+- **Option B:** Separate `ga_processed_reviews` table
+  - **Pros:** Explicit tracking, faster lookups
+  - **Cons:** Extra table, more complexity
+
+**Choice:** Option A (use existing `ga_review_ner_tags` table)
+- Query: `SELECT DISTINCT review_id FROM ga_review_ner_tags WHERE icao = ?`
+- Efficient with index on `(icao, review_id)`
+
+**Where to track last processed time:**
+
+- Store in `ga_meta_info` with key `last_processed_{icao}`
+- Also update `ga_airfield_stats.last_review_utc` (max of all review timestamps)
+- Allows quick lookup without querying all reviews
+
+### 13.1.3 Update Scenarios
+
+**Scenario 1: New Review Added**
+- Review with new `review_id` appears in source
+- `has_changes()` detects new review_id
+- Process new review, update timestamp
+
+**Scenario 2: Review Updated**
+- Review with existing `review_id` has newer `timestamp`
+- `has_changes()` detects timestamp > last_processed
+- Reprocess review (may have different content/rating)
+
+**Scenario 3: Review Deleted**
+- Review removed from source (not in new export)
+- Current design: Keep old tags in database
+- Future: Could add "deleted" flag or cleanup process
+
+**Scenario 4: Airport Never Processed**
+- Airport not in `ga_airfield_stats`
+- `has_changes()` returns True (never processed)
+- Process all reviews for airport
+
+### 13.1.4 Implementation Details
+
+```python
+# Example: has_changes() logic flow
+
+def has_changes(icao, reviews, since=None):
+    # 1. Check if airport exists
+    if not airport_exists(icao):
+        return True  # New airport
+    
+    # 2. Get last processed timestamp
+    last_processed = get_last_processed_timestamp(icao)
+    if last_processed is None:
+        return True  # Never processed
+    
+    # 3. Get processed review_ids
+    processed_ids = get_processed_review_ids(icao)
+    
+    # 4. Filter by since date if provided
+    if since:
+        reviews = [r for r in reviews if r.timestamp > since]
+    
+    # 5. Check for new reviews
+    for review in reviews:
+        if review.review_id not in processed_ids:
+            return True  # New review
+    
+    # 6. Check for updated reviews
+    for review in reviews:
+        if review.review_id in processed_ids:
+            if review.timestamp > last_processed:
+                return True  # Review updated
+    
+    return False  # No changes
+```
+
+### 13.1.5 Performance Considerations
+
+**Indexing:**
+- Index on `ga_review_ner_tags(icao, review_id)` for fast lookups
+- Index on `ga_review_ner_tags(icao, created_utc)` for timestamp queries
+
+**Query Optimization:**
+- Use `SELECT DISTINCT review_id` instead of loading all tags
+- Cache processed_ids per airport during build (avoid repeated queries)
+- Batch check multiple airports in single query if possible
+
+**Incremental vs Full Rebuild:**
+- **Incremental:** Fast for small changes, requires change detection logic
+- **Full rebuild:** Simpler, always correct, but slower
+- **Recommendation:** Use incremental for regular updates, full rebuild periodically (e.g., weekly)
+
+### 13.1.6 Edge Cases
+
+1. **Multiple Sources:**
+   - Different sources may have same review_id format
+   - Solution: Prefix review_id with source identifier (e.g., "airfield.directory#...")
+
+2. **Timestamp Precision:**
+   - Reviews may have timestamps in different formats/timezones
+   - Solution: Normalize to UTC, parse ISO format consistently
+
+3. **Missing Timestamps:**
+   - Some reviews may not have timestamps
+   - Solution: Treat as "always process" or use review_id only
+
+4. **Clock Skew:**
+   - System clock vs source timestamps may differ
+   - Solution: Use source timestamps, not system time
 
 ---
 
