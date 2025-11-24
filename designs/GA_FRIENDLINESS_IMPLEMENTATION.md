@@ -1187,30 +1187,107 @@ class FeatureMapper:
 # builder.py - Main pipeline orchestrator
 
 import structlog
-from typing import Optional
+from typing import Optional, Dict, List, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass, field
+from enum import Enum
 
 logger = structlog.get_logger(__name__)
 
 @dataclass
 class BuildMetrics:
-    """Track build statistics."""
+    """
+    Track comprehensive build statistics.
+    
+    Includes:
+        - Processing counts (airports, reviews)
+        - LLM usage (calls, tokens, costs)
+        - Error tracking (counts, failed airports)
+        - Timing information
+        - Cache hits/misses
+    """
+    # Processing counts
     airports_processed: int = 0
+    airports_total: int = 0
     reviews_extracted: int = 0
+    reviews_total: int = 0
+    
+    # LLM usage
     llm_calls: int = 0
-    llm_tokens_used: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_total_tokens: int = 0
+    llm_cost_usd: float = 0.0
+    
+    # Error tracking
     errors: int = 0
     failed_icaos: List[str] = field(default_factory=list)
+    error_details: List[Tuple[str, str]] = field(default_factory=list)  # (icao, error_message)
+    
+    # Cache statistics
+    cache_hits: int = 0
+    cache_misses: int = 0
+    
+    # Timing
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    
+    def calculate_duration(self) -> float:
+        """Calculate duration in seconds."""
+        if self.start_time and self.end_time:
+            self.duration_seconds = (self.end_time - self.start_time).total_seconds()
+            return self.duration_seconds
+        return 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary for JSON serialization."""
+        return {
+            "airports_processed": self.airports_processed,
+            "airports_total": self.airports_total,
+            "reviews_extracted": self.reviews_extracted,
+            "reviews_total": self.reviews_total,
+            "llm_calls": self.llm_calls,
+            "llm_input_tokens": self.llm_input_tokens,
+            "llm_output_tokens": self.llm_output_tokens,
+            "llm_total_tokens": self.llm_total_tokens,
+            "llm_cost_usd": self.llm_cost_usd,
+            "errors": self.errors,
+            "failed_icaos": self.failed_icaos,
+            "error_details": self.error_details,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "duration_seconds": self.duration_seconds,
+        }
 
 @dataclass
 class BuildResult:
-    """Result of build operation."""
+    """
+    Result of build operation.
+    
+    Includes success status, comprehensive metrics, and any errors.
+    """
     success: bool
     metrics: BuildMetrics
     error: Optional[Exception] = None
+    error_message: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary for JSON serialization."""
+        return {
+            "success": self.success,
+            "metrics": self.metrics.to_dict(),
+            "error": str(self.error) if self.error else None,
+            "error_message": self.error_message,
+        }
+
+class FailureMode(str, Enum):
+    """How to handle failures during build."""
+    CONTINUE = "continue"  # Continue processing on errors, collect all failures
+    FAIL_FAST = "fail_fast"  # Stop immediately on first error
+    SKIP = "skip"  # Skip failed airports, continue with others (same as CONTINUE but clearer intent)
 
 class GAFriendlinessBuilder:
     """
@@ -1221,7 +1298,8 @@ class GAFriendlinessBuilder:
         - Incremental updates
         - Dependency injection for testing
         - Progress tracking
-        - Error handling with partial failure support
+        - Error handling with configurable failure modes
+        - Comprehensive metrics collection
     """
     
     def __init__(
@@ -1232,13 +1310,23 @@ class GAFriendlinessBuilder:
         extractor: Optional[ReviewExtractor] = None,
         aggregator: Optional[TagAggregator] = None,
         feature_mapper: Optional[FeatureMapper] = None,
-        persona_manager: Optional[PersonaManager] = None
+        persona_manager: Optional[PersonaManager] = None,
+        failure_mode: FailureMode = FailureMode.CONTINUE
     ):
         """
         Initialize builder with settings and optional dependency injection.
         
         If dependencies not provided, creates them from settings.
         Useful for testing with mocks.
+        
+        Args:
+            settings: Configuration settings
+            storage: Optional storage instance (for testing)
+            extractor: Optional extractor instance (for testing)
+            aggregator: Optional aggregator instance (for testing)
+            feature_mapper: Optional feature mapper instance (for testing)
+            persona_manager: Optional persona manager instance (for testing)
+            failure_mode: How to handle failures (CONTINUE, FAIL_FAST, SKIP)
         
         Loads:
             - Ontology
@@ -1248,6 +1336,7 @@ class GAFriendlinessBuilder:
             - Initializes NLP components
         """
         # Store settings
+        # Store failure_mode
         # Load ontology and personas
         # Load feature mappings if configured
         # Create or use injected dependencies:
@@ -1281,7 +1370,7 @@ class GAFriendlinessBuilder:
                 e. Compute persona scores
                 f. Write to database (in transaction)
             5. Write metadata (versions, timestamps)
-            6. Return build result with metrics
+            6. Return build result with comprehensive metrics
         
         Args:
             reviews_source: Provides reviews (see ReviewSource interface)
@@ -1291,42 +1380,114 @@ class GAFriendlinessBuilder:
             icaos: Optional list of specific ICAOs to process
         
         Returns:
-            BuildResult with success status, metrics, and any errors
+            BuildResult with success status, comprehensive metrics, and any errors
         """
         metrics = BuildMetrics()
         metrics.start_time = datetime.utcnow()
         
         try:
             # Load reviews
+            all_reviews = reviews_source.get_reviews()
+            metrics.reviews_total = len(all_reviews)
+            
             # Group by ICAO
+            by_icao: Dict[str, List[RawReview]] = {}
+            for review in all_reviews:
+                if review.icao not in by_icao:
+                    by_icao[review.icao] = []
+                by_icao[review.icao].append(review)
+            metrics.airports_total = len(by_icao)
+            
             # Filter for incremental if requested:
-            #   - Check storage.has_changes() for each ICAO
-            #   - Filter by since date if provided
-            #   - Filter by icaos if provided
+            if incremental:
+                filtered_by_icao = {}
+                for icao, airport_reviews in by_icao.items():
+                    if icaos and icao not in icaos:
+                        continue
+                    if since:
+                        # Filter reviews by since date
+                        airport_reviews = [r for r in airport_reviews 
+                                         if r.timestamp and parse_timestamp(r.timestamp) > since]
+                    if self.storage.has_changes(icao, airport_reviews):
+                        filtered_by_icao[icao] = airport_reviews
+                by_icao = filtered_by_icao
+                metrics.airports_total = len(by_icao)
+            elif icaos:
+                # Filter by specific ICAOs
+                by_icao = {icao: by_icao[icao] for icao in icaos if icao in by_icao}
+                metrics.airports_total = len(by_icao)
             
             # Process each ICAO (with progress tracking)
             with self.storage:  # Transaction context
                 for icao, airport_reviews in by_icao.items():
                     try:
-                        logger.info("processing_airport", icao=icao, review_count=len(airport_reviews))
+                        logger.info(
+                            "processing_airport",
+                            icao=icao,
+                            review_count=len(airport_reviews),
+                            progress=f"{metrics.airports_processed}/{metrics.airports_total}"
+                        )
+                        
+                        # Process airport (tracks LLM usage internally)
                         self.process_airport(icao, airport_reviews, ...)
+                        
                         metrics.airports_processed += 1
+                        metrics.reviews_extracted += len(airport_reviews)
+                        
+                        # Update LLM metrics from extractor
+                        if hasattr(self.extractor, 'token_usage'):
+                            metrics.llm_calls += getattr(self.extractor, 'llm_calls', 0)
+                            metrics.llm_input_tokens += self.extractor.token_usage.get('input_tokens', 0)
+                            metrics.llm_output_tokens += self.extractor.token_usage.get('output_tokens', 0)
+                        
                         logger.info("airport_processed", icao=icao)
+                        
                     except Exception as e:
-                        logger.error("airport_failed", icao=icao, error=str(e))
+                        error_msg = str(e)
+                        logger.error("airport_failed", icao=icao, error=error_msg)
+                        
                         metrics.errors += 1
                         metrics.failed_icaos.append(icao)
-                        # Continue processing other airports
+                        metrics.error_details.append((icao, error_msg))
+                        
+                        # Handle based on failure mode
+                        if self.failure_mode == FailureMode.FAIL_FAST:
+                            raise BuildError(f"Failed to process airport {icao}: {e}") from e
+                        # Otherwise continue (CONTINUE or SKIP mode)
             
             # Write metadata (versions, timestamps)
-            # Log completion
+            self.storage.write_meta_info("build_timestamp", datetime.utcnow().isoformat())
+            self.storage.write_meta_info("source_version", reviews_source.get_source_version())
+            
+            # Calculate final metrics
             metrics.end_time = datetime.utcnow()
-            return BuildResult(success=True, metrics=metrics)
+            metrics.calculate_duration()
+            metrics.llm_total_tokens = metrics.llm_input_tokens + metrics.llm_output_tokens
+            # Calculate cost based on model pricing (if available)
+            
+            # Log completion
+            logger.info(
+                "build_complete",
+                airports_processed=metrics.airports_processed,
+                airports_total=metrics.airports_total,
+                errors=metrics.errors,
+                duration_seconds=metrics.duration_seconds,
+                llm_cost_usd=metrics.llm_cost_usd
+            )
+            
+            success = metrics.errors == 0 or self.failure_mode != FailureMode.FAIL_FAST
+            return BuildResult(success=success, metrics=metrics)
             
         except Exception as e:
             logger.error("build_failed", error=str(e))
             metrics.end_time = datetime.utcnow()
-            return BuildResult(success=False, metrics=metrics, error=e)
+            metrics.calculate_duration()
+            return BuildResult(
+                success=False,
+                metrics=metrics,
+                error=e,
+                error_message=str(e)
+            )
     
     def process_airport(
         self,
@@ -1676,7 +1837,9 @@ def main():
             [--never-refresh] \
             [--incremental] \
             [--since YYYY-MM-DD] \
-            [--icaos ICAO1,ICAO2,...]
+            [--icaos ICAO1,ICAO2,...] \
+            [--failure-mode {continue,fail_fast,skip}] \
+            [--metrics-output path/to/metrics.json]
         
         # From CSV (for testing/manual data):
         python tools/build_ga_friendliness.py \
@@ -1696,9 +1859,18 @@ def main():
     # Create ReviewSource based on input type:
     #   - If --airfield-directory-export: AirfieldDirectorySource
     #   - If --reviews-csv: CSVReviewSource
-    # Create GAFriendlinessBuilder
+    # Parse failure_mode from args (default: continue)
+    # Create GAFriendlinessBuilder with failure_mode
     # Call builder.build()
-    # Print summary
+    # Print summary with metrics:
+    #   - Success/failure status
+    #   - Airports processed/total
+    #   - Reviews extracted/total
+    #   - LLM usage (calls, tokens, cost)
+    #   - Errors (count, failed ICAOs)
+    #   - Duration
+    # Write metrics to JSON file if --metrics-output provided
+    # Exit with appropriate code (0 for success, 1 for failure)
 
 def create_airfield_directory_source(
     export_path: Path,
@@ -1743,11 +1915,86 @@ def create_composite_source(
     # Create CompositeReviewSource
     # Return
 
+def parse_timestamp(timestamp_str: str) -> datetime:
+    """
+    Parse ISO format timestamp string to datetime.
+    
+    Handles various ISO formats:
+        - "2025-08-15T00:00:00.000Z"
+        - "2025-08-15 00:00:00 UTC"
+        - etc.
+    """
+    # Parse ISO format
+    # Return datetime object
+
 # Additional CLI commands (future):
 # - validate-ontology: Validate ontology.json
 # - validate-personas: Validate personas.json
 # - compute-scores: Recompute scores for existing ga_meta.sqlite (without re-extraction)
+
+def print_build_summary(result: BuildResult) -> None:
+    """
+    Print human-readable build summary to console.
+    
+    Includes:
+        - Success/failure status
+        - Processing statistics
+        - LLM usage and costs
+        - Error summary
+        - Duration
+    """
+    # Format and print summary
+    # Use rich or similar for nice formatting
+
+def save_metrics_json(result: BuildResult, output_path: Path) -> None:
+    """
+    Save build metrics to JSON file.
+    
+    Args:
+        result: BuildResult to serialize
+        output_path: Path to output JSON file
+    """
+    # Convert result to dict
+    # Write JSON file
+    # Pretty-print for readability
 ```
+
+**Metrics Output Format:**
+
+The `--metrics-output` flag writes a JSON file with the following structure:
+
+```json
+{
+  "success": true,
+  "metrics": {
+    "airports_processed": 150,
+    "airports_total": 150,
+    "reviews_extracted": 1250,
+    "reviews_total": 1250,
+    "llm_calls": 2500,
+    "llm_input_tokens": 125000,
+    "llm_output_tokens": 15000,
+    "llm_total_tokens": 140000,
+    "llm_cost_usd": 2.50,
+    "errors": 0,
+    "failed_icaos": [],
+    "error_details": [],
+    "cache_hits": 120,
+    "cache_misses": 30,
+    "start_time": "2025-11-23T10:00:00Z",
+    "end_time": "2025-11-23T10:45:00Z",
+    "duration_seconds": 2700.0
+  },
+  "error": null,
+  "error_message": null
+}
+```
+
+**Failure Mode Options:**
+
+- `continue` (default): Continue processing on errors, collect all failures in metrics
+- `fail_fast`: Stop immediately on first error, raise exception
+- `skip`: Same as continue, but clearer intent (skip failed airports, continue with others)
 
 **Design Decision: CLI Tool Location**
 
@@ -2023,6 +2270,18 @@ def test_known_expensive_airport_scores()
 - **Rationale:** Better observability, easier debugging, progress tracking
 - **Implementation:** Structured log events with context (icao, review_count, etc.)
 
+### 15.18 Build Metrics & Partial Failure Handling
+- **Choice:** Comprehensive metrics tracking with configurable failure modes
+- **Rationale:** 
+  - Monitor build progress and costs
+  - Flexible error handling (continue vs fail-fast)
+  - Detailed error reporting for debugging
+- **Implementation:**
+  - `BuildMetrics` dataclass with LLM usage, timing, errors
+  - `FailureMode` enum (CONTINUE, FAIL_FAST, SKIP)
+  - Metrics export to JSON
+  - Partial failure support (continue on individual airport errors)
+
 ---
 
 ## 16. Open Questions & Decisions
@@ -2087,11 +2346,15 @@ def test_known_expensive_airport_scores()
 1. Implement GAFriendlinessBuilder with dependency injection
 2. Add incremental update support
 3. Add structured logging and progress tracking
-4. Add error handling and partial failure support
-5. Implement CSVReviewSource
-6. Create CLI tool with all flags
-7. Add resource management (context managers)
-8. End-to-end test with sample data
+4. Implement BuildMetrics and BuildResult classes
+5. Add error handling with configurable failure modes
+6. Add comprehensive metrics collection (LLM usage, timing, errors)
+7. Add metrics export to JSON
+8. Implement CSVReviewSource
+9. Create CLI tool with all flags (including failure-mode, metrics-output)
+10. Add resource management (context managers)
+11. End-to-end test with sample data
+12. Test failure modes (continue, fail_fast, skip)
 
 ### Phase 5: Web Integration (Future)
 1. API endpoints
