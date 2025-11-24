@@ -2572,8 +2572,19 @@ class GAFriendlinessBuilder:
                             progress=f"{metrics.airports_processed}/{metrics.airports_total}"
                         )
                         
+                        # Optionally fetch airport stats (fees, rating) from individual JSON
+                        airport_stats = None
+                        if isinstance(reviews_source, AirfieldDirectorySource) and reviews_source.fetch_fees:
+                            airport_stats = reviews_source.get_airport_stats(icao)
+                            # Track cache hits/misses in metrics
+                        
                         # Process airport (tracks LLM usage internally)
-                        self.process_airport(icao, airport_reviews, ...)
+                        self.process_airport(
+                            icao,
+                            airport_reviews,
+                            aip_data=None,  # Optional: fetch from euro_aip if available
+                            airport_stats=airport_stats  # Fees and rating from individual JSON
+                        )
                         
                         metrics.airports_processed += 1
                         metrics.reviews_extracted += len(airport_reviews)
@@ -2863,41 +2874,67 @@ Based on the actual airfield.directory API structure, here's the concrete implem
 ```python
 # In tools/build_ga_friendliness.py or shared/ga_friendliness/sources.py
 
-class AirfieldDirectorySource(ReviewSource):
+class AirfieldDirectorySource(ReviewSource, CachedDataLoader):
     """
-    Loads reviews from airfield.directory bulk export.
+    Loads reviews and fees from airfield.directory.
     
-    Supports:
-        - Individual airport JSON: https://airfield.directory/airfield/{ICAO}.json
-        - Bulk export: S3 bucket airfield-directory-pirep-export
-        - Format: airfield-directory-pireps-export-latest.json.gz
+    Supports two data access patterns:
+    
+    1. **Bulk Export (S3):** Single download with all reviews (no fees)
+       - Format: `airfield-directory-pireps-export-latest.json.gz`
+       - Structure: `{"metadata": {...}, "pireps": {"ICAO": {"ICAO#id": {...}}}}`
+       - Contains: Reviews only (PIREPs), no aerops data
+    
+    2. **Individual Airport JSON (API):** One ICAO at a time (reviews + fees)
+       - URL: `https://airfield.directory/airfield/{ICAO}.json`
+       - Structure: `{"airfield": {...}, "aerops": {...}, "pireps": {...}}`
+       - Contains: Reviews + fees + aerops data + airport metadata
+    
+    **Usage Strategy:**
+    - Use bulk export for reviews (efficient, one download for all airports)
+    - Optionally fetch individual JSON for fees (when needed, with caching)
+    - Can also use individual JSON for everything if preferred (less efficient but simpler)
     """
     
     def __init__(
         self,
-        export_path: Path,  # Path to .json or .json.gz file
+        export_path: Optional[Path] = None,  # Path to bulk export .json/.json.gz file (None = download from S3)
+        cache_dir: Path,  # Cache directory for downloaded data
         filter_ai_generated: bool = True,  # Filter out AI-generated reviews
-        preferred_language: str = "EN"  # Primary language for review text
+        preferred_language: str = "EN",  # Primary language for review text
+        fetch_fees: bool = True,  # If True, fetch individual JSON for fees (slower but complete)
+        max_age_days: int = 7  # Cache bulk export for 7 days
     ):
         """
         Initialize source.
         
         Args:
-            export_path: Path to bulk export JSON file
+            export_path: Path to bulk export JSON file (None = download from S3)
+            cache_dir: Directory for caching downloaded data
             filter_ai_generated: If True, exclude reviews with ai_generated=true
             preferred_language: Language code (EN, DE, IT, FR, ES, NL) for review text
+            fetch_fees: If True, fetch individual airport JSON for fees (requires API calls)
+            max_age_days: Cache age for bulk export (days)
         """
-        # Store config
-        # Load JSON (handle .gz if needed)
-        # Parse structure
+        # Initialize CachedDataLoader with cache_dir
+        # Store config (export_path, filter_ai_generated, preferred_language, fetch_fees)
+        # If export_path provided and exists, use it directly
+        # Otherwise, will download from S3 and cache
     
     def get_reviews(self) -> List[RawReview]:
         """
         Load all reviews from bulk export.
         
-        Structure:
+        Uses bulk export file (either local or downloaded from S3).
+        Bulk export contains reviews only, no fees.
+        
+        Structure (bulk export):
             {
-                "metadata": {...},
+                "metadata": {
+                    "export_date": "2025-11-23T03:03:42Z",
+                    "total_airfields": 2011,
+                    "total_pireps": 2477
+                },
                 "pireps": {
                     "ICAO": {
                         "ICAO#id": {
@@ -2907,7 +2944,7 @@ class AirfieldDirectorySource(ReviewSource):
                             "rating": 4 or null,
                             "likes_count": 0,
                             "user": {...},
-                            "created_at": "2025-08-15T00:00:00.000Z",
+                            "created_at": "2025-08-15 00:00:00 UTC",
                             "updated_at": "...",
                             "ai_generated": true/false
                         }
@@ -2918,16 +2955,28 @@ class AirfieldDirectorySource(ReviewSource):
         Returns:
             List of RawReview objects, one per PIREP
         """
-        # Iterate through pireps dict
-        # For each ICAO, iterate through reviews
-        # Filter ai_generated if configured
-        # Extract review_text from content[preferred_language] or fallback
-        # Map to RawReview:
-        #   - icao: from outer key
-        #   - review_text: content[preferred_language] or first available
-        #   - review_id: id field
-        #   - rating: rating field (can be null)
-        #   - timestamp: created_at or updated_at
+        # If export_path provided and exists:
+        #   - Load from local file (handle .gz if needed)
+        # Else:
+        #   - Get from cache or download from S3
+        #   - Cache key: "bulk_export"
+        #   - URL: https://airfield-directory-pirep-export.s3.amazonaws.com/airfield-directory-pireps-export-latest.json.gz
+        #   - Use get_cached("bulk_export", max_age_days=self.max_age_days, ext="json.gz")
+        
+        # Parse bulk export structure:
+        #   - Iterate through pireps dict
+        #   - For each ICAO, iterate through reviews
+        #   - Filter ai_generated if configured
+        #   - Extract review_text from content[preferred_language] or fallback
+        #   - Map to RawReview:
+        #     - icao: from outer key
+        #     - review_text: content[preferred_language] or first available
+        #     - review_id: "ICAO#id" format
+        #     - rating: rating field (can be null)
+        #     - timestamp: created_at or updated_at (normalize to ISO format)
+        #     - language: language field
+        #     - ai_generated: ai_generated field
+        #     - likes_count: likes_count field
         # Return list
     
     def get_source_version(self) -> str:
@@ -2945,8 +2994,16 @@ class AirfieldDirectorySource(ReviewSource):
         """
         Get airport-level stats from individual airport JSON.
         
-        Note: This requires fetching individual airport JSON files.
-        For bulk processing, this would be called separately if needed.
+        Fetches individual airport JSON which contains:
+        - Reviews (in `pireps.data`)
+        - Fees (in `aerops.data.landing_fees`)
+        - Fuel prices (in `aerops.data.fuel_prices`)
+        - Airport metadata (in `airfield.data`)
+        
+        Uses caching to avoid repeated API calls (30-day cache).
+        
+        Args:
+            icao: Airport ICAO code
         
         Returns:
             Dict with:
@@ -2956,6 +3013,7 @@ class AirfieldDirectorySource(ReviewSource):
                     - Value: List of fee dicts with structure: `[{"lineNet": ..., "price": ..., "tax": ..., "title": ...}]`
                     - **Note:** The `title` field is NOT used for mapping - it varies by airport
                 - fuel_prices: Dict (from aerops.data.fuel_prices)
+                - pireps: Optional[List] - Reviews from individual JSON (if not using bulk export)
         
         **Fee Band Mapping:**
         Landing fees from airfield.directory are organized by aircraft type (e.g., "C172", "SR22").
@@ -2965,37 +3023,58 @@ class AirfieldDirectorySource(ReviewSource):
             - Map MTOW to appropriate fee band (0-749kg, 750-1199kg, 1200-1499kg, 1500-1999kg, 2000-3999kg, 4000+kg)
             - See section 9.0 for detailed mapping logic
         """
-        # Fetch https://airfield.directory/airfield/{ICAO}.json
-        # Extract stats
-        # Return dict
+        # Get from cache or fetch:
+        #   - Cache key: f"airport_{icao}"
+        #   - URL: https://airfield.directory/airfield/{ICAO}.json
+        #   - Use get_cached(f"airport_{icao}", max_age_days=30, ext="json")
+        
+        # Parse individual airport JSON structure:
+        #   - Extract airfield.data.average_rating
+        #   - Extract aerops.data.landing_fees (Dict by aircraft type)
+        #   - Extract aerops.data.fuel_prices
+        #   - Optionally extract pireps.data (if not using bulk export)
+        # Return dict with extracted stats
 ```
 
 **Key Implementation Details:**
 
-1. **Multi-language handling:**
+1. **Data Source Strategy:**
+   - **Bulk Export (Primary):** Used for reviews (efficient, one download for all airports)
+     - Contains: Reviews only (PIREPs)
+     - Structure: `{"metadata": {...}, "pireps": {"ICAO": {"ICAO#id": {...}}}}`
+     - No fees, no aerops data
+   - **Individual Airport JSON (Optional):** Used for fees and additional stats
+     - Contains: Reviews + fees + aerops data + airport metadata
+     - Structure: `{"airfield": {...}, "aerops": {...}, "pireps": {...}}`
+     - Fetched per-airport when `fetch_fees=True`
+     - Cached for 30 days to minimize API calls
+
+2. **Multi-language handling:**
    - Reviews have `content` dict with multiple languages (EN, DE, IT, FR, ES, NL)
    - Use `preferred_language` parameter, fallback to first available
    - Store primary language in `RawReview` for reference
 
-2. **AI-generated filtering:**
+3. **AI-generated filtering:**
    - Reviews have `ai_generated` boolean field
    - Default to filtering these out (can be configured)
    - Matches the jq filter pattern in documentation
 
-3. **Rating handling:**
+4. **Rating handling:**
    - `rating` can be `null` (especially for AI-generated reviews)
    - Store as `Optional[float]` in `RawReview`
-   - Airport-level `average_rating` available in individual airport JSON
+   - Airport-level `average_rating` available in individual airport JSON (`airfield.data.average_rating`)
 
-4. **Landing fees:**
-   - Available in `aerops.data.landing_fees` by aircraft type (PC12, DA42, C172, A210, etc.)
+5. **Landing fees:**
+   - **Only available in individual airport JSON** (`aerops.data.landing_fees`)
+   - **NOT in bulk export** (bulk export has reviews only)
+   - Available by aircraft type (PC12, DA42, C172, A210, etc.)
    - **Important:** The `title` field is NOT standardized and varies by airport (e.g., EDAZ uses "MTOW bis 750kg", EGMC uses "MTOW up to 1499kg")
    - **Solution:** Use aircraft type key (e.g., "C172", "SR22") to look up known MTOW, then map to fee band
    - Mapping from aircraft type → MTOW → fee band:
      - A210 (~600kg) → `fee_band_0_749kg`
      - C172 (~1157kg) → `fee_band_750_1199kg`
      - SR22 (~1542kg) → `fee_band_1200_1499kg`
-     - DA42 (~2000kg) → `fee_band_1500_1999kg`
+     - DA42 (~1999kg) → `fee_band_1500_1999kg`
      - TBM850 (~3350kg) → `fee_band_2000_3999kg`
      - C510 (~4100kg) → `fee_band_4000_plus_kg`
      - PC12 (~4740kg) → `fee_band_4000_plus_kg`
@@ -3004,10 +3083,18 @@ class AirfieldDirectorySource(ReviewSource):
    - Use `lineNet` (net price) or `price` (with tax) depending on requirements
    - See section 9.0 for the complete aircraft type → MTOW mapping table
 
-5. **Bulk export format:**
+6. **Bulk export format:**
    - Nested structure: `pireps[ICAO][review_id]`
    - Need to flatten to list of reviews
    - Metadata includes export date for versioning
+   - **Note:** Timestamp format may differ from individual JSON (check both formats)
+
+7. **Individual airport JSON format:**
+   - Contains complete airport data in one response
+   - `pireps.data` contains reviews (same structure as bulk export, but per-airport)
+   - `aerops.data.landing_fees` contains fees by aircraft type
+   - `airfield.data.average_rating` contains aggregated rating
+   - Can be used as alternative to bulk export if preferred (less efficient but simpler)
 
 **Updated RawReview Model:**
 
@@ -3038,7 +3125,7 @@ def main():
     CLI entry point.
     
     Usage:
-        # From airfield.directory bulk export:
+        # From airfield.directory bulk export (with fees from individual JSON):
         python tools/build_ga_friendliness.py \
             --airfield-directory-export path/to/airfield-directory-pireps-export-latest.json.gz \
             --euro-aip-db path/to/euro_aip.sqlite \
@@ -3047,6 +3134,8 @@ def main():
             --personas data/personas.json \
             [--filter-ai-generated] \
             [--preferred-language EN] \
+            [--fetch-fees] \  # Default: True, fetch individual JSON for fees
+            [--no-fees] \  # Skip fee fetching (faster, but no fee data)
             [--llm-model gpt-4o-mini] \
             [--confidence-threshold 0.5] \
             [--batch-size 50] \
@@ -3058,8 +3147,13 @@ def main():
             [--icaos ICAO1,ICAO2,...] \
             [--failure-mode {continue,fail_fast,skip}] \
             [--metrics-output path/to/metrics.json] \
-            [--euro-aip-db path/to/euro_aip.sqlite] \
             [--parse-aip-rules]
+        
+        # Alternative: Download bulk export from S3 (if export_path not provided):
+        python tools/build_ga_friendliness.py \
+            --airfield-directory-export \  # No path = download from S3
+            --cache-dir path/to/cache \
+            ...
         
         # From CSV (for testing/manual data):
         python tools/build_ga_friendliness.py \
@@ -3096,19 +3190,31 @@ def main():
     # Exit with appropriate code (0 for success, 1 for failure)
 
 def create_airfield_directory_source(
-    export_path: Path,
+    export_path: Optional[Path] = None,  # None = download from S3
+    cache_dir: Path,
     filter_ai_generated: bool = True,
-    preferred_language: str = "EN"
+    preferred_language: str = "EN",
+    fetch_fees: bool = True
 ) -> ReviewSource:
     """
     Create ReviewSource from airfield.directory bulk export.
     
     Args:
-        export_path: Path to .json or .json.gz file
+        export_path: Path to .json or .json.gz file (None = download from S3)
+        cache_dir: Directory for caching downloaded data
         filter_ai_generated: Filter out AI-generated reviews
         preferred_language: Language code for review text
+        fetch_fees: If True, fetch individual airport JSON for fees (slower but complete)
+    
+    Returns:
+        AirfieldDirectorySource instance configured for bulk export + optional fee fetching
     """
-    # Create AirfieldDirectorySource instance
+    # Create AirfieldDirectorySource instance with:
+    #   - export_path (or None)
+    #   - cache_dir
+    #   - filter_ai_generated
+    #   - preferred_language
+    #   - fetch_fees
     # Return
 
 def create_csv_review_source(csv_path: Path) -> ReviewSource:

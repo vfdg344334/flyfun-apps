@@ -448,6 +448,7 @@ For each `icao`:
 1. **Compute label distributions** from `ga_review_ner_tags`:
    - Count occurrences per `(aspect, label)` pair
    - Weight by confidence if configured
+   - **Optional: Time decay** - Weight recent reviews more heavily (exponential decay based on review age)
 
 2. **Map to normalized feature scores** [0, 1]:
    - `ga_cost_score` from `cost` aspect labels
@@ -457,6 +458,7 @@ For each `icao`:
    - `ga_ops_ifr_score` from review tags + AIP data (if available)
    - `ga_ops_vfr_score` from review tags + AIP data (if available)
    - `ga_access_score` from `transport` aspect labels
+   - **Optional: Bayesian smoothing** - For airports with few reviews, smooth scores toward global average to handle small sample sizes
 
 3. **Incorporate numeric ratings:**
    - `rating_avg`, `rating_count` from source
@@ -469,6 +471,11 @@ For each `icao`:
 - Mappings defined in `feature_mappings.json` (optional)
 - Falls back to hard-coded defaults if config not provided
 - Validated against ontology on load
+
+**Optional Extensions:**
+- **Time decay:** Recent reviews weighted more heavily (disabled by default)
+- **Bayesian smoothing:** Small sample sizes pulled toward global prior (disabled by default)
+- Both extensions are optional and can be enabled via configuration
 
 Scores are written to `ga_airfield_stats`.
 
@@ -884,6 +891,7 @@ Exact protocol (HTTP/MCP/etc.) is outside this design; this only defines **what 
 - **Schema versioning** - safe schema evolution
 - **Comprehensive metrics** - track build progress, LLM usage, errors
 - **Configurable failure modes** - continue, fail_fast, or skip on errors
+- **Optional statistical extensions** - Time decay and Bayesian smoothing available but disabled by default for backward compatibility
 
 ### 7.4 Integration Points
 
