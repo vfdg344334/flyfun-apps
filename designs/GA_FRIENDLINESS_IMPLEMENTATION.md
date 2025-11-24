@@ -1131,10 +1131,17 @@ class GAMetaStorage:
         
         Creates database and schema if needed.
         Ensures schema is at current version.
+        
+        **Concurrent Access:**
+        - Uses thread locks for thread-safety
+        - For file-level locking (prevent concurrent builds), use external file lock
+        - SQLite handles concurrent reads, but writes should be serialized
         """
         # Store db_path
         # Get connection (ensures schema version)
         # Create thread lock for thread-safety
+        # Set connection timeout for handling database locked errors
+        #   conn.execute("PRAGMA busy_timeout = 30000")  # 30 seconds
     
     def __enter__(self):
         """Context manager entry: begin transaction."""
@@ -1174,10 +1181,27 @@ class GAMetaStorage:
         Write review tags to ga_review_ner_tags.
         
         Clears existing tags for this icao first (idempotent rebuild).
+        Also handles deleted reviews: removes tags for review_ids not in new tags.
         Thread-safe.
+        
+        Args:
+            icao: Airport ICAO code
+            tags: List of review extractions with tags
         """
         with self._lock:
-            # DELETE existing tags for icao
+            # Get current review_ids for this icao
+            current_review_ids = self.get_processed_review_ids(icao)
+            
+            # Get new review_ids from tags
+            new_review_ids = {tag.review_id for tag in tags if tag.review_id}
+            
+            # Delete tags for review_ids not in new set (deleted reviews)
+            deleted_ids = current_review_ids - new_review_ids
+            if deleted_ids:
+                # DELETE tags for deleted review_ids
+                # This handles review deletions from source
+            
+            # DELETE existing tags for this icao (full rebuild for this airport)
             # INSERT new tags (use executemany for efficiency)
             # Raise StorageError on failure
     
@@ -1258,6 +1282,7 @@ class GAMetaStorage:
             2. If since date provided → check if any review timestamp > since
             3. Compare review_ids → check for new review_ids
             4. Compare timestamps → check for updated reviews (same ID, newer timestamp)
+            5. Check for deleted reviews (review_ids in DB but not in source)
         
         Args:
             icao: Airport ICAO code
@@ -1266,6 +1291,12 @@ class GAMetaStorage:
         
         Returns:
             True if reviews have changed since last processing.
+        
+        **Edge Cases Handled:**
+        - Missing timestamps: Reviews without timestamps are checked by review_id only
+        - Future timestamps: Warn but process anyway (may be data error)
+        - Timestamp precision: Normalized to consistent format (milliseconds)
+        - Deleted reviews: Detected by comparing source review_ids with stored review_ids
         """
         # Get last processed timestamp
         last_processed = self.get_last_processed_timestamp(icao)
@@ -1277,10 +1308,28 @@ class GAMetaStorage:
         
         # Filter reviews by since date if provided
         if since:
-            reviews = [r for r in reviews 
-                      if r.timestamp and parse_timestamp(r.timestamp) > since]
+            filtered_reviews = []
+            for r in reviews:
+                if r.timestamp:
+                    try:
+                        review_time = parse_timestamp(r.timestamp)
+                        # Warn on future timestamps (likely data error)
+                        if review_time > datetime.utcnow():
+                            logger.warning("future_timestamp", icao=icao, review_id=r.review_id, timestamp=r.timestamp)
+                        if review_time > since:
+                            filtered_reviews.append(r)
+                    except ValueError:
+                        logger.warning("invalid_timestamp", icao=icao, review_id=r.review_id, timestamp=r.timestamp)
+                        # Include review anyway (check by ID)
+                        filtered_reviews.append(r)
+                else:
+                    # No timestamp, include if ID is new
+                    if r.review_id not in processed_ids:
+                        filtered_reviews.append(r)
+            reviews = filtered_reviews
         
         # Check for new reviews (review_id not in processed_ids)
+        source_review_ids = {r.review_id for r in reviews}
         for review in reviews:
             if review.review_id not in processed_ids:
                 return True  # New review found
@@ -1288,9 +1337,22 @@ class GAMetaStorage:
         # Check for updated reviews (same ID but newer timestamp)
         for review in reviews:
             if review.review_id in processed_ids and review.timestamp:
-                review_time = parse_timestamp(review.timestamp)
-                if review_time > last_processed:
-                    return True  # Review was updated
+                try:
+                    review_time = parse_timestamp(review.timestamp)
+                    if review_time > last_processed:
+                        return True  # Review was updated
+                except ValueError:
+                    # Invalid timestamp, treat as potentially updated
+                    logger.warning("invalid_timestamp_in_update_check", icao=icao, review_id=review.review_id)
+                    return True
+        
+        # Check for deleted reviews (review_ids in DB but not in source)
+        # This handles case where reviews are removed from source
+        if processed_ids and source_review_ids:
+            deleted_ids = processed_ids - source_review_ids
+            if deleted_ids:
+                logger.info("deleted_reviews_detected", icao=icao, count=len(deleted_ids))
+                return True  # Reviews were deleted, need to reprocess
         
         return False  # No changes detected
     
@@ -1303,6 +1365,16 @@ class GAMetaStorage:
         """
         # Store in ga_meta_info: key='last_processed_{icao}', value=ISO timestamp
         # Update ga_airfield_stats.last_review_utc if this timestamp is newer
+    
+    def get_last_successful_icao(self) -> Optional[str]:
+        """
+        Get last successfully processed ICAO code (for resume capability).
+        
+        Returns:
+            ICAO code of last successfully processed airport, or None if not set.
+        """
+        # Query ga_meta_info for key 'last_successful_icao'
+        # Return ICAO string or None
     
     def attach_euro_aip(self, conn: sqlite3.Connection, euro_aip_path: Path) -> None:
         """
@@ -2004,12 +2076,26 @@ def aggregate_fees_by_band(landing_fees: Dict[str, List[Dict]]) -> Dict[str, Opt
     Args:
         landing_fees: Dict[aircraft_type, List[fee_dict]]
             e.g., {"C172": [{"lineNet": 35.0, ...}], "SR22": [{"lineNet": 70.0, ...}]}
+            Unknown aircraft types are skipped (not in AIRCRAFT_MTOW_MAP)
     
     Returns:
         Dict mapping fee band field names to representative fees (median if multiple)
         e.g., {"fee_band_750_1199kg": 35.0, "fee_band_1200_1499kg": 70.0, ...}
+        All 6 bands included (None for missing bands)
+    
+    **Data Quality:**
+    - Unknown aircraft types are logged but skipped
+    - Multiple fees for same aircraft type: use median
+    - All fees are also stored in ga_landing_fees table (preserves unknown types)
+    - Outlier detection: fees outside reasonable range (e.g., < 0 or > 10000) are logged as warnings
     """
-    # Group fees by band
+    # Group fees by band:
+    #   - For each aircraft_type in landing_fees:
+    #     - Look up MTOW from AIRCRAFT_MTOW_MAP
+    #     - If not found, log warning and skip (unknown aircraft type)
+    #     - Map MTOW to fee band
+    #     - Extract fee value (use lineNet or price, handle multiple fees)
+    #     - Check for outliers (log warning if outside reasonable range)
     # For each band, compute median or representative fee
     # Return dict with all 6 bands (None for missing bands)
 ```
@@ -2426,6 +2512,7 @@ class GAFriendlinessBuilder:
     Supports:
         - Full rebuild
         - Incremental updates
+        - Resume capability (resume from failed builds)
         - Dependency injection for testing
         - Progress tracking
         - Error handling with configurable failure modes
@@ -2483,7 +2570,8 @@ class GAFriendlinessBuilder:
         euro_aip_path: Optional[Path] = None,
         incremental: bool = False,
         since: Optional[datetime] = None,
-        icaos: Optional[List[str]] = None
+        icaos: Optional[List[str]] = None,
+        resume_from: Optional[str] = None
     ) -> BuildResult:
         """
         Main entry point: build ga_meta.sqlite from reviews.
@@ -2508,6 +2596,8 @@ class GAFriendlinessBuilder:
             incremental: If True, only process airports with changes
             since: For incremental mode, only process reviews updated since this date
             icaos: Optional list of specific ICAOs to process
+            resume_from: Optional ICAO code to resume from (skip all airports before this)
+                        Useful for resuming failed builds. Airports are processed in sorted order.
         
         Returns:
             BuildResult with success status, comprehensive metrics, and any errors
@@ -2561,9 +2651,41 @@ class GAFriendlinessBuilder:
                 by_icao = {icao: by_icao[icao] for icao in icaos if icao in by_icao}
                 metrics.airports_total = len(by_icao)
             
+            # Handle resume_from: skip airports before resume point
+            # Sort ICAOs for consistent processing order (important for resume)
+            sorted_icaos = sorted(by_icao.keys())
+            if resume_from:
+                try:
+                    resume_index = sorted_icaos.index(resume_from)
+                    # Skip airports before resume point (exclusive: start from resume ICAO)
+                    sorted_icaos = sorted_icaos[resume_index:]
+                    by_icao = {icao: by_icao[icao] for icao in sorted_icaos}
+                    metrics.airports_total = len(by_icao)
+                    logger.info(
+                        "resuming_from",
+                        resume_icao=resume_from,
+                        skipped_count=resume_index,
+                        remaining_count=len(by_icao)
+                    )
+                except ValueError:
+                    logger.warning(
+                        "resume_icao_not_found",
+                        resume_icao=resume_from,
+                        available_count=len(sorted_icaos),
+                        sample_icaos=sorted_icaos[:10]  # Log first 10 for debugging
+                    )
+                    # Continue with all airports if resume ICAO not found
+                    # (may be intentional if resume ICAO was already processed)
+            else:
+                # No resume, but still sort for consistent order
+                by_icao = {icao: by_icao[icao] for icao in sorted_icaos}
+            
             # Process each ICAO (with progress tracking)
-            with self.storage:  # Transaction context
-                for icao, airport_reviews in by_icao.items():
+            # CRITICAL: Use per-airport transactions for error recovery
+            # If build fails, can resume from last successful airport using --resume-from
+            for icao, airport_reviews in by_icao.items():
+                # Per-airport transaction (allows resume on failure)
+                with self.storage:  # Transaction context
                     try:
                         logger.info(
                             "processing_airport",
@@ -2589,6 +2711,10 @@ class GAFriendlinessBuilder:
                         metrics.airports_processed += 1
                         metrics.reviews_extracted += len(airport_reviews)
                         
+                        # Update checkpoint: store last successfully processed ICAO
+                        # This allows resume even if build fails later
+                        self.storage.write_meta_info("last_successful_icao", icao)
+                        
                         # Update LLM metrics from extractor
                         if hasattr(self.extractor, 'token_usage'):
                             metrics.llm_calls += getattr(self.extractor, 'llm_calls', 0)
@@ -2607,6 +2733,14 @@ class GAFriendlinessBuilder:
                         
                         # Handle based on failure mode
                         if self.failure_mode == FailureMode.FAIL_FAST:
+                            # Store checkpoint before failing (for resume)
+                            # Note: This ICAO failed, so resume should start from next ICAO
+                            # But we store the last successful one (previous ICAO)
+                            if sorted_icaos:
+                                current_index = sorted_icaos.index(icao)
+                                if current_index > 0:
+                                    last_successful = sorted_icaos[current_index - 1]
+                                    self.storage.write_meta_info("last_successful_icao", last_successful)
                             raise BuildError(f"Failed to process airport {icao}: {e}") from e
                         # Otherwise continue (CONTINUE or SKIP mode)
             
@@ -2685,12 +2819,44 @@ class GAFriendlinessBuilder:
                 
                 global_priors = None
                 if self.settings.enable_bayesian_smoothing:
-                    if self.settings.compute_global_priors:
-                        # Compute from all airports in database
-                        global_priors = self.storage.compute_global_priors()
+                    # CRITICAL: Compute priors once at build start, not per-airport
+                    # Check if priors already computed for this build (cached in builder)
+                    if not hasattr(self, '_cached_global_priors'):
+                        if self.settings.compute_global_priors:
+                            # Try to get stored priors from previous build
+                            stored_priors = self.storage.get_global_priors()
+                            if stored_priors:
+                                # Use priors from previous build (deterministic)
+                                global_priors = stored_priors
+                                logger.info("using_stored_priors", priors=global_priors)
+                            else:
+                                # Compute from current database (if airports exist)
+                                global_priors = self.storage.compute_global_priors()
+                                if global_priors:
+                                    # Store for next build
+                                    self.storage.store_global_priors(global_priors)
+                                    logger.info("computed_new_priors", priors=global_priors)
+                                else:
+                                    # No data yet, use fixed defaults
+                                    global_priors = self.settings.global_priors or {
+                                        'ga_cost_score': 0.5,
+                                        'ga_hassle_score': 0.5,
+                                        'ga_review_score': 0.5,
+                                        'ga_ops_ifr_score': 0.5,
+                                        'ga_ops_vfr_score': 0.5,
+                                        'ga_access_score': 0.5,
+                                        'ga_fun_score': 0.5,
+                                    }
+                                    logger.info("using_default_priors", priors=global_priors)
+                        else:
+                            # Use fixed priors from settings
+                            global_priors = self.settings.global_priors or {}
+                        
+                        # Cache in builder instance to avoid recomputing
+                        self._cached_global_priors = global_priors
                     else:
-                        # Use fixed priors from settings
-                        global_priors = self.settings.global_priors or {}
+                        # Use cached priors
+                        global_priors = self._cached_global_priors
                 
                 context = AggregationContext(
                     sample_count=len(reviews),
@@ -2823,13 +2989,21 @@ class CompositeReviewSource(ReviewSource):
             - Deduplication by review_id (if same ID appears in multiple sources)
             - Merging reviews for same airport
             - Preserving source metadata if needed
+            - Prefixing review_id with source identifier to avoid collisions
         
         Returns:
             Combined list of RawReview objects
+        
+        **Review ID Collision Prevention:**
+        - Each source should prefix review_id with source identifier
+        - Example: airfield.directory uses "airfield.directory#ICAO#sha256"
+        - CSV source uses "csv#{original_id}"
+        - This ensures no collisions between sources
         """
         # For each source, call get_reviews()
+        # Prefix review_id with source identifier if not already prefixed
         # Combine lists
-        # Deduplicate by review_id (keep first occurrence or merge)
+        # Deduplicate by review_id (keep first occurrence based on source priority)
         # Return combined list
     
     def get_source_version(self) -> str:
@@ -2971,12 +3145,15 @@ class AirfieldDirectorySource(ReviewSource, CachedDataLoader):
         #   - Map to RawReview:
         #     - icao: from outer key
         #     - review_text: content[preferred_language] or first available
-        #     - review_id: "ICAO#id" format
+        #     - icao: from outer key
+        #     - review_text: content[preferred_language] or first available
+        #     - review_id: "airfield.directory#ICAO#id" (prefix with source identifier)
         #     - rating: rating field (can be null)
-        #     - timestamp: created_at or updated_at (normalize to ISO format)
+        #     - timestamp: created_at or updated_at (normalize to UTC ISO format)
         #     - language: language field
         #     - ai_generated: ai_generated field
         #     - likes_count: likes_count field
+        #     - source: "airfield.directory" (for traceability)
         # Return list
     
     def get_source_version(self) -> str:
@@ -3155,6 +3332,20 @@ def main():
             --cache-dir path/to/cache \
             ...
         
+        # Resume from failed build:
+        python tools/build_ga_friendliness.py \
+            --airfield-directory-export path/to/export.json.gz \
+            --ga-meta-db path/to/ga_meta.sqlite \
+            --resume-from EDAZ \  # Resume from this ICAO (skip all before it)
+            ...
+        
+        # Or automatically resume from last successful ICAO:
+        python tools/build_ga_friendliness.py \
+            --airfield-directory-export path/to/export.json.gz \
+            --ga-meta-db path/to/ga_meta.sqlite \
+            --resume \  # Auto-resume from last successful ICAO
+            ...
+        
         # From CSV (for testing/manual data):
         python tools/build_ga_friendliness.py \
             --reviews-csv path/to/reviews.csv \
@@ -3174,10 +3365,18 @@ def main():
     #   - If --airfield-directory-export: AirfieldDirectorySource
     #   - If --reviews-csv: CSVReviewSource
     # Parse failure_mode from args (default: continue)
+    # Parse resume flags:
+    #   - --resume-from ICAO: Resume from specific ICAO
+    #   - --resume: Auto-resume from last successful ICAO (query from ga_meta_info)
+    #   - If both provided, --resume-from takes precedence
     # Create GAFriendlinessBuilder with failure_mode
     # Call builder.build() with:
     #   - reviews_source
     #   - euro_aip_path (if --euro-aip-db provided)
+    #   - incremental (if --incremental flag)
+    #   - since (if --since provided)
+    #   - icaos (if --icaos provided, comma-separated list)
+    #   - resume_from (if --resume-from or --resume provided)
     #   - parse_aip_rules (if --parse-aip-rules flag set)
     # Print summary with metrics:
     #   - Success/failure status
@@ -3246,15 +3445,31 @@ def create_composite_source(
 
 def parse_timestamp(timestamp_str: str) -> datetime:
     """
-    Parse ISO format timestamp string to datetime.
+    Parse timestamp string to UTC datetime.
     
-    Handles various ISO formats:
-        - "2025-08-15T00:00:00.000Z"
-        - "2025-08-15 00:00:00 UTC"
-        - etc.
+    Handles various formats and normalizes to UTC:
+        - ISO with Z: "2025-08-15T00:00:00.000Z"
+        - ISO with timezone: "2025-08-15T00:00:00+00:00"
+        - Space-separated UTC: "2025-08-15 00:00:00 UTC"
+        - Other common formats
+    
+    **Critical:** All timestamps are normalized to UTC for consistency.
+    Time decay and incremental updates depend on consistent timezone handling.
+    
+    Raises:
+        ValueError if timestamp cannot be parsed
+    
+    Returns:
+        datetime object in UTC (timezone-aware)
     """
-    # Parse ISO format
-    # Return datetime object
+    # Try multiple parsing strategies:
+    #   1. ISO format with Z (datetime.fromisoformat or dateutil.parser)
+    #   2. ISO format with timezone offset
+    #   3. Space-separated UTC format
+    #   4. Other common formats
+    # Normalize to UTC (convert if timezone-aware, assume UTC if naive)
+    # Return timezone-aware datetime in UTC
+    # Raise ValueError if parsing fails
 
 # Additional CLI commands (future):
 # - validate-ontology: Validate ontology.json
