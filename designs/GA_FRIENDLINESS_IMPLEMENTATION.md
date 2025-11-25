@@ -284,7 +284,14 @@ class NotificationRule(BaseModel):
     notification_type: str  # 'hours', 'business_day', 'specific_time'
     specific_time: Optional[str] = None  # e.g., "1300"
     business_day_offset: Optional[int] = None  # e.g., -1 for "last business day"
-    conditions: Optional[Dict] = None  # Additional conditions
+    is_obligatory: bool = True  # Whether notification is mandatory
+    conditions: Optional[Dict] = None  # Additional conditions (holidays, seasons, etc.)
+    # Source tracking fields (populated during storage, not extraction)
+    source_field: Optional[str] = None  # Which AIP field this came from
+    source_section: Optional[str] = None  # Which AIP section (customs, handling, etc.)
+    source_std_field_id: Optional[int] = None  # euro_aip std_field_id (e.g., 302 for customs)
+    aip_entry_id: Optional[str] = None  # Reference to euro_aip entry
+    confidence: float = 1.0  # LLM extraction confidence [0, 1]
 
 class ParsedAIPRules(BaseModel):
     """Complete parsed rules for an airport."""
@@ -503,8 +510,10 @@ class AIPRuleSummarizer:
             2. Generate human-readable summary
             3. Assign hassle level based on complexity
             4. Calculate normalized score [0, 1]
-                - 0.0 = no notification required
-                - 1.0 = very complex (multiple rules, short notice, weekday-specific)
+                - 1.0 = low hassle (no notification required, H24, O/R)
+                - 0.0 = high hassle (complex rules, short notice, weekday-specific)
+        
+        **Score polarity:** Higher = better (consistent with all other ga_*_score values)
         """
         # Build prompt with rules
         # Invoke LLM for summary text and hassle level
@@ -821,7 +830,7 @@ python tools/build_ga_friendliness.py \
 
 ## 3. Exception Hierarchy
 
-### 2.1 Exception Classes (`exceptions.py`)
+### 3.0 Exception Classes (`exceptions.py`)
 
 ```python
 # exceptions.py - Exception hierarchy for ga_friendliness library
@@ -853,6 +862,10 @@ class FeatureMappingError(GAFriendlinessError):
 class BuildError(GAFriendlinessError):
     """Raised when build process fails."""
     pass
+
+class AIPRuleParsingError(GAFriendlinessError):
+    """Raised when AIP rule parsing fails."""
+    pass
 ```
 
 **Design Decision: Exception Hierarchy**
@@ -863,12 +876,36 @@ class BuildError(GAFriendlinessError):
 
 ---
 
-## 3. Core Models & Data Structures
+## 3.2 Core Models & Data Structures
 
-### 2.1 Pydantic Models (`models.py`)
+### 3.2.1 Pydantic Models (`models.py`)
 
 ```python
 # models.py - Data structures using Pydantic for validation
+
+from enum import Enum
+from typing import Dict, List, Optional, Set
+from datetime import datetime
+from pydantic import BaseModel
+
+# --- Raw Input Models ---
+
+class RawReview(BaseModel):
+    """
+    Raw review from any source (airfield.directory, CSV, etc.).
+    
+    Used as input to the NLP extraction pipeline.
+    """
+    icao: str
+    review_text: str
+    review_id: Optional[str] = None  # Unique ID within source
+    rating: Optional[float] = None   # Source rating (e.g., 1-5)
+    timestamp: Optional[str] = None  # ISO format UTC (for time decay)
+    language: Optional[str] = None   # e.g., "EN", "DE"
+    ai_generated: Optional[bool] = None  # If source indicates AI-generated
+    source: str = "unknown"  # Source identifier (e.g., "airfield.directory", "csv")
+
+# --- Extraction Models ---
 
 class AspectLabel(BaseModel):
     """Single label for an aspect (e.g., 'cost': 'expensive')."""
@@ -897,7 +934,7 @@ class PersonaWeights(BaseModel):
     ga_ops_vfr_score: float = 0.0
     ga_access_score: float = 0.0
     ga_fun_score: float = 0.0
-    ga_hospitality_score: float = 0.0  # Restaurant, hotel, accommodation quality
+    ga_hospitality_score: float = 0.0  # Availability/proximity of restaurant and accommodation
 
 class MissingBehavior(str, Enum):
     """
@@ -959,7 +996,7 @@ class AirportFeatureScores(BaseModel):
     ga_ops_vfr_score: float
     ga_access_score: float
     ga_fun_score: float
-    ga_hospitality_score: float  # Restaurant, hotel, accommodation quality [0, 1]
+    ga_hospitality_score: float  # Availability/proximity of restaurant and accommodation [0, 1]
 
 class AirportStats(BaseModel):
     """Aggregated stats for ga_airfield_stats table."""
@@ -985,7 +1022,7 @@ class AirportStats(BaseModel):
     ga_ops_vfr_score: Optional[float]
     ga_access_score: Optional[float]
     ga_fun_score: Optional[float]
-    ga_hospitality_score: Optional[float]  # Restaurant, hotel, accommodation quality
+    ga_hospitality_score: Optional[float]  # Availability/proximity of restaurant and accommodation
     # Versioning
     source_version: str
     scoring_version: str
@@ -995,7 +1032,7 @@ class AirportStats(BaseModel):
 
 ## 4. Configuration Management
 
-### 3.1 Config Loading (`config.py`)
+### 4.1 Config Loading (`config.py`)
 
 ```python
 # config.py - Configuration loading and validation
@@ -1647,7 +1684,7 @@ class CachedDataLoader(ABC):
   - Composition: Use CachedSource if euro_aip available
   - **Rejected:** Adds unnecessary complexity, breaks independence
 
-### 5.2 Caching in Review Sources
+### 6.2 Caching in Review Sources
 
 ```python
 # Example: Cached AirfieldDirectorySource
@@ -1783,7 +1820,7 @@ class OntologyManager:
         # Return list of errors
 ```
 
-### 6.2 Personas (`personas.py`)
+### 7.2 Personas (`personas.py`)
 
 ```python
 # personas.py - Persona loading and score computation
@@ -2012,7 +2049,7 @@ class TagAggregator:
             - ga_hassle_score: from 'bureaucracy' aspect (simple=1.0, complex=0.0)
             - ga_review_score: from 'overall_experience' aspect
             - ga_fun_score: from 'food', 'overall_experience' aspects
-            - ga_hospitality_score: from 'restaurant', 'accommodation' aspects
+            - ga_hospitality_score: from 'restaurant', 'accommodation' aspects (availability/proximity)
         
         Args:
             icao: Airport ICAO code
@@ -2468,34 +2505,36 @@ class FeatureMapper:
         """
         Map 'restaurant' and 'accommodation' aspect labels to ga_hospitality_score [0, 1].
         
-        Indicates quality of restaurant/food options and nearby accommodation.
+        Indicates **availability and proximity** of restaurant/food options and nearby 
+        accommodation (not quality - that's subjective and covered in ga_fun_score).
+        
         Important for:
-            - Day trip/lunch stop planning
-            - Overnight stay planning
-            - Multi-day touring
+            - Day trip/lunch stop planning (is there somewhere to eat?)
+            - Overnight stay planning (is there a hotel nearby?)
+            - Multi-day touring (can I stay here?)
         
         Uses mapping from config if available, otherwise defaults:
             restaurant:
-                - excellent -> 1.0
-                - good -> 0.75
-                - ok -> 0.5
-                - poor -> 0.25
-                - none -> 0.0
+                - on_site -> 1.0 (restaurant on airfield)
+                - walking -> 0.8 (walking distance)
+                - nearby -> 0.6 (short drive/taxi)
+                - available -> 0.4 (exists but not convenient)
+                - none -> 0.0 (no options)
             accommodation:
-                - excellent -> 1.0
-                - good -> 0.75
-                - limited -> 0.5
-                - poor -> 0.25
-                - none -> 0.0
+                - on_site -> 1.0 (hotel on airfield or crew rest)
+                - walking -> 0.8 (walking distance)
+                - nearby -> 0.6 (short drive/taxi)
+                - available -> 0.4 (exists but not convenient)
+                - none -> 0.0 (no options)
         
         Final score is weighted average:
-            - 60% restaurant (more common use case for GA pilots)
+            - 60% restaurant (more common use case for GA pilots - lunch stops)
             - 40% accommodation
         
         Supports Bayesian smoothing if context provided (same as other mapping methods).
         """
-        # Get restaurant score from distribution
-        # Get accommodation score from distribution
+        # Get restaurant score from distribution (availability/proximity)
+        # Get accommodation score from distribution (availability/proximity)
         # Weighted combination (0.6 restaurant + 0.4 accommodation)
         # Apply Bayesian smoothing if context provided
         # Return composite score
@@ -3756,7 +3795,7 @@ def fetch_aip_data_for_features(icao: str, euro_aip_path: Path) -> Optional[Dict
 
 ---
 
-## 13. Web App Integration (Future)
+## 12.3 Web App Integration (Future)
 
 ### 13.1 API Endpoints (Conceptual)
 
@@ -3831,7 +3870,7 @@ def find_airports_near_route_with_ga_friendliness(
 
 ---
 
-## 13.1 Incremental Update Strategy
+## 13. Incremental Update Strategy
 
 ### 13.1.1 Change Detection Methods
 
@@ -4146,6 +4185,33 @@ def test_known_expensive_airport_scores()
 - **Question:** Store raw review text excerpts or only tags?
 - **Suggestion:** Start with tags only (privacy/licensing), add excerpts later if needed
 - **Decision:** tag only
+
+### 16.6 Fee Currency Handling
+- **Question:** One currency per airport or per fee band?
+- **Decision:** One currency per airport (what airfield.directory provides - simpler, matches source data)
+
+### 16.7 Global Priors Storage Key
+- **Question:** How to store global priors for Bayesian smoothing?
+- **Decision:** Single key `global_priors` in `ga_meta_info` with JSON value (simpler, one read/write)
+
+### 16.8 Concurrent Build Protection
+- **Question:** How to prevent concurrent builds from corrupting database?
+- **Decision:** Out of scope for v1. Add CLI warning if another build might be running. Trust user not to run concurrent builds for now.
+
+### 16.9 Default MissingBehavior for ga_ops_ifr_score
+- **Question:** Should `ga_ops_ifr_score` default to NEUTRAL or EXCLUDE since many airports won't have IFR data?
+- **Decision:** Keep as NEUTRAL (0.5). Missing IFR score treated as "average". Personas can override to NEGATIVE if IFR capability is required for that persona.
+
+### 16.10 Test Directory Structure
+- **Question:** How to organize tests for the multiple shared modules?
+- **Decision:** Mirror source structure: `tests/ga_friendliness/`, `tests/ga_review_agent/`, `tests/ga_notification_requirement_agent/`
+
+### 16.11 food vs restaurant Aspect Distinction
+- **Question:** How to distinguish `food` and `restaurant` aspects?
+- **Decision:** 
+  - `food` = quality of food/catering (subjective) → feeds into `ga_fun_score`
+  - `restaurant` = availability/proximity of restaurant/café → feeds into `ga_hospitality_score`
+  - No overlap: different purposes, different scores
 
 ---
 
