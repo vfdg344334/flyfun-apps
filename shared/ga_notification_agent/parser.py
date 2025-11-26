@@ -67,13 +67,18 @@ class NotificationParser:
     )
     
     # Weekday-specific patterns
+    # Improved to handle: "MON-FRI : PPR PN 24 HR", "MON-FRI : 0700-1900 with PN 24 HR"
     WEEKDAY_HOURS_PATTERN = re.compile(
         r'(MON(?:DAY)?|TUE(?:SDAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|FRI(?:DAY)?|'
-        r'SAT(?:URDAY)?|SUN(?:DAY)?|WEEK-?END|WEEK-?DAYS?|HOL(?:IDAYS?)?)'
-        r'(?:\s*[-–]\s*(MON(?:DAY)?|TUE(?:SDAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|'
+        r'SAT(?:URDAY)?|SUN(?:DAY)?|WEEK-?END|WEEK-?DAYS?)'
+        r'(?:\s*[-–,]\s*(MON(?:DAY)?|TUE(?:SDAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|'
         r'FRI(?:DAY)?|SAT(?:URDAY)?|SUN(?:DAY)?|HOL(?:IDAYS?)?))?'
+        r'(?:\s*(?:and\s+)?(?:public\s+)?HOL(?:IDAYS?)?)?'  # Optional HOL suffix
         r'\s*[,:]\s*'
-        r'(?:PPR|PN|PPR\s*PN|O/R)?\s*(?:MNM\s+)?(?:(\d+)\s*(?:HR?S?|HOURS?))?',
+        r'(?:\d{4}\s*[-–]\s*\d{4}\s*)?'  # Optional operating hours like 0700-1900
+        r'(?:with\s+)?'  # Optional "with"
+        r'(?:PPR\s*)?(?:PN\s+)?'  # PPR and/or PN
+        r'(\d+)\s*(?:HR?S?|HOURS?)',  # Hours (required in this pattern)
         re.IGNORECASE
     )
     
@@ -307,6 +312,9 @@ class NotificationParser:
         if business_rules:
             rules.extend(business_rules)
         
+        # Apply Schengen context to all rules
+        rules = self._apply_schengen_context(rules, text)
+        
         # Calculate confidence based on what we found
         if rules:
             avg_confidence = sum(r.confidence for r in rules) / len(rules)
@@ -342,6 +350,51 @@ class NotificationParser:
         
         return indicators
     
+    def _detect_schengen_context(self, text: str) -> Tuple[bool, bool]:
+        """
+        Detect Schengen flight context from text.
+        
+        Returns:
+            (schengen_only, non_schengen_only) tuple
+        """
+        # Check for non-Schengen indicators (extra-Schengen, non-Schengen, outside Schengen)
+        non_schengen_pattern = re.compile(
+            r'\b(?:extra[- ]?schengen|non[- ]?schengen|outside\s+schengen)\b',
+            re.IGNORECASE
+        )
+        
+        # Check for Schengen-only indicators (within Schengen, Schengen flights only)
+        schengen_pattern = re.compile(
+            r'\b(?:within\s+schengen|schengen\s+(?:flights?\s+)?only)\b',
+            re.IGNORECASE
+        )
+        
+        is_non_schengen = bool(non_schengen_pattern.search(text))
+        is_schengen = bool(schengen_pattern.search(text))
+        
+        # If both are mentioned, it's likely a complex case with separate rules
+        if is_non_schengen and is_schengen:
+            return (False, False)  # Let individual rules handle it
+        
+        return (is_schengen, is_non_schengen)
+    
+    def _apply_schengen_context(
+        self, rules: List[NotificationRule], text: str
+    ) -> List[NotificationRule]:
+        """Apply Schengen context to all rules if detected in text."""
+        schengen_only, non_schengen_only = self._detect_schengen_context(text)
+        
+        if not schengen_only and not non_schengen_only:
+            return rules
+        
+        # Apply to all rules that don't already have Schengen set
+        for rule in rules:
+            if not rule.schengen_only and not rule.non_schengen_only:
+                rule.schengen_only = schengen_only
+                rule.non_schengen_only = non_schengen_only
+        
+        return rules
+    
     def _parse_day(self, day_str: str) -> Tuple[Optional[int], Optional[int], bool]:
         """Parse day string into start/end day numbers."""
         day_str = day_str.lower().strip()
@@ -364,14 +417,22 @@ class NotificationParser:
             day_start_str = match.group(1)
             day_end_str = match.group(2)
             hours_str = match.group(3)
+            matched_text = match.group(0)
             
             start_day, end_day_from_start, includes_hol = self._parse_day(day_start_str)
             
             if day_end_str:
                 end_day, _, hol2 = self._parse_day(day_end_str)
                 includes_hol = includes_hol or hol2
+                # If day_end_str was just "HOL" (no actual day), use the range from day_start
+                if end_day is None and hol2:
+                    end_day = end_day_from_start
             else:
                 end_day = end_day_from_start
+            
+            # Also check the full matched text for HOL references
+            if not includes_hol and re.search(r'\bHOL(?:IDAYS?)?\b', matched_text, re.IGNORECASE):
+                includes_hol = True
             
             hours = int(hours_str) if hours_str else None
             
@@ -382,7 +443,7 @@ class NotificationParser:
                 weekday_start=start_day,
                 weekday_end=end_day,
                 includes_holidays=includes_hol,
-                raw_text=match.group(0),
+                raw_text=matched_text,
                 confidence=0.80,
             )
             rules.append(rule)

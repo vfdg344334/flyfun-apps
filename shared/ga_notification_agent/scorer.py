@@ -226,9 +226,10 @@ class NotificationScorer:
                     icao, rule_type, weekday_start, weekday_end,
                     notification_hours, notification_type,
                     specific_time, business_day_offset, is_obligatory,
+                    includes_holidays, schengen_only, non_schengen_only,
                     conditions_json, raw_text, source_std_field_id,
                     confidence, created_utc, updated_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     icao,
@@ -240,6 +241,9 @@ class NotificationScorer:
                     rule.specific_time,
                     rule.business_day_offset,
                     1 if rule.is_obligatory else 0,
+                    1 if rule.includes_holidays else 0,
+                    1 if rule.schengen_only else 0,
+                    1 if rule.non_schengen_only else 0,
                     json.dumps(rule.conditions) if rule.conditions else None,
                     rule.raw_text,
                     parsed.source_std_field_id,
