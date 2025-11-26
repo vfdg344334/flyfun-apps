@@ -75,3 +75,5 @@ conversation_logs/
 # pip'd installed -e 
 src/euro-aip
 logs
+
+tmp
