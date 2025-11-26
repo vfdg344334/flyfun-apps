@@ -35,15 +35,23 @@ class NotificationScorer:
         self,
         parser: Optional[NotificationParser] = None,
         use_llm_fallback: bool = False,
+        llm_model: str = "gpt-4o-mini",
+        llm_api_key: Optional[str] = None,
     ):
         """
         Initialize scorer.
         
         Args:
             parser: NotificationParser instance (creates default if not provided)
-            use_llm_fallback: Whether to use LLM for unparseable cases
+            use_llm_fallback: Whether to use LLM for complex cases
+            llm_model: OpenAI model to use for LLM extraction
+            llm_api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
         """
-        self.parser = parser or NotificationParser(use_llm_fallback=use_llm_fallback)
+        self.parser = parser or NotificationParser(
+            use_llm_fallback=use_llm_fallback,
+            llm_model=llm_model,
+            llm_api_key=llm_api_key,
+        )
     
     def score_from_text(self, icao: str, text: str) -> HassleScore:
         """

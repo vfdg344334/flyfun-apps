@@ -128,6 +128,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Parse AIP notification rules (requires --airports-db)",
     )
+    proc_group.add_argument(
+        "--use-llm-notifications",
+        action="store_true",
+        help="Use LLM (OpenAI) for complex notification rules",
+    )
     
     # LLM options
     llm_group = parser.add_argument_group("LLM options")
@@ -304,8 +309,17 @@ def main() -> int:
         try:
             from shared.ga_notification_agent import NotificationScorer
             
-            logger.info("Parsing notification rules from airports.db...")
-            notification_scorer = NotificationScorer()
+            use_llm = getattr(args, 'use_llm_notifications', False)
+            if use_llm:
+                logger.info("Parsing notification rules from airports.db (with LLM fallback)...")
+            else:
+                logger.info("Parsing notification rules from airports.db...")
+            
+            notification_scorer = NotificationScorer(
+                use_llm_fallback=use_llm,
+                llm_model=args.llm_model,
+                llm_api_key=args.api_key,
+            )
             
             # Score notifications
             scores, parsed_rules = notification_scorer.load_and_score_from_airports_db(
@@ -378,8 +392,17 @@ def main() -> int:
             try:
                 from shared.ga_notification_agent import NotificationScorer
                 
-                logger.info("Parsing notification rules from airports.db...")
-                notification_scorer = NotificationScorer()
+                use_llm = getattr(args, 'use_llm_notifications', False)
+                if use_llm:
+                    logger.info("Parsing notification rules from airports.db (with LLM fallback)...")
+                else:
+                    logger.info("Parsing notification rules from airports.db...")
+                
+                notification_scorer = NotificationScorer(
+                    use_llm_fallback=use_llm,
+                    llm_model=args.llm_model,
+                    llm_api_key=args.api_key,
+                )
                 
                 # Get ICAOs to process (either specified or from build results)
                 notification_icaos = icaos if icaos else None
