@@ -223,7 +223,8 @@ The LLM can return these visualization types:
 
 4. **`marker_with_details`**: Focus on specific airport
    - Updates search query in store
-   - Triggers search via `trigger-search` event
+   - Triggers search via `trigger-search` event (centers map, shows marker)
+   - Triggers `airport-click` event (loads and displays details panel)
 
 ## Data Flow
 

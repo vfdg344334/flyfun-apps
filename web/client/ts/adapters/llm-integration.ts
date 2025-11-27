@@ -234,6 +234,7 @@ export class LLMIntegration {
   
   /**
    * Handle marker with details visualization
+   * Centers map on airport and displays details panel
    */
   private handleMarkerWithDetails(viz: Visualization): boolean {
     const ident = viz.marker?.ident;
@@ -242,13 +243,18 @@ export class LLMIntegration {
       return false;
     }
     
-    // Update store first (UI will sync automatically via subscription)
+    // Update search query in store (UI will sync automatically via subscription)
     const store = this.store as any;
     store.getState().setSearchQuery(ident);
     
-    // Trigger search for this airport
+    // 1. Trigger search to center map and show marker
     window.dispatchEvent(new CustomEvent('trigger-search', { detail: { query: ident } }));
     
+    // 2. Trigger airport-click to load and display details panel
+    // UIManager handles: selectAirport() + loadAirportDetails()
+    window.dispatchEvent(new CustomEvent('airport-click', { detail: { ident } }));
+    
+    console.log(`✅ LLM marker_with_details: centered on ${ident} and loading details`);
     return true;
   }
   
