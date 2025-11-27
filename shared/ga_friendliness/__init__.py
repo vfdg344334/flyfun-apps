@@ -125,6 +125,15 @@ from .personas import (
     FEATURE_NAMES,
 )
 
+# --- UI Config ---
+from .ui_config import (
+    FEATURE_DISPLAY_NAMES,
+    FEATURE_DESCRIPTIONS,
+    RELEVANCE_BUCKETS,
+    get_ui_config,
+    validate_config_consistency,
+)
+
 # --- Cache ---
 from .cache import CachedDataLoader
 
@@ -212,6 +221,12 @@ __all__ = [
     # Personas
     "PersonaManager",
     "FEATURE_NAMES",
+    # UI Config
+    "FEATURE_DISPLAY_NAMES",
+    "FEATURE_DESCRIPTIONS",
+    "RELEVANCE_BUCKETS",
+    "get_ui_config",
+    "validate_config_consistency",
     # Cache
     "CachedDataLoader",
     # Sources

@@ -3,7 +3,7 @@
  * Uses Fetch API, transforms requests/responses to standard format
  */
 
-import type { Airport, FilterConfig } from '../store/types';
+import type { Airport, FilterConfig, GAConfig, AirportGAScore, AirportGASummary, Persona } from '../store/types';
 
 /**
  * Standard API response format
@@ -296,6 +296,65 @@ export class APIAdapter {
   async getAvailableAIPFields(): Promise<any[]> {
     const endpoint = '/api/filters/aip-fields';
     return await this.request<any[]>(endpoint);
+  }
+  
+  // --- GA Friendliness API Methods ---
+  
+  /**
+   * Get GA configuration (feature names, display names, personas, bucket colors)
+   */
+  async getGAConfig(): Promise<GAConfig> {
+    const endpoint = '/api/ga/config';
+    return await this.request<GAConfig>(endpoint);
+  }
+  
+  /**
+   * Get list of available personas
+   */
+  async getGAPersonas(): Promise<Persona[]> {
+    const endpoint = '/api/ga/personas';
+    return await this.request<Persona[]>(endpoint);
+  }
+  
+  /**
+   * Get GA scores for multiple airports
+   * @param icaos Array of ICAO codes (max 200)
+   * @param persona Persona ID for score computation
+   */
+  async getGAScores(icaos: string[], persona: string = 'ifr_touring_sr22'): Promise<Record<string, AirportGAScore>> {
+    if (icaos.length === 0) return {};
+    if (icaos.length > 200) {
+      console.warn('GA scores request limited to 200 ICAOs');
+      icaos = icaos.slice(0, 200);
+    }
+    
+    const params = new URLSearchParams();
+    params.set('icaos', icaos.join(','));
+    params.set('persona', persona);
+    
+    const endpoint = `/api/ga/scores?${params.toString()}`;
+    return await this.request<Record<string, AirportGAScore>>(endpoint);
+  }
+  
+  /**
+   * Get full GA summary for a single airport
+   * @param icao Airport ICAO code
+   * @param persona Persona ID for score computation
+   */
+  async getGASummary(icao: string, persona: string = 'ifr_touring_sr22'): Promise<AirportGASummary> {
+    const params = new URLSearchParams();
+    params.set('persona', persona);
+    
+    const endpoint = `/api/ga/summary/${encodeURIComponent(icao)}?${params.toString()}`;
+    return await this.request<AirportGASummary>(endpoint);
+  }
+  
+  /**
+   * Check GA service health
+   */
+  async getGAHealth(): Promise<{ enabled: boolean; db_path: string | null }> {
+    const endpoint = '/api/ga/health';
+    return await this.request(endpoint);
   }
 }
 

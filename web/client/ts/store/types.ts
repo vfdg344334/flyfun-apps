@@ -51,7 +51,115 @@ export interface FilterConfig {
 /**
  * Legend mode types
  */
-export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country';
+export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance';
+
+/**
+ * Relevance bucket types (quartile-based)
+ */
+export type RelevanceBucket = 
+  | 'top-quartile'      // Top 25% of scores
+  | 'second-quartile'   // 50-75% percentile
+  | 'third-quartile'    // 25-50% percentile
+  | 'bottom-quartile'   // Bottom 25% of scores
+  | 'unknown';          // No GA data
+
+/**
+ * Relevance bucket configuration (colors only - thresholds computed from quartiles)
+ */
+export interface RelevanceBucketConfig {
+  id: RelevanceBucket;
+  label: string;
+  color: string;
+}
+
+/**
+ * Persona definition with weights
+ */
+export interface Persona {
+  id: string;
+  label: string;
+  description: string;
+  weights: Record<string, number>;
+}
+
+/**
+ * GA configuration from API (source of truth)
+ */
+export interface GAConfig {
+  feature_names: string[];
+  feature_display_names: Record<string, string>;
+  feature_descriptions: Record<string, string>;
+  relevance_buckets: RelevanceBucketConfig[];
+  personas: Persona[];
+  default_persona: string;
+  version: string;
+}
+
+/**
+ * GA feature scores for an airport
+ */
+export interface GAFeatureScores {
+  ga_cost_score: number | null;
+  ga_review_score: number | null;
+  ga_hassle_score: number | null;
+  ga_ops_ifr_score: number | null;
+  ga_ops_vfr_score: number | null;
+  ga_access_score: number | null;
+  ga_fun_score: number | null;
+  ga_hospitality_score: number | null;
+}
+
+/**
+ * GA score for a single airport
+ */
+export interface AirportGAScore {
+  icao: string;
+  has_data: boolean;
+  score: number | null;
+  features: GAFeatureScores | null;
+  review_count: number;
+}
+
+/**
+ * Full GA summary for an airport
+ */
+export interface AirportGASummary extends AirportGAScore {
+  last_review_utc: string | null;
+  tags: string[];
+  summary_text: string | null;
+  notification_summary: string | null;
+  hassle_level: string | null;
+  hotel_info: string | null;
+  restaurant_info: string | null;
+}
+
+/**
+ * Computed quartile thresholds
+ */
+export interface QuartileThresholds {
+  q1: number;  // 25th percentile
+  q2: number;  // 50th percentile (median)
+  q3: number;  // 75th percentile
+}
+
+/**
+ * GA Friendliness state
+ */
+export interface GAState {
+  // Configuration from API
+  config: GAConfig | null;
+  configLoaded: boolean;
+  configError: string | null;
+  
+  // Runtime state
+  selectedPersona: string;
+  scores: Map<string, AirportGAScore>;
+  summaries: Map<string, AirportGASummary>;
+  isLoading: boolean;
+  
+  // Computed from current scores (recalculated when scores change)
+  computedQuartiles: QuartileThresholds | null;
+}
 
 /**
  * Highlight data
@@ -121,7 +229,7 @@ export interface UIState {
   loading: boolean;
   error: string | null;
   searchQuery: string;
-  activeTab: 'details' | 'aip' | 'rules';
+  activeTab: 'details' | 'aip' | 'rules' | 'relevance';
 }
 
 /**
@@ -152,6 +260,9 @@ export interface AppState {
   
   // UI state
   ui: UIState;
+  
+  // GA Friendliness state
+  ga: GAState;
 }
 
 /**

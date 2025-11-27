@@ -1255,7 +1255,17 @@
                                     <option value="procedure-precision">Procedure Precision</option>
                                     <option value="runway-length">Runway Length</option>
                                     <option value="country">Country</option>
+                                    <option value="relevance">GA Relevance</option>
                                 </select>
+                            </div>
+                            <!-- Persona selector (shown only when relevance mode is active) -->
+                            <div id="persona-selector-container" class="mb-2" style="display: none;">
+                                <div class="d-flex align-items-center gap-2">
+                                    <label for="persona-selector" class="form-label mb-0 small text-muted">Persona:</label>
+                                    <select class="form-select form-select-sm" id="persona-selector" style="width: auto;">
+                                        <!-- Options populated dynamically from API -->
+                                    </select>
+                                </div>
                             </div>
                             <div id="legend-content">
                                 <!-- Legend content will be dynamically updated -->

@@ -116,6 +116,58 @@ export class UIManager {
   }
   
   /**
+   * Update persona selector visibility based on legend mode.
+   */
+  private updatePersonaSelectorVisibility(legendMode: LegendMode): void {
+    const container = document.getElementById('persona-selector-container');
+    if (container) {
+      container.style.display = legendMode === 'relevance' ? 'block' : 'none';
+    }
+  }
+  
+  /**
+   * Populate persona selector with personas from GA config.
+   */
+  populatePersonaSelector(): void {
+    const selector = document.getElementById('persona-selector') as HTMLSelectElement;
+    if (!selector) return;
+    
+    const state = this.store.getState();
+    const config = state.ga?.config;
+    
+    if (!config || !config.personas) {
+      selector.innerHTML = '<option value="ifr_touring_sr22">IFR Touring (SR22)</option>';
+      return;
+    }
+    
+    selector.innerHTML = '';
+    config.personas.forEach(persona => {
+      const option = document.createElement('option');
+      option.value = persona.id;
+      option.textContent = persona.label;
+      selector.appendChild(option);
+    });
+    
+    // Select the current persona
+    const currentPersona = state.ga?.selectedPersona || config.default_persona;
+    if (currentPersona) {
+      selector.value = currentPersona;
+    }
+  }
+  
+  /**
+   * Trigger loading of GA scores for visible airports.
+   */
+  private triggerGAScoresLoad(): void {
+    const state = this.store.getState();
+    const icaos = state.filteredAirports.map(a => a.ident);
+    
+    if (icaos.length > 0 && (window as any).personaManager) {
+      (window as any).personaManager.loadScores(icaos);
+    }
+  }
+  
+  /**
    * Load AIP filters (fields and presets)
    */
   private async loadAIPFilters(): Promise<void> {
@@ -470,8 +522,30 @@ export class UIManager {
     const legendModeSelect = document.getElementById('legend-mode-filter');
     if (legendModeSelect) {
       legendModeSelect.addEventListener('change', (e) => {
-      const target = e.target as HTMLSelectElement;
-      this.store.getState().setLegendMode(target.value as LegendMode);
+        const target = e.target as HTMLSelectElement;
+        this.store.getState().setLegendMode(target.value as LegendMode);
+        
+        // Show/hide persona selector based on legend mode
+        this.updatePersonaSelectorVisibility(target.value as LegendMode);
+        
+        // If switching to relevance mode, load GA scores for visible airports
+        if (target.value === 'relevance') {
+          this.triggerGAScoresLoad();
+        }
+      });
+    }
+    
+    // Persona selector
+    const personaSelector = document.getElementById('persona-selector');
+    if (personaSelector) {
+      personaSelector.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        // Use window.personaManager directly since it's exposed globally
+        if ((window as any).personaManager) {
+          (window as any).personaManager.selectPersona(target.value);
+          // Reload GA scores for visible airports
+          this.triggerGAScoresLoad();
+        }
       });
     }
     

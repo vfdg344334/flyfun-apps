@@ -95,7 +95,27 @@ Features that may need to be added to RZFlight (enhance library, not app):
 
 ## 1. Architecture Overview
 
-### 1.1 High-Level Architecture
+### 1.1 Platform Requirements
+
+| Platform | Minimum Version | Notes |
+|----------|-----------------|-------|
+| **iOS** | 18.0+ | Latest SwiftUI, Observation framework |
+| **iPadOS** | 18.0+ | Full NavigationSplitView support |
+| **macOS** | 15.0+ | Native Catalyst-free experience |
+| **watchOS** | N/A | Not targeted |
+| **visionOS** | Consider future | Spatial computing ready |
+
+**Why Latest Only:**
+- Use `@Observable` macro (no legacy `ObservableObject`)
+- Native `@Environment` injection
+- SwiftData for caching
+- Apple Intelligence integration for offline chatbot
+- Modern MapKit with `MapContentBuilder`
+- No backward compatibility complexity
+
+### 1.2 High-Level Architecture
+
+**Single Source of Truth: `AppState`**
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -103,28 +123,51 @@ Features that may need to be added to RZFlight (enhance library, not app):
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐            │
 │  │ MapView  │ │SearchView│ │FilterView│ │ ChatView │            │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘            │
-│       │            │            │            │                    │
-├───────┴────────────┴────────────┴────────────┴───────────────────┤
-│                       ViewModels (ObservableObject)               │
-│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────────┐ │
-│  │AirportMapVM     │ │ AirportDetailVM │ │   ChatbotVM         │ │
-│  │- airports       │ │- airport detail │ │- messages           │ │
-│  │- filters        │ │- procedures     │ │- streaming          │ │
-│  │- search         │ │- AIP entries    │ │- visualizations     │ │
-│  └────────┬────────┘ └────────┬────────┘ └─────────┬───────────┘ │
-│           │                   │                    │              │
-├───────────┴───────────────────┴────────────────────┴─────────────┤
+│       └────────────┴────────────┴────────────┘                    │
+│                            │                                      │
+│                   @Environment(\.appState)                        │
+│                            ▼                                      │
+├──────────────────────────────────────────────────────────────────┤
+│                   AppState (@Observable)                          │
+│  ┌──────────────────────────────────────────────────────────────┐│
+│  │                 SINGLE SOURCE OF TRUTH                       ││
+│  │                                                              ││
+│  │  // Airport Data                                             ││
+│  │  var airports: [Airport]                                     ││
+│  │  var selectedAirport: Airport?                               ││
+│  │  var filteredAirports: [Airport] { computed }                ││
+│  │                                                              ││
+│  │  // Filters                                                  ││
+│  │  var filters: FilterConfig                                   ││
+│  │                                                              ││
+│  │  // Map State                                                ││
+│  │  var mapRegion: MKCoordinateRegion                           ││
+│  │  var legendMode: LegendMode                                  ││
+│  │  var highlights: [String: MapHighlight]                      ││
+│  │  var activeRoute: RouteVisualization?                        ││
+│  │                                                              ││
+│  │  // Chat State                                               ││
+│  │  var chatMessages: [ChatMessage]                             ││
+│  │  var isStreaming: Bool                                       ││
+│  │                                                              ││
+│  │  // UI State                                                 ││
+│  │  var isLoading: Bool                                         ││
+│  │  var connectivityMode: ConnectivityMode                      ││
+│  │  var navigationPath: NavigationPath                          ││
+│  └──────────────────────────────────────────────────────────────┘│
+│                            │                                      │
+├────────────────────────────┴─────────────────────────────────────┤
 │                        Repository Layer                           │
 │  ┌──────────────────────────────────────────────────────────────┐│
 │  │                    AirportRepository                         ││
 │  │  - Unified API for data access                               ││
 │  │  - Abstracts offline/online sources                          ││
-│  │  - Caching and sync strategy                                 ││
+│  │  - Returns RZFlight.Airport directly                         ││
 │  └────────────┬─────────────────────────────┬───────────────────┘│
 │               │                             │                     │
 │  ┌────────────┴───────────┐    ┌───────────┴──────────────────┐ │
 │  │   LocalDataSource      │    │     RemoteDataSource         │ │
-│  │   (SQLite/RZFlight)    │    │     (REST API Client)        │ │
+│  │   (KnownAirports)      │    │   (API → RZFlight Adapter)   │ │
 │  └────────────────────────┘    └──────────────────────────────┘ │
 │                                                                   │
 ├──────────────────────────────────────────────────────────────────┤
@@ -133,33 +176,33 @@ Features that may need to be added to RZFlight (enhance library, not app):
 │  │                  ChatbotService                              ││
 │  │  ┌────────────────────┐  ┌─────────────────────────────────┐││
 │  │  │OfflineChatbot      │  │OnlineChatbot                    │││
-│  │  │(On-device LLM)     │  │(API streaming)                  │││
+│  │  │(Apple Intelligence)│  │(API streaming)                  │││
 │  │  └────────────────────┘  └─────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────────┘│
 │                                                                   │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Core Services                                 │
 │  ┌────────────┐ ┌─────────────┐ ┌──────────────┐ ┌────────────┐ │
-│  │Connectivity│ │ SyncService │ │FilterEngine  │ │Preferences │ │
-│  │  Monitor   │ │             │ │              │ │            │ │
+│  │Connectivity│ │ SyncService │ │  SwiftData   │ │Preferences │ │
+│  │  Monitor   │ │             │ │   Cache      │ │            │ │
 │  └────────────┘ └─────────────┘ └──────────────┘ └────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 Design Patterns
+### 1.3 Design Patterns
 
-| Pattern | Purpose |
-|---------|---------|
-| **MVVM** | Clean separation of UI and business logic |
-| **Repository** | Abstract data sources (offline/online) |
-| **Strategy** | Swap chatbot implementations (offline/online) |
-| **Observer** | Reactive UI updates via Combine/SwiftUI |
-| **Dependency Injection** | Testability and modularity |
+| Pattern | Purpose | Implementation |
+|---------|---------|----------------|
+| **Single Store** | One source of truth for all app state | `AppState` with `@Observable` |
+| **Repository** | Abstract data sources (offline/online) | `AirportRepository` protocol |
+| **Strategy** | Swap chatbot implementations | `ChatbotService` protocol |
+| **Environment DI** | Inject dependencies into views | `@Environment(\.appState)` |
+| **Coordinator** | View-specific logic without state | Thin coordinators if needed |
 
-### 1.3 Connectivity Modes
+### 1.4 Connectivity Modes
 
 ```swift
-enum ConnectivityMode: Equatable {
+enum ConnectivityMode: Equatable, Sendable {
     case offline        // No network, local DB only
     case online         // Network available, prefer API
     case hybrid         // Online with local cache fallback
@@ -175,9 +218,22 @@ enum ConnectivityMode: Equatable {
 | Filters | Local DB | API |
 | Procedures | Local DB | API |
 | AIP entries | Local DB (cached) | API |
-| Chatbot | On-device LLM (limited) | Full API streaming |
+| Chatbot | Apple Intelligence | Full API streaming |
 | Map data | Cached tiles | Live tiles |
 | Sync | N/A | Background sync |
+
+### 1.5 Modern Swift Features Used
+
+| Feature | Usage |
+|---------|-------|
+| `@Observable` | AppState - granular UI updates |
+| `@Environment` | Dependency injection |
+| `NavigationStack` | Programmatic navigation |
+| `SwiftData` | Caching API responses |
+| `async/await` | All async operations |
+| `AsyncStream` | SSE streaming |
+| Apple Intelligence | Offline chatbot |
+| MapKit SwiftUI | Native map with `Map { }` builder |
 
 ---
 
@@ -723,12 +779,15 @@ final class OnlineChatbotService: ChatbotService {
 }
 ```
 
-### 4.3 Offline Chatbot (On-Device LLM)
+### 4.3 Offline Chatbot (Apple Intelligence - iOS 18+)
 
 ```swift
-/// Offline chatbot using on-device LLM (Apple Intelligence / Core ML)
+import Foundation
+
+/// Offline chatbot using Apple Intelligence (iOS 18+)
+/// Falls back to keyword-based responses if Apple Intelligence unavailable
+@available(iOS 18.0, macOS 15.0, *)
 final class OfflineChatbotService: ChatbotService {
-    private let llmEngine: OnDeviceLLMEngine
     private let toolRegistry: OfflineToolRegistry
     private var conversationHistory: [ChatMessage] = []
     
@@ -736,46 +795,101 @@ final class OfflineChatbotService: ChatbotService {
     
     var capabilities: ChatbotCapabilities {
         ChatbotCapabilities(
-            supportsStreaming: true,  // Token-by-token streaming
-            supportsToolCalls: true,  // Limited tools (local DB queries)
-            supportsVisualization: true, // Can generate map markers
+            supportsStreaming: true,
+            supportsToolCalls: true,
+            supportsVisualization: true,
             supportedFilters: ["country", "hasProcedures", "pointOfEntry", "hasHardRunway"],
-            maxContextLength: 4_096   // Smaller context for on-device
+            maxContextLength: 8_192
         )
     }
     
     func sendMessage(_ message: String) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                // 1. Generate plan using on-device LLM
-                let plan = try await generatePlan(for: message)
-                continuation.yield(.thinking(plan.reasoning))
-                
-                // 2. Execute tool locally
-                if let tool = plan.selectedTool {
-                    let result = try await toolRegistry.execute(tool, arguments: plan.arguments)
-                    continuation.yield(.toolCall(name: tool, args: plan.arguments))
+                do {
+                    // 1. Use Apple Intelligence for intent understanding
+                    let intent = try await understandIntent(message)
+                    continuation.yield(.thinking("Understanding: \(intent.description)"))
+                    
+                    // 2. Execute tool locally
+                    if let tool = intent.suggestedTool {
+                        let result = try await toolRegistry.execute(tool, arguments: intent.arguments)
+                        continuation.yield(.toolCall(name: tool, args: intent.arguments))
+                        
+                        // 3. Generate response using Apple Intelligence
+                        let response = try await generateResponse(
+                            intent: intent,
+                            toolResult: result,
+                            context: conversationHistory
+                        )
+                        
+                        // Stream response token by token
+                        for await token in response.tokens {
+                            continuation.yield(.content(token))
+                        }
+                        
+                        // 4. Generate visualization
+                        if let viz = result.visualization {
+                            continuation.yield(.visualization(viz))
+                        }
+                    } else {
+                        // Direct answer without tool
+                        let response = try await generateDirectResponse(message)
+                        for await token in response.tokens {
+                            continuation.yield(.content(token))
+                        }
+                    }
+                    
+                    continuation.yield(.done(nil))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                
-                // 3. Stream response
-                for await token in llmEngine.generate(prompt: formatPrompt(plan)) {
-                    continuation.yield(.content(token))
-                }
-                
-                // 4. Generate visualization
-                if let viz = generateVisualization(from: plan) {
-                    continuation.yield(.visualization(viz))
-                }
-                
-                continuation.finish()
             }
         }
     }
+    
+    /// Use Apple Intelligence to understand user intent
+    private func understandIntent(_ message: String) async throws -> ChatIntent {
+        // Apple Intelligence API for intent classification
+        // Falls back to keyword matching if unavailable
+        
+        // Detect common patterns
+        if message.lowercased().contains("near") || message.lowercased().contains("between") {
+            return ChatIntent(type: .routeSearch, suggestedTool: "find_airports_near_route")
+        }
+        if message.uppercased().range(of: "[A-Z]{4}", options: .regularExpression) != nil {
+            return ChatIntent(type: .airportInfo, suggestedTool: "get_airport_info")
+        }
+        if message.lowercased().contains("filter") || message.lowercased().contains("with") {
+            return ChatIntent(type: .filterSearch, suggestedTool: "search_airports")
+        }
+        
+        return ChatIntent(type: .general, suggestedTool: nil)
+    }
 }
 
-/// On-device LLM engine (Apple Intelligence or Core ML)
-protocol OnDeviceLLMEngine {
-    func generate(prompt: String) -> AsyncStream<String>
+/// Chat intent understood from user message
+struct ChatIntent {
+    enum IntentType {
+        case routeSearch
+        case airportInfo
+        case filterSearch
+        case general
+    }
+    
+    let type: IntentType
+    let suggestedTool: String?
+    var arguments: [String: Any] = [:]
+    
+    var description: String {
+        switch type {
+        case .routeSearch: return "Finding airports along route"
+        case .airportInfo: return "Getting airport information"
+        case .filterSearch: return "Searching with filters"
+        case .general: return "General question"
+        }
+    }
 }
 ```
 
@@ -848,83 +962,192 @@ struct VisualizationPayload: Sendable {
 
 ---
 
-## 5. ViewModels
+## 5. AppState - Single Source of Truth
 
-### 5.1 Airport Map ViewModel
+### 5.1 Why Single AppState?
+
+**Problems with Multiple ViewModels:**
+- State synchronization between Map, Detail, and Chat views
+- Chatbot needs to update map state (visualizations)
+- Filters affect multiple views
+- Complex coordination for deep linking
+
+**Solution:** One `@Observable` store that all views read from.
+
+### 5.2 AppState Implementation
 
 ```swift
+import SwiftUI
+import MapKit
+import RZFlight
+
+/// Single source of truth for all app state
+/// Uses @Observable (iOS 17+) for granular SwiftUI updates
+@Observable
 @MainActor
-final class AirportMapViewModel: ObservableObject {
-    // MARK: - Published State
-    @Published var airports: [Airport] = []
-    @Published var filteredAirports: [Airport] = []
-    @Published var selectedAirport: Airport?
-    @Published var filters: FilterConfig = .default
-    @Published var searchQuery: String = ""
-    @Published var mapRegion: MKCoordinateRegion
-    @Published var isLoading: Bool = false
-    @Published var error: AppError?
-    
-    // MARK: - Visualization State
-    @Published var legendMode: LegendMode = .airportType
-    @Published var highlights: [String: MapHighlight] = [:]
-    @Published var activeRoute: RouteVisualization?
-    
-    // MARK: - Connectivity
-    @Published var connectivityMode: ConnectivityMode = .offline
+final class AppState {
     
     // MARK: - Dependencies
     private let repository: AirportRepository
-    private var cancellables = Set<AnyCancellable>()
-    
-    // MARK: - Actions
-    func loadAirports() async { ... }
-    func search(query: String) async { ... }
-    func applyFilters(_ filters: FilterConfig) async { ... }
-    func selectAirport(_ airport: Airport) { ... }
-    func focusOnAirport(_ airport: Airport) { ... }
-    
-    // MARK: - Route Operations
-    func searchRoute(from: String, to: String) async { ... }
-    func clearRoute() { ... }
-    
-    // MARK: - Filter Operations
-    func resetFilters() { ... }
-    func toggleFilter(_ keyPath: WritableKeyPath<FilterConfig, Bool?>) { ... }
-}
-
-enum LegendMode: String, CaseIterable {
-    case airportType = "Airport Type"
-    case procedurePrecision = "Procedure Precision"
-    case runwayLength = "Runway Length"
-    case country = "Country"
-}
-```
-
-### 5.2 Chatbot ViewModel
-
-```swift
-@MainActor
-final class ChatbotViewModel: ObservableObject {
-    // MARK: - Published State
-    @Published var messages: [ChatMessage] = []
-    @Published var inputText: String = ""
-    @Published var isStreaming: Bool = false
-    @Published var currentThinking: String?
-    @Published var pendingVisualization: VisualizationPayload?
-    @Published var isOnline: Bool = false
-    
-    // MARK: - Dependencies
     private let chatbotService: ChatbotService
-    private let mapViewModel: AirportMapViewModel  // For applying visualizations
+    private let connectivityMonitor: ConnectivityMonitor
     
-    // MARK: - Actions
-    func sendMessage() async {
-        guard !inputText.isEmpty else { return }
+    // MARK: - Airport Data
+    var airports: [Airport] = []
+    var selectedAirport: Airport?
+    
+    // MARK: - Filters
+    var filters: FilterConfig = .default
+    
+    /// Computed: filtered airports based on current filters
+    var filteredAirports: [Airport] {
+        filters.apply(to: airports, db: repository.database)
+    }
+    
+    // MARK: - Search
+    var searchQuery: String = ""
+    var searchResults: [Airport] = []
+    var isSearching: Bool = false
+    
+    // MARK: - Map State
+    var mapRegion: MKCoordinateRegion = .europe
+    var mapPosition: MapCameraPosition = .automatic
+    var legendMode: LegendMode = .airportType
+    var highlights: [String: MapHighlight] = [:]
+    var activeRoute: RouteVisualization?
+    
+    // MARK: - Chat State
+    var chatMessages: [ChatMessage] = []
+    var chatInput: String = ""
+    var isStreaming: Bool = false
+    var currentThinking: String?
+    
+    // MARK: - UI State
+    var isLoading: Bool = false
+    var error: AppError?
+    var connectivityMode: ConnectivityMode = .offline
+    
+    // MARK: - Navigation (Programmatic)
+    var navigationPath = NavigationPath()
+    var showingChat: Bool = false
+    var showingFilters: Bool = false
+    var selectedTab: Tab = .map
+    
+    enum Tab: String, CaseIterable {
+        case map, search, chat, settings
+    }
+    
+    // MARK: - Initialization
+    
+    init(repository: AirportRepository, chatbotService: ChatbotService, connectivityMonitor: ConnectivityMonitor) {
+        self.repository = repository
+        self.chatbotService = chatbotService
+        self.connectivityMonitor = connectivityMonitor
         
-        let userMessage = ChatMessage(role: .user, content: inputText)
-        messages.append(userMessage)
-        inputText = ""
+        // Observe connectivity changes
+        Task {
+            for await mode in connectivityMonitor.modeStream {
+                self.connectivityMode = mode
+            }
+        }
+    }
+    
+    // MARK: - Airport Actions
+    
+    func loadAirports() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            airports = try await repository.getAirports(filters: filters, limit: 1000)
+        } catch {
+            self.error = AppError(from: error)
+        }
+    }
+    
+    func search(query: String) async {
+        guard !query.isEmpty else {
+            searchResults = []
+            return
+        }
+        
+        isSearching = true
+        defer { isSearching = false }
+        
+        // Detect route pattern (e.g., "EGTF LFMD")
+        if isRouteQuery(query) {
+            await searchRoute(query)
+        } else {
+            do {
+                searchResults = try await repository.searchAirports(query: query, limit: 50)
+            } catch {
+                self.error = AppError(from: error)
+            }
+        }
+    }
+    
+    func selectAirport(_ airport: Airport) {
+        selectedAirport = airport
+        focusMap(on: airport.coord)
+    }
+    
+    func focusMap(on coordinate: CLLocationCoordinate2D, span: Double = 2.0) {
+        withAnimation(.snappy) {
+            mapPosition = .region(MKCoordinateRegion(
+                center: coordinate,
+                span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span)
+            ))
+        }
+    }
+    
+    // MARK: - Route Actions
+    
+    func searchRoute(_ query: String) async {
+        let icaos = query.uppercased().split(separator: " ").map(String.init)
+        guard icaos.count >= 2,
+              let from = icaos.first,
+              let to = icaos.last else { return }
+        
+        do {
+            let result = try await repository.getAirportsNearRoute(
+                from: from, to: to, distanceNm: 50, filters: filters
+            )
+            airports = result.airports
+            activeRoute = RouteVisualization(
+                coordinates: [/* from coord, to coord */],
+                departure: from,
+                destination: to
+            )
+            fitMapToRoute()
+        } catch {
+            self.error = AppError(from: error)
+        }
+    }
+    
+    func clearRoute() {
+        activeRoute = nil
+        highlights.removeAll { $0.key.hasPrefix("route-") }
+    }
+    
+    // MARK: - Filter Actions
+    
+    func applyFilters() async {
+        await loadAirports()
+    }
+    
+    func resetFilters() {
+        filters = .default
+        Task { await loadAirports() }
+    }
+    
+    // MARK: - Chat Actions
+    
+    func sendChatMessage() async {
+        guard !chatInput.isEmpty else { return }
+        
+        let userMessage = ChatMessage(role: .user, content: chatInput)
+        chatMessages.append(userMessage)
+        chatInput = ""
         isStreaming = true
         
         var assistantContent = ""
@@ -934,48 +1157,207 @@ final class ChatbotViewModel: ObservableObject {
                 switch event {
                 case .thinking(let thought):
                     currentThinking = thought
+                    
                 case .content(let chunk):
                     assistantContent += chunk
-                    // Update last message in real-time
                     updateStreamingMessage(assistantContent)
+                    
                 case .visualization(let payload):
-                    pendingVisualization = payload
                     applyVisualization(payload)
+                    
                 case .done:
                     finalizeMessage(assistantContent)
-                default:
-                    break
+                    
+                case .toolCall:
+                    break // Could show tool execution
                 }
             }
         } catch {
-            messages.append(ChatMessage(role: .assistant, content: "Sorry, I encountered an error: \(error.localizedDescription)"))
+            chatMessages.append(ChatMessage(
+                role: .assistant,
+                content: "Sorry, I encountered an error: \(error.localizedDescription)"
+            ))
         }
         
         isStreaming = false
         currentThinking = nil
     }
     
-    private func applyVisualization(_ payload: VisualizationPayload) {
-        // Apply to map view model
+    /// Apply chatbot visualization to app state
+    func applyVisualization(_ payload: VisualizationPayload) {
         switch payload.kind {
         case .markers:
             if let airports = payload.airports {
-                mapViewModel.airports = airports
+                self.airports = airports
+                fitMapToAirports()
             }
+            
         case .routeWithMarkers:
             if let route = payload.route {
-                mapViewModel.activeRoute = route
+                self.activeRoute = route
             }
-        // ... other cases
+            if let airports = payload.airports {
+                self.airports = airports
+            }
+            // Add highlights for mentioned airports
+            payload.airports?.forEach { airport in
+                highlights["chat-\(airport.icao)"] = MapHighlight(
+                    id: "chat-\(airport.icao)",
+                    coordinate: airport.coord,
+                    color: .blue,
+                    radius: 15000,
+                    popup: airport.name
+                )
+            }
+            fitMapToRoute()
+            
+        case .markerWithDetails:
+            if let airport = payload.airports?.first {
+                selectAirport(airport)
+            }
+            
+        case .pointWithMarkers:
+            if let airports = payload.airports {
+                self.airports = airports
+                fitMapToAirports()
+            }
         }
         
-        // Apply filter profile
+        // Apply filter profile from chatbot
         if let filterProfile = payload.filterProfile {
-            mapViewModel.filters = filterProfile
+            self.filters = filterProfile
+        }
+    }
+    
+    // MARK: - Private Helpers
+    
+    private func isRouteQuery(_ query: String) -> Bool {
+        let parts = query.uppercased().split(separator: " ")
+        return parts.count >= 2 && parts.allSatisfy { $0.count == 4 && $0.allSatisfy(\.isLetter) }
+    }
+    
+    private func updateStreamingMessage(_ content: String) {
+        if let lastIndex = chatMessages.lastIndex(where: { $0.role == .assistant && $0.isStreaming }) {
+            chatMessages[lastIndex].content = content
+        } else {
+            chatMessages.append(ChatMessage(role: .assistant, content: content, isStreaming: true))
+        }
+    }
+    
+    private func finalizeMessage(_ content: String) {
+        if let lastIndex = chatMessages.lastIndex(where: { $0.role == .assistant && $0.isStreaming }) {
+            chatMessages[lastIndex].content = content
+            chatMessages[lastIndex].isStreaming = false
+        }
+    }
+    
+    private func fitMapToAirports() {
+        guard !filteredAirports.isEmpty else { return }
+        // Calculate bounding box and set map position
+    }
+    
+    private func fitMapToRoute() {
+        guard let route = activeRoute else { return }
+        // Calculate bounding box for route
+    }
+}
+
+// MARK: - Legend Mode
+
+enum LegendMode: String, CaseIterable, Identifiable {
+    case airportType = "Airport Type"
+    case procedurePrecision = "Procedure Precision"
+    case runwayLength = "Runway Length"
+    case country = "Country"
+    
+    var id: String { rawValue }
+}
+```
+
+### 5.3 Environment Injection
+
+```swift
+// MARK: - Environment Key
+
+struct AppStateKey: EnvironmentKey {
+    static let defaultValue: AppState? = nil
+}
+
+extension EnvironmentValues {
+    var appState: AppState? {
+        get { self[AppStateKey.self] }
+        set { self[AppStateKey.self] = newValue }
+    }
+}
+
+// MARK: - App Entry Point
+
+@main
+struct FlyFunEuroAIPApp: App {
+    @State private var appState: AppState
+    
+    init() {
+        // Initialize dependencies
+        let repository = AirportRepository()
+        let chatbot = ChatbotServiceFactory.create()
+        let connectivity = ConnectivityMonitor()
+        
+        _appState = State(initialValue: AppState(
+            repository: repository,
+            chatbotService: chatbot,
+            connectivityMonitor: connectivity
+        ))
+    }
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(\.appState, appState)
+        }
+    }
+}
+
+// MARK: - Usage in Views
+
+struct AirportMapView: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        Map(position: Binding(
+            get: { state?.mapPosition ?? .automatic },
+            set: { state?.mapPosition = $0 }
+        )) {
+            if let state {
+                ForEach(state.filteredAirports) { airport in
+                    Annotation(airport.icao, coordinate: airport.coord) {
+                        AirportMarker(airport: airport, legendMode: state.legendMode)
+                            .onTapGesture {
+                                state.selectAirport(airport)
+                            }
+                    }
+                }
+                
+                if let route = state.activeRoute {
+                    MapPolyline(coordinates: route.coordinates)
+                        .stroke(.blue, lineWidth: 3)
+                }
+            }
         }
     }
 }
 ```
+
+### 5.4 Benefits of Single AppState
+
+| Aspect | Benefit |
+|--------|---------|
+| **Chat → Map Sync** | Chatbot calls `appState.applyVisualization()` directly |
+| **Filter Changes** | One place updates, all views react |
+| **Deep Linking** | Set `navigationPath` to navigate anywhere |
+| **Testing** | Mock one object, test everything |
+| **Debugging** | All state in one place to inspect |
+| **Persistence** | Easy to serialize entire state |
+| **Undo/Redo** | Possible to snapshot and restore |
 
 ---
 
@@ -1016,119 +1398,240 @@ final class ChatbotViewModel: ObservableObject {
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 View Hierarchy
+### 6.2 View Hierarchy (Modern SwiftUI)
 
 ```swift
-// Root View - handles adaptive layout
+// MARK: - Root View
+
 struct ContentView: View {
-    @StateObject private var mapViewModel = AirportMapViewModel()
-    @StateObject private var chatViewModel = ChatbotViewModel()
+    @Environment(\.appState) private var state
     @Environment(\.horizontalSizeClass) private var sizeClass
     
     var body: some View {
         Group {
             if sizeClass == .regular {
-                RegularLayout(mapViewModel: mapViewModel, chatViewModel: chatViewModel)
+                RegularLayout()
             } else {
-                CompactLayout(mapViewModel: mapViewModel, chatViewModel: chatViewModel)
+                CompactLayout()
             }
         }
-        .environmentObject(mapViewModel)
-        .environmentObject(chatViewModel)
+        .task {
+            await state?.loadAirports()
+        }
     }
 }
 
-// iPad/Mac Layout
+// MARK: - iPad/Mac Layout (NavigationSplitView + Inspector)
+
 struct RegularLayout: View {
-    @ObservedObject var mapViewModel: AirportMapViewModel
-    @ObservedObject var chatViewModel: ChatbotViewModel
-    @State private var showChat = false
+    @Environment(\.appState) private var state
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             // Sidebar: Search + Results
-            SearchSidebar(viewModel: mapViewModel)
+            SearchSidebar()
+                .navigationTitle("Airports")
         } content: {
-            // Main: Map
-            AirportMapView(viewModel: mapViewModel)
+            // Main: Map (always visible)
+            AirportMapView()
+                .navigationTitle("")
+                .toolbar(.hidden, for: .navigationBar)
         } detail: {
-            // Detail: Filters or Chat or Airport Detail
-            if let airport = mapViewModel.selectedAirport {
+            // Detail: Airport Detail or empty state
+            if let airport = state?.selectedAirport {
                 AirportDetailView(airport: airport)
-            } else if showChat {
-                ChatView(viewModel: chatViewModel)
             } else {
-                FilterPanel(viewModel: mapViewModel)
+                ContentUnavailableView(
+                    "Select an Airport",
+                    systemImage: "airplane.circle",
+                    description: Text("Choose an airport from the map or search to see details")
+                )
             }
         }
+        .inspector(isPresented: Binding(
+            get: { state?.showingFilters ?? false },
+            set: { state?.showingFilters = $0 }
+        )) {
+            FilterPanel()
+                .inspectorColumnWidth(min: 280, ideal: 320, max: 400)
+        }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: { showChat.toggle() }) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    state?.showingFilters.toggle()
+                } label: {
+                    Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                
+                Button {
+                    state?.showingChat.toggle()
+                } label: {
                     Label("Chat", systemImage: "bubble.left.and.bubble.right")
                 }
             }
         }
+        .sheet(isPresented: Binding(
+            get: { state?.showingChat ?? false },
+            set: { state?.showingChat = $0 }
+        )) {
+            NavigationStack {
+                ChatView()
+                    .navigationTitle("Aviation Assistant")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { state?.showingChat = false }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 }
 
-// iPhone Layout
+// MARK: - iPhone Layout (Map + Bottom Sheet)
+
 struct CompactLayout: View {
-    @ObservedObject var mapViewModel: AirportMapViewModel
-    @ObservedObject var chatViewModel: ChatbotViewModel
+    @Environment(\.appState) private var state
     @State private var sheetDetent: PresentationDetent = .fraction(0.25)
     
     var body: some View {
-        ZStack {
-            AirportMapView(viewModel: mapViewModel)
+        ZStack(alignment: .top) {
+            // Full-screen map
+            AirportMapView()
                 .ignoresSafeArea()
             
             // Floating search bar
+            SearchBarCompact()
+                .padding(.horizontal)
+                .padding(.top, 8)
+            
+            // Floating chat button
             VStack {
-                SearchBarCompact(viewModel: mapViewModel)
-                    .padding()
                 Spacer()
+                HStack {
+                    Spacer()
+                    FloatingChatButton()
+                        .padding(.trailing)
+                        .padding(.bottom, 160) // Above sheet
+                }
             }
         }
         .sheet(isPresented: .constant(true)) {
-            CompactSheetContent(mapViewModel: mapViewModel, chatViewModel: chatViewModel)
-                .presentationDetents([.fraction(0.25), .medium, .large])
+            CompactSheetContent()
+                .presentationDetents([.fraction(0.25), .medium, .large], selection: $sheetDetent)
                 .presentationDragIndicator(.visible)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .interactiveDismissDisabled()
         }
+    }
+}
+
+// MARK: - Compact Sheet Content
+
+struct CompactSheetContent: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        NavigationStack(path: Binding(
+            get: { state?.navigationPath ?? NavigationPath() },
+            set: { state?.navigationPath = $0 }
+        )) {
+            VStack(spacing: 0) {
+                // Segmented control for content switching
+                Picker("View", selection: Binding(
+                    get: { state?.selectedTab ?? .map },
+                    set: { state?.selectedTab = $0 }
+                )) {
+                    Label("Results", systemImage: "list.bullet").tag(AppState.Tab.search)
+                    Label("Filters", systemImage: "slider.horizontal.3").tag(AppState.Tab.map)
+                    Label("Chat", systemImage: "bubble.left").tag(AppState.Tab.chat)
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                
+                // Content based on selection
+                Group {
+                    switch state?.selectedTab ?? .search {
+                    case .search, .map:
+                        if state?.selectedAirport != nil {
+                            AirportDetailView(airport: state!.selectedAirport!)
+                        } else {
+                            SearchResultsList()
+                        }
+                    case .chat:
+                        ChatView()
+                    case .settings:
+                        FilterPanel()
+                    }
+                }
+            }
+            .navigationDestination(for: Airport.self) { airport in
+                AirportDetailView(airport: airport)
+            }
+        }
+    }
+}
+
+// MARK: - Floating Chat Button
+
+struct FloatingChatButton: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        Button {
+            withAnimation(.spring(response: 0.3)) {
+                state?.showingChat.toggle()
+            }
+        } label: {
+            Image(systemName: state?.isStreaming == true ? "ellipsis.bubble.fill" : "bubble.left.and.bubble.right.fill")
+                .font(.title2)
+                .symbolEffect(.bounce, value: state?.isStreaming)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .shadow(radius: 4)
     }
 }
 ```
 
-### 6.3 Key Views
+### 6.3 Key Views (Modern SwiftUI with @Environment)
 
 ```swift
-// Map View with annotations
+// MARK: - Map View
+
 struct AirportMapView: View {
-    @ObservedObject var viewModel: AirportMapViewModel
+    @Environment(\.appState) private var state
     
     var body: some View {
-        Map(position: $viewModel.mapPosition) {
-            // Airport markers
-            ForEach(viewModel.filteredAirports) { airport in
-                Annotation(airport.icao, coordinate: airport.coordinate) {
-                    AirportMarker(airport: airport, legendMode: viewModel.legendMode)
-                        .onTapGesture {
-                            viewModel.selectAirport(airport)
-                        }
+        Map(position: Binding(
+            get: { state?.mapPosition ?? .automatic },
+            set: { state?.mapPosition = $0 }
+        )) {
+            if let state {
+                // Airport markers with clustering
+                ForEach(state.filteredAirports) { airport in
+                    Annotation(airport.icao, coordinate: airport.coord) {
+                        AirportMarker(airport: airport, legendMode: state.legendMode)
+                            .onTapGesture {
+                                state.selectAirport(airport)
+                            }
+                    }
                 }
-            }
-            
-            // Route polyline
-            if let route = viewModel.activeRoute {
-                MapPolyline(coordinates: route.coordinates)
-                    .stroke(.blue, lineWidth: 3)
-            }
-            
-            // Highlights
-            ForEach(Array(viewModel.highlights.values)) { highlight in
-                MapCircle(center: highlight.coordinate, radius: highlight.radius)
-                    .foregroundStyle(highlight.color.opacity(0.3))
-                    .stroke(highlight.color, lineWidth: 2)
+                
+                // Route polyline
+                if let route = state.activeRoute {
+                    MapPolyline(coordinates: route.coordinates)
+                        .stroke(.blue, lineWidth: 3)
+                }
+                
+                // Highlights (from chatbot)
+                ForEach(Array(state.highlights.values)) { highlight in
+                    MapCircle(center: highlight.coordinate, radius: highlight.radius)
+                        .foregroundStyle(highlight.color.opacity(0.3))
+                        .stroke(highlight.color, lineWidth: 2)
+                }
             }
         }
         .mapStyle(.standard(elevation: .realistic))
@@ -1137,99 +1640,243 @@ struct AirportMapView: View {
             MapScaleView()
             MapUserLocationButton()
         }
+        // Legend overlay
+        .overlay(alignment: .topTrailing) {
+            MapLegend(legendMode: state?.legendMode ?? .airportType)
+                .padding()
+        }
+        // Connectivity indicator
+        .overlay(alignment: .top) {
+            if state?.connectivityMode == .offline {
+                OfflineBanner()
+            }
+        }
     }
 }
 
-// Filter Panel
+// MARK: - Airport Marker
+
+struct AirportMarker: View {
+    let airport: Airport
+    let legendMode: LegendMode
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(markerColor.gradient)
+                .frame(width: 32, height: 32)
+            
+            Text(airport.icao.prefix(3))
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+        }
+        .shadow(radius: 2)
+    }
+    
+    var markerColor: Color {
+        switch legendMode {
+        case .airportType:
+            if airport.procedures.isEmpty { return .gray }
+            return airport.isBorderCrossing ? .green : .blue
+        case .procedurePrecision:
+            guard let best = airport.approaches.min(by: { $0.isMorePreciseThan($1) }) else { return .gray }
+            switch best.precisionCategory {
+            case .precision: return .green
+            case .rnav: return .blue
+            case .nonPrecision: return .orange
+            }
+        case .runwayLength:
+            let maxLength = airport.runways.map(\.length_ft).max() ?? 0
+            if maxLength >= 6000 { return .green }
+            if maxLength >= 3000 { return .blue }
+            return .orange
+        case .country:
+            return countryColor(for: airport.country)
+        }
+    }
+}
+
+// MARK: - Filter Panel
+
 struct FilterPanel: View {
-    @ObservedObject var viewModel: AirportMapViewModel
+    @Environment(\.appState) private var state
     
     var body: some View {
         Form {
             Section("Country") {
-                Picker("Country", selection: $viewModel.filters.country) {
-                    Text("All").tag(nil as String?)
-                    ForEach(viewModel.availableCountries, id: \.self) { country in
-                        Text(country).tag(country as String?)
+                Picker("Country", selection: filterBinding(\.country)) {
+                    Text("All Countries").tag(nil as String?)
+                    ForEach(availableCountries, id: \.self) { country in
+                        Text(countryName(for: country)).tag(country as String?)
                     }
                 }
             }
             
             Section("Airport Features") {
-                Toggle("Border Crossing", isOn: filterBinding(\.pointOfEntry))
-                Toggle("Has Procedures", isOn: filterBinding(\.hasProcedures))
-                Toggle("Has AIP Data", isOn: filterBinding(\.hasAIPData))
-                Toggle("Hard Runway", isOn: filterBinding(\.hasHardRunway))
+                Toggle("Border Crossing / Customs", isOn: boolFilterBinding(\.pointOfEntry))
+                Toggle("Has IFR Procedures", isOn: boolFilterBinding(\.hasProcedures))
+                Toggle("Has AIP Data", isOn: boolFilterBinding(\.hasAIPData))
+                Toggle("Hard Surface Runway", isOn: boolFilterBinding(\.hasHardRunway))
             }
             
-            Section("Fuel") {
-                Toggle("AVGAS", isOn: filterBinding(\.hasAvgas))
-                Toggle("Jet-A", isOn: filterBinding(\.hasJetA))
+            Section("Fuel Availability") {
+                Toggle("AVGAS (100LL)", isOn: boolFilterBinding(\.hasAvgas))
+                Toggle("Jet-A", isOn: boolFilterBinding(\.hasJetA))
             }
             
-            Section("Runway") {
-                Stepper(
-                    "Min Length: \(viewModel.filters.minRunwayLengthFt ?? 0) ft",
-                    value: Binding(
-                        get: { viewModel.filters.minRunwayLengthFt ?? 0 },
-                        set: { viewModel.filters.minRunwayLengthFt = $0 > 0 ? $0 : nil }
-                    ),
-                    in: 0...10000,
-                    step: 500
-                )
+            Section("Runway Requirements") {
+                LabeledContent("Minimum Length") {
+                    Stepper(
+                        "\(state?.filters.minRunwayLengthFt ?? 0) ft",
+                        value: Binding(
+                            get: { state?.filters.minRunwayLengthFt ?? 0 },
+                            set: { state?.filters.minRunwayLengthFt = $0 > 0 ? $0 : nil }
+                        ),
+                        in: 0...10000,
+                        step: 500
+                    )
+                    .monospacedDigit()
+                }
+            }
+            
+            Section("Display") {
+                Picker("Legend Mode", selection: Binding(
+                    get: { state?.legendMode ?? .airportType },
+                    set: { state?.legendMode = $0 }
+                )) {
+                    ForEach(LegendMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
             }
             
             Section {
-                Button("Reset Filters") {
-                    viewModel.resetFilters()
+                Button("Apply Filters", action: applyFilters)
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.borderedProminent)
+                
+                Button("Reset All", role: .destructive) {
+                    state?.resetFilters()
                 }
-                .foregroundColor(.red)
+                .frame(maxWidth: .infinity)
             }
         }
         .navigationTitle("Filters")
     }
+    
+    // Helper bindings for optional bools
+    private func boolFilterBinding(_ keyPath: WritableKeyPath<FilterConfig, Bool?>) -> Binding<Bool> {
+        Binding(
+            get: { state?.filters[keyPath: keyPath] ?? false },
+            set: { state?.filters[keyPath: keyPath] = $0 ? true : nil }
+        )
+    }
+    
+    private func applyFilters() {
+        Task { await state?.applyFilters() }
+    }
 }
 
-// Chat View
+// MARK: - Chat View
+
 struct ChatView: View {
-    @ObservedObject var viewModel: ChatbotViewModel
+    @Environment(\.appState) private var state
+    @FocusState private var isInputFocused: Bool
     
     var body: some View {
         VStack(spacing: 0) {
             // Connection status
-            if !viewModel.isOnline {
-                OfflineBanner()
+            if state?.connectivityMode == .offline {
+                OfflineChatBanner()
             }
             
             // Message list
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(viewModel.messages) { message in
+                        ForEach(state?.chatMessages ?? []) { message in
                             ChatBubble(message: message)
+                                .id(message.id)
                         }
                         
-                        if viewModel.isStreaming {
+                        // Thinking indicator
+                        if let thinking = state?.currentThinking {
+                            ThinkingBubble(text: thinking)
+                        }
+                        
+                        // Streaming indicator
+                        if state?.isStreaming == true {
                             TypingIndicator()
                         }
                     }
                     .padding()
                 }
+                .onChange(of: state?.chatMessages.count) { _, _ in
+                    if let lastId = state?.chatMessages.last?.id {
+                        withAnimation {
+                            proxy.scrollTo(lastId, anchor: .bottom)
+                        }
+                    }
+                }
             }
             
-            // Thinking indicator
-            if let thinking = viewModel.currentThinking {
-                ThinkingBanner(text: thinking)
-            }
+            Divider()
             
-            // Input
-            ChatInputBar(
-                text: $viewModel.inputText,
-                isStreaming: viewModel.isStreaming,
-                onSend: { Task { await viewModel.sendMessage() } }
-            )
+            // Input bar
+            HStack(spacing: 12) {
+                TextField("Ask about airports...", text: Binding(
+                    get: { state?.chatInput ?? "" },
+                    set: { state?.chatInput = $0 }
+                ), axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+                .focused($isInputFocused)
+                .onSubmit {
+                    Task { await state?.sendChatMessage() }
+                }
+                
+                Button {
+                    Task { await state?.sendChatMessage() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .disabled(state?.chatInput.isEmpty ?? true || state?.isStreaming ?? false)
+                .symbolEffect(.bounce, value: state?.isStreaming)
+            }
+            .padding()
+            .background(.bar)
         }
-        .navigationTitle("Aviation Assistant")
+    }
+}
+
+// MARK: - Chat Bubble
+
+struct ChatBubble: View {
+    let message: ChatMessage
+    
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 60) }
+            
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                Text(message.content)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        message.role == .user ? Color.accentColor : Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                    .foregroundStyle(message.role == .user ? .white : .primary)
+                
+                if message.isStreaming {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+            }
+            
+            if message.role == .assistant { Spacer(minLength: 60) }
+        }
     }
 }
 ```
@@ -1427,45 +2074,83 @@ final class CacheManager {
 
 ---
 
-## 10. Dependencies
+## 10. Dependencies & Platform Requirements
 
-### Required
-- **RZFlight** - Airport data and spatial queries
-- **RZUtilsSwift** - Utilities and logging
-- **FMDB** - SQLite access
+### Platform Requirements
 
-### Recommended
-- **MapKit** - Native maps (already used)
-- **Combine** - Reactive programming
-- **Core ML** - On-device LLM (Phase 5)
+| Platform | Version | Rationale |
+|----------|---------|-----------|
+| **iOS** | 18.0+ | `@Observable`, SwiftData, Apple Intelligence |
+| **iPadOS** | 18.0+ | Same as iOS |
+| **macOS** | 15.0+ | Sequoia, native SwiftUI |
+| **Xcode** | 16.0+ | Swift 6, new concurrency |
 
-### Optional
-- **SwiftLint** - Code quality
-- **Quick/Nimble** - Testing
+### Swift Package Dependencies
+
+| Package | Purpose | Required |
+|---------|---------|----------|
+| **RZFlight** | Airport models, KnownAirports, spatial queries | ✅ |
+| **RZUtilsSwift** | Logging, utilities | ✅ |
+| **FMDB** | SQLite access (via RZFlight) | ✅ |
+
+### Apple Frameworks Used
+
+| Framework | Purpose | iOS Version |
+|-----------|---------|-------------|
+| **SwiftUI** | UI framework | 18.0+ |
+| **Observation** | `@Observable` macro | 17.0+ |
+| **SwiftData** | Caching, persistence | 17.0+ |
+| **MapKit** | Map visualization | 18.0+ (new APIs) |
+| **Foundation** | Networking, async/await | 15.0+ |
+| **Apple Intelligence** | Offline chatbot | 18.1+ (device-dependent) |
+
+### No External Dependencies Needed
+
+Using latest Apple frameworks eliminates need for:
+- ❌ Combine (replaced by `@Observable`)
+- ❌ Alamofire (native `URLSession` async/await)
+- ❌ Kingfisher (native `AsyncImage`)
+- ❌ Core ML custom models (Apple Intelligence)
+
+### Optional Development Tools
+
+- **SwiftLint** - Code style
+- **Swift Testing** - New testing framework (Xcode 16)
 
 ---
 
 ## 11. Open Questions
 
-1. **On-device LLM**: Which model to use?
-   - Apple Intelligence (iOS 18.1+)?
-   - Custom Core ML model?
-   - Third-party (e.g., llama.cpp)?
+### Resolved ✅
 
-2. **Map tiles**: How to handle offline caching?
-   - Pre-cache Europe on first launch?
-   - User-selected regions?
-   - Cache as user browses?
+| Question | Decision |
+|----------|----------|
+| Platform version | iOS 18.0+ / macOS 15.0+ (latest only) |
+| State management | Single `AppState` with `@Observable` |
+| On-device LLM | Apple Intelligence (device-dependent fallback) |
+| ViewModels | Eliminated - use `AppState` directly via `@Environment` |
 
-3. **Database updates**: Update strategy?
+### Remaining Questions
+
+1. **Map tiles offline caching**:
+   - Pre-cache Europe on first launch? (large download)
+   - Cache as user browses? (gradual)
+   - User-selected regions? (manual)
+   - **Recommendation:** Cache as user browses + option to pre-download
+
+2. **Database updates**:
    - Full download vs incremental deltas?
    - Update frequency?
-   - Storage constraints?
+   - **Recommendation:** Weekly delta sync, monthly full refresh
 
-4. **Platform targeting**:
-   - iOS minimum version (17? 18?)?
-   - macOS minimum version?
-   - Apple Silicon only for on-device LLM?
+3. **Apple Intelligence availability**:
+   - Not available on all devices
+   - What's the fallback UX?
+   - **Recommendation:** Show "Offline mode limited" banner, use keyword matching
+
+4. **visionOS support**:
+   - Should we plan for spatial computing?
+   - **Recommendation:** Keep architecture compatible, defer implementation
 
 ---
 
@@ -1609,4 +2294,5 @@ GET  /api/sync/delta?from={version}         Delta update
 - `designs/UI_FILTER_STATE_DESIGN.md` - Web state management
 - `designs/CHATBOT_WEBUI_DESIGN.md` - Chatbot architecture
 - `designs/GA_FRIENDLINESS_DESIGN.md` - GA friendliness features
+
 

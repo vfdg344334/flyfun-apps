@@ -8,7 +8,21 @@ This document provides a detailed implementation roadmap for the FlyFun EuroAIP 
 
 ---
 
-## ⚠️ Critical Rule: RZFlight Model Reuse
+## Platform Requirements
+
+| Platform | Version | Rationale |
+|----------|---------|-----------|
+| **iOS** | 18.0+ | `@Observable`, SwiftData, Apple Intelligence |
+| **macOS** | 15.0+ | Native SwiftUI experience |
+| **Xcode** | 16.0+ | Swift 6 support |
+
+**Why Latest Only:** No backward compatibility complexity. Use all modern Apple frameworks.
+
+---
+
+## ⚠️ Critical Rules
+
+### 1. RZFlight Model Reuse
 
 **DO NOT create duplicate models.** Use [RZFlight](https://github.com/roznet/rzflight) types directly:
 
@@ -16,16 +30,45 @@ This document provides a detailed implementation roadmap for the FlyFun EuroAIP 
 // ✅ CORRECT
 import RZFlight
 let airports: [Airport]  // RZFlight.Airport
-let runways: [Runway]    // RZFlight.Runway
 
-// ❌ WRONG - Don't create app-level duplicates
+// ❌ WRONG
 struct AppAirport { ... }  // NO!
 ```
 
-**If functionality is missing:**
-1. Check if it exists in `euro_aip` (Python)
-2. If yes, propose enhancement to RZFlight, not the app
-3. Track in `designs/IOS_APP_DESIGN.md` Section 12
+### 2. Single AppState (No Multiple ViewModels)
+
+**DO NOT create separate ViewModels.** Use single `AppState`:
+
+```swift
+// ✅ CORRECT
+@Observable
+final class AppState {
+    var airports: [Airport] = []
+    var filters: FilterConfig = .default
+    var chatMessages: [ChatMessage] = []
+    // ALL state in one place
+}
+
+// ❌ WRONG - No separate ViewModels
+class AirportMapViewModel: ObservableObject { ... }  // NO!
+class ChatbotViewModel: ObservableObject { ... }  // NO!
+```
+
+### 3. Modern SwiftUI Patterns
+
+```swift
+// ✅ CORRECT - Use @Observable (iOS 17+)
+@Observable final class AppState { }
+
+// ❌ WRONG - Legacy ObservableObject
+class AppState: ObservableObject { @Published var x = 0 }
+
+// ✅ CORRECT - Environment injection
+@Environment(\.appState) private var state
+
+// ❌ WRONG - EnvironmentObject
+@EnvironmentObject var state: AppState
+```
 
 ---
 
@@ -195,58 +238,101 @@ final class ConnectivityMonitor: ObservableObject {
 
 ---
 
-## Phase 2: ViewModel & Filter Enhancement
+## Phase 2: AppState & Filter Implementation
 
 **Duration:** 2 weeks  
-**Goal:** Functional filters and improved state management
+**Goal:** Complete AppState with functional filters
 
-### 2.1 Enhanced AirportMapViewModel
+### 2.1 AppState Implementation
 
-**File:** `UserInterface/ViewModels/AirportMapViewModel.swift`
+**File:** `App/State/AppState.swift`
 
-- [ ] Add complete filter state
-- [ ] Implement filter application
-- [ ] Add route state
-- [ ] Add legend mode
-- [ ] Add highlights support
-- [ ] Add error handling
+**Note:** NO separate ViewModels. All state in one `@Observable` class.
 
-**State to add:**
+- [ ] Create `AppState` with `@Observable` macro
+- [ ] Add all airport data state
+- [ ] Add filter state and computed `filteredAirports`
+- [ ] Add map state (region, position, highlights)
+- [ ] Add chat state (messages, streaming)
+- [ ] Add navigation state (path, sheets)
+- [ ] Add UI state (loading, errors)
+
 ```swift
-@Published var filters: FilterConfig = .default
-@Published var legendMode: LegendMode = .airportType
-@Published var highlights: [String: MapHighlight] = [:]
-@Published var activeRoute: RouteVisualization?
-@Published var availableCountries: [String] = []
-@Published var isLoading: Bool = false
-@Published var error: AppError?
+@Observable
+@MainActor
+final class AppState {
+    // Dependencies
+    private let repository: AirportRepository
+    
+    // Airport Data
+    var airports: [Airport] = []
+    var selectedAirport: Airport?
+    
+    // Filters
+    var filters: FilterConfig = .default
+    var filteredAirports: [Airport] { /* computed */ }
+    
+    // Map
+    var mapPosition: MapCameraPosition = .automatic
+    var legendMode: LegendMode = .airportType
+    var highlights: [String: MapHighlight] = [:]
+    var activeRoute: RouteVisualization?
+    
+    // Chat
+    var chatMessages: [ChatMessage] = []
+    var chatInput: String = ""
+    var isStreaming: Bool = false
+    
+    // Navigation
+    var navigationPath = NavigationPath()
+    var showingChat = false
+    var showingFilters = false
+    
+    // UI
+    var isLoading = false
+    var error: AppError?
+    var connectivityMode: ConnectivityMode = .offline
+}
 ```
 
-**Actions to implement:**
+### 2.2 AppState Actions
+
+- [ ] `loadAirports()` - Load from repository
+- [ ] `search(query:)` - Search with route detection
+- [ ] `selectAirport(_:)` - Select and focus
+- [ ] `applyFilters()` - Refresh with current filters
+- [ ] `resetFilters()` - Clear filters
+- [ ] `searchRoute(_:)` - Route search
+- [ ] `sendChatMessage()` - Send to chatbot
+- [ ] `applyVisualization(_:)` - Apply chatbot viz
+
+### 2.3 Environment Setup
+
+**File:** `App/State/AppStateEnvironment.swift`
+
+- [ ] Create `AppStateKey` environment key
+- [ ] Add `appState` to `EnvironmentValues`
+- [ ] Inject in app entry point
+
 ```swift
-func loadAirports() async
-func search(query: String) async
-func applyFilters() async
-func searchRoute(from: String, to: String) async
-func clearRoute()
-func resetFilters()
+struct AppStateKey: EnvironmentKey {
+    static let defaultValue: AppState? = nil
+}
+
+extension EnvironmentValues {
+    var appState: AppState? {
+        get { self[AppStateKey.self] }
+        set { self[AppStateKey.self] = newValue }
+    }
+}
 ```
 
-### 2.2 Airport Detail ViewModel
+### 2.4 Filter Binding Helpers
 
-**File:** `UserInterface/ViewModels/AirportDetailViewModel.swift`
-
-- [ ] Create detail view model
-- [ ] Load runways, procedures, AIP entries
-- [ ] Handle loading states
-- [ ] Support offline/online data
-
-### 2.3 Filter Binding Helpers
-
-**File:** `UserInterface/Helpers/FilterBindings.swift`
+**File:** `App/Helpers/FilterBindings.swift`
 
 - [ ] Create binding helpers for optional booleans
-- [ ] Create reusable filter toggle components
+- [ ] Create binding helpers for optional integers
 
 ---
 
@@ -525,64 +611,95 @@ extension Airport {
 
 ---
 
-## Phase 6: Offline Chatbot
+## Phase 6: Offline Chatbot (Apple Intelligence)
 
-**Duration:** 3-4 weeks  
-**Goal:** On-device LLM for offline operation
+**Duration:** 2-3 weeks  
+**Goal:** On-device chatbot using Apple Intelligence
 
-### 6.1 Research & Selection
+### 6.1 Apple Intelligence Integration
 
-- [ ] Evaluate on-device LLM options:
-  - Apple Intelligence (iOS 18.1+)
-  - Core ML with custom model
-  - llama.cpp (MLX on Apple Silicon)
-  
-- [ ] Determine minimum device requirements
-- [ ] Select model size (2B-7B parameters)
+**Approach:** Use Apple Intelligence APIs (iOS 18.1+) for:
+- Intent understanding
+- Response generation
+- Token streaming
 
-### 6.2 On-Device LLM Engine
+**Fallback:** Keyword-based matching when Apple Intelligence unavailable
 
-**File:** `App/Services/LLM/OnDeviceLLMEngine.swift`
-
-- [ ] Implement LLM engine protocol
-- [ ] Load model on startup
-- [ ] Generate tokens with streaming
-- [ ] Handle memory constraints
-
-```swift
-protocol OnDeviceLLMEngine {
-    var isAvailable: Bool { get }
-    func load() async throws
-    func generate(prompt: String, maxTokens: Int) -> AsyncStream<String>
-    func unload()
-}
-```
-
-### 6.3 Offline Tool Registry
+### 6.2 Offline Tool Registry
 
 **File:** `App/Services/Chatbot/OfflineToolRegistry.swift`
 
 - [ ] Define available offline tools
-- [ ] Implement tool execution
-- [ ] Map to local data source
+- [ ] `search_airports` - Local search
+- [ ] `get_airport_info` - Airport details
+- [ ] `find_airports_near_route` - Route search
+- [ ] `find_airports_in_country` - Country filter
+- [ ] Map tool results to visualizations
 
-### 6.4 Offline Chatbot Service
+```swift
+final class OfflineToolRegistry {
+    private let repository: LocalAirportDataSource
+    
+    enum Tool: String, CaseIterable {
+        case searchAirports = "search_airports"
+        case getAirportInfo = "get_airport_info"
+        case findAirportsNearRoute = "find_airports_near_route"
+        case findAirportsInCountry = "find_airports_in_country"
+    }
+    
+    func execute(_ tool: Tool, arguments: [String: Any]) async throws -> ToolResult
+}
+```
+
+### 6.3 Offline Chatbot Service
 
 **File:** `App/Services/Chatbot/OfflineChatbotService.swift`
 
 - [ ] Implement `ChatbotService` protocol
-- [ ] Simple planning prompt
-- [ ] Tool selection and execution
-- [ ] Response generation
-- [ ] Visualization generation
+- [ ] Use Apple Intelligence for intent classification
+- [ ] Execute local tools
+- [ ] Generate responses with context
+- [ ] Stream tokens to UI
 
-### 6.5 Chatbot Service Factory
+### 6.4 Intent Understanding
+
+- [ ] Route queries: "airports between EGTF and LFMD"
+- [ ] Airport info: "tell me about EGKB"
+- [ ] Filter queries: "airports with ILS in France"
+- [ ] General questions: answered from cached knowledge
+
+### 6.5 Fallback Mode (No Apple Intelligence)
+
+**File:** `App/Services/Chatbot/KeywordChatbotService.swift`
+
+- [ ] Pattern matching for common queries
+- [ ] Direct tool execution
+- [ ] Template-based responses
+- [ ] Clear "Limited offline mode" UX
+
+### 6.6 Chatbot Service Factory
 
 **File:** `App/Services/Chatbot/ChatbotServiceFactory.swift`
 
-- [ ] Create appropriate service based on connectivity
-- [ ] Handle graceful degradation
-- [ ] Notify user of limitations
+```swift
+enum ChatbotServiceFactory {
+    static func create(
+        connectivity: ConnectivityMode,
+        repository: AirportRepository
+    ) -> ChatbotService {
+        switch connectivity {
+        case .online, .hybrid:
+            return OnlineChatbotService(...)
+        case .offline:
+            if AppleIntelligence.isAvailable {
+                return OfflineChatbotService(...)
+            } else {
+                return KeywordChatbotService(...)
+            }
+        }
+    }
+}
+```
 
 ---
 
@@ -638,125 +755,121 @@ protocol OnDeviceLLMEngine {
 
 ## File Structure (Target)
 
-**Note:** Core models (Airport, Runway, Procedure, AIPEntry) come from RZFlight package.
-Only app-specific types are defined locally.
+**Key Changes:**
+- Core models from RZFlight (no duplicates)
+- Single `AppState` (no ViewModels folder)
+- Modern SwiftUI patterns
 
 ```
 app/FlyFunEuroAIP/
 ├── App/
-│   ├── FlyFunEuroAIPApp.swift
-│   ├── AppModel.swift
-│   ├── Log.swift
-│   ├── Settings.swift
+│   ├── FlyFunEuroAIPApp.swift           # App entry point
+│   ├── Log.swift                        # Logging setup
 │   │
-│   ├── Models/                         # App-specific types ONLY
-│   │   ├── FilterConfig.swift          # UI filter state (not in RZFlight)
-│   │   ├── RouteResult.swift           # Route query result wrapper
-│   │   ├── MapHighlight.swift          # Map visualization
-│   │   ├── ConnectivityMode.swift      # Network state
+│   ├── State/                           # Single source of truth
+│   │   ├── AppState.swift               # @Observable AppState
+│   │   └── AppStateEnvironment.swift    # Environment key
+│   │
+│   ├── Models/                          # App-specific types ONLY
+│   │   ├── FilterConfig.swift           # Filter state
+│   │   ├── RouteResult.swift            # Route wrapper
+│   │   ├── MapHighlight.swift           # Map viz
+│   │   ├── LegendMode.swift             # Map legend
+│   │   ├── ConnectivityMode.swift       # Network state
+│   │   ├── AppError.swift               # Error types
 │   │   └── Chat/
 │   │       ├── ChatMessage.swift
 │   │       ├── ChatEvent.swift
 │   │       └── VisualizationPayload.swift
-│   │   # NOTE: Airport, Runway, Procedure, AIPEntry are from RZFlight
+│   │   # NOTE: Airport, Runway, Procedure, AIPEntry from RZFlight
 │   │
 │   ├── Data/
 │   │   ├── Repositories/
-│   │   │   └── AirportRepository.swift  # Wraps KnownAirports + Remote
+│   │   │   ├── AirportRepository.swift      # Protocol + unified impl
+│   │   │   └── AirportRepositoryProtocol.swift
 │   │   ├── DataSources/
 │   │   │   ├── LocalAirportDataSource.swift   # Uses KnownAirports
-│   │   │   └── RemoteAirportDataSource.swift  # API → RZFlight adapter
-│   │   ├── Adapters/                          # API → RZFlight converters
-│   │   │   ├── APIAirportAdapter.swift
-│   │   │   ├── APIRunwayAdapter.swift
-│   │   │   ├── APIProcedureAdapter.swift
-│   │   │   └── APIAIPEntryAdapter.swift
-│   │   └── Extensions/
-│   │       ├── FilterConfig+Apply.swift       # Filter application
-│   │       └── RZFlight+APIInit.swift         # Temp: API-friendly inits
+│   │   │   └── RemoteAirportDataSource.swift  # API client
+│   │   ├── Adapters/
+│   │   │   └── APIAirportAdapter.swift        # API → RZFlight
+│   │   └── Cache/
+│   │       └── AirportCache.swift             # SwiftData cache
 │   │
 │   ├── Networking/
 │   │   ├── APIClient.swift
 │   │   ├── Endpoint.swift
-│   │   ├── APIError.swift
 │   │   ├── SSEClient.swift
-│   │   └── APIModels/                         # Internal API response models
-│   │       ├── APIAirport.swift               # DO NOT expose
-│   │       ├── APIRunway.swift
-│   │       ├── APIProcedure.swift
-│   │       ├── APIAIPEntry.swift
+│   │   └── APIModels/                    # Internal only
+│   │       ├── APIAirport.swift
 │   │       └── APIResponses.swift
 │   │
-│   └── Services/
-│       ├── ConnectivityMonitor.swift
-│       ├── SyncService.swift
-│       ├── CacheManager.swift
-│       ├── Chatbot/
-│       │   ├── ChatbotService.swift
-│       │   ├── OnlineChatbotService.swift
-│       │   ├── OfflineChatbotService.swift
-│       │   ├── OfflineToolRegistry.swift
-│       │   └── ChatbotServiceFactory.swift
-│       └── LLM/
-│           └── OnDeviceLLMEngine.swift
-│
-├── UserInterface/
-│   ├── ContentView.swift
-│   │
-│   ├── ViewModels/
-│   │   ├── AirportMapViewModel.swift
-│   │   ├── AirportDetailViewModel.swift
-│   │   ├── ChatbotViewModel.swift
-│   │   └── PreviewSamples.swift
-│   │
-│   ├── Views/
-│   │   ├── Layouts/
-│   │   │   ├── RegularLayout.swift
-│   │   │   └── CompactLayout.swift
-│   │   │
-│   │   ├── Map/
-│   │   │   ├── AirportMapView.swift
-│   │   │   ├── AirportMarker.swift
-│   │   │   └── MapLegend.swift
-│   │   │
-│   │   ├── Search/
-│   │   │   ├── SearchBar.swift
-│   │   │   ├── SearchFieldCompact.swift
-│   │   │   └── SearchResultsView.swift
-│   │   │
-│   │   ├── Filters/
-│   │   │   ├── FilterPanel.swift
-│   │   │   └── FilterChips.swift
-│   │   │
-│   │   ├── Detail/
-│   │   │   ├── AirportDetailView.swift
-│   │   │   ├── AirportInfoTab.swift
-│   │   │   ├── RunwaysTab.swift
-│   │   │   ├── ProceduresTab.swift
-│   │   │   └── AIPEntriesTab.swift
-│   │   │
-│   │   ├── Chat/
-│   │   │   ├── ChatView.swift
-│   │   │   ├── ChatBubble.swift
-│   │   │   ├── ChatInputBar.swift
-│   │   │   ├── ThinkingIndicator.swift
-│   │   │   └── VisualizationCard.swift
-│   │   │
-│   │   └── Components/
-│   │       ├── ConnectivityBanner.swift
-│   │       ├── LoadingOverlay.swift
-│   │       ├── ErrorBanner.swift
-│   │       └── EmptyStateView.swift
+│   ├── Services/
+│   │   ├── ConnectivityMonitor.swift
+│   │   ├── SyncService.swift
+│   │   └── Chatbot/
+│   │       ├── ChatbotService.swift          # Protocol
+│   │       ├── OnlineChatbotService.swift    # SSE streaming
+│   │       ├── OfflineChatbotService.swift   # Apple Intelligence
+│   │       ├── OfflineToolRegistry.swift     # Local tools
+│   │       └── ChatbotServiceFactory.swift   # Factory
 │   │
 │   └── Helpers/
-│       └── FilterBindings.swift
+│       ├── FilterBindings.swift              # Binding helpers
+│       └── CountryHelpers.swift              # Country names
+│
+├── UserInterface/
+│   ├── ContentView.swift                     # Root view
+│   │
+│   ├── Layouts/                              # Adaptive layouts
+│   │   ├── RegularLayout.swift               # iPad/Mac
+│   │   └── CompactLayout.swift               # iPhone
+│   │
+│   ├── Map/
+│   │   ├── AirportMapView.swift
+│   │   ├── AirportMarker.swift
+│   │   └── MapLegend.swift
+│   │
+│   ├── Search/
+│   │   ├── SearchSidebar.swift
+│   │   ├── SearchBarCompact.swift
+│   │   └── SearchResultsList.swift
+│   │
+│   ├── Filters/
+│   │   ├── FilterPanel.swift
+│   │   └── FilterChips.swift
+│   │
+│   ├── Detail/
+│   │   ├── AirportDetailView.swift
+│   │   ├── AirportInfoSection.swift
+│   │   ├── RunwaysSection.swift
+│   │   ├── ProceduresSection.swift
+│   │   └── AIPEntriesSection.swift
+│   │
+│   ├── Chat/
+│   │   ├── ChatView.swift
+│   │   ├── ChatBubble.swift
+│   │   ├── ThinkingBubble.swift
+│   │   └── FloatingChatButton.swift
+│   │
+│   ├── Components/
+│   │   ├── OfflineBanner.swift
+│   │   ├── LoadingView.swift
+│   │   └── ErrorView.swift
+│   │
+│   └── Preview/
+│       └── PreviewHelpers.swift              # Preview providers
 │
 ├── Assets.xcassets/
 ├── Data/
-│   └── airports.db
+│   └── airports.db                           # Bundled database
 └── Development Assets/
-    └── airports_small.db
+    └── airports_small.db                     # Preview database
 ```
+
+**Removed:**
+- ❌ `ViewModels/` folder (use AppState)
+- ❌ `AppModel.swift` (replaced by AppState)
+- ❌ Duplicate model files
 
 ---
 
@@ -825,17 +938,26 @@ git clone https://github.com/roznet/rzflight
 
 ## Milestones & Timeline
 
-| Phase | Duration | Milestone |
-|-------|----------|-----------|
-| Phase 1 | Week 1-3 | Data layer complete, models defined |
-| Phase 2 | Week 4-5 | Filters working, enhanced state |
-| Phase 3 | Week 6-8 | UI complete for all platforms |
-| Phase 4 | Week 9-10 | Online API integration |
-| Phase 5 | Week 11-13 | Online chatbot working |
-| Phase 6 | Week 14-17 | Offline chatbot working |
-| Phase 7 | Week 18-19 | Polish, testing, release prep |
+| Phase | Duration | Milestone | Key Deliverable |
+|-------|----------|-----------|-----------------|
+| Phase 1 | Week 1-2 | Data layer + RZFlight integration | `AirportRepository` working |
+| Phase 2 | Week 3-4 | `AppState` + Filters | Single source of truth |
+| Phase 3 | Week 5-7 | UI complete (all platforms) | Adaptive layouts working |
+| Phase 4 | Week 8-9 | Online API integration | Live data + sync |
+| Phase 5 | Week 10-11 | Online chatbot | SSE streaming + viz |
+| Phase 6 | Week 12-13 | Offline chatbot | Apple Intelligence |
+| Phase 7 | Week 14-15 | Polish + Testing | App Store ready |
 
-**Total: ~19 weeks (5 months)**
+**Total: ~15 weeks (4 months)**
+
+### Reduced Timeline Rationale
+
+| Simplification | Time Saved |
+|----------------|------------|
+| No separate ViewModels | 1 week |
+| Latest iOS only (no compat) | 1 week |
+| Apple Intelligence vs custom LLM | 2 weeks |
+| Modern SwiftUI patterns | 1 week |
 
 ---
 
@@ -853,10 +975,38 @@ git clone https://github.com/roznet/rzflight
 
 ## Next Steps
 
-1. **Immediate**: Start Phase 1 - Core models and local data source
-2. **Decision needed**: Minimum iOS version (17 or 18?)
-3. **Decision needed**: On-device LLM approach
-4. **Setup**: Configure SwiftLint, testing framework
+### Decisions Made ✅
+
+| Decision | Choice |
+|----------|--------|
+| iOS Version | 18.0+ (latest only) |
+| State Management | Single `AppState` with `@Observable` |
+| ViewModels | Eliminated (use AppState directly) |
+| Offline Chatbot | Apple Intelligence |
+
+### Immediate Actions
+
+1. **Update Xcode project**
+   - Set deployment target to iOS 18.0 / macOS 15.0
+   - Enable Swift 6 mode
+   - Remove any legacy code
+
+2. **Remove duplicate Airport model**
+   - Delete local `Airport` struct from `AirportMapViewModel.swift`
+   - Use `RZFlight.Airport` directly
+
+3. **Create AppState**
+   - New file: `App/State/AppState.swift`
+   - Add `@Observable` macro
+   - Move all state from existing ViewModels
+
+4. **Setup Environment injection**
+   - Create `AppStateKey`
+   - Inject in app entry point
+
+5. **Start Phase 1**
+   - Repository protocol
+   - Local data source wrapping KnownAirports
 
 ---
 

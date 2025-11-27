@@ -3,7 +3,11 @@
  */
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
-import type { AppState, FilterConfig, LegendMode, Highlight, RouteState, LocateState, MapView, Airport } from './types';
+import type { 
+  AppState, FilterConfig, LegendMode, Highlight, RouteState, LocateState, MapView, Airport,
+  GAConfig, AirportGAScore, AirportGASummary, GAState, QuartileThresholds
+} from './types';
+import { computeQuartileThresholds } from '../utils/relevance';
 
 /**
  * Initial state
@@ -52,6 +56,17 @@ const initialState: AppState = {
     error: null,
     searchQuery: '',
     activeTab: 'details'
+  },
+  
+  ga: {
+    config: null,
+    configLoaded: false,
+    configError: null,
+    selectedPersona: 'ifr_touring_sr22',
+    scores: new Map(),
+    summaries: new Map(),
+    isLoading: false,
+    computedQuartiles: null
   }
 };
 
@@ -128,6 +143,15 @@ interface StoreActions {
   setActiveTab: (tab: AppState['ui']['activeTab']) => void;
   clearFilters: () => void;
   resetState: () => void;
+  
+  // GA Friendliness Actions
+  setGAConfig: (config: GAConfig) => void;
+  setGAConfigError: (error: string | null) => void;
+  setGASelectedPersona: (personaId: string) => void;
+  setGAScores: (scores: Record<string, AirportGAScore>) => void;
+  setGASummary: (icao: string, summary: AirportGASummary) => void;
+  setGALoading: (loading: boolean) => void;
+  clearGAScores: () => void;
 }
 
 /**
@@ -149,6 +173,11 @@ const createStore = (set: any, get: any) => ({
       selectedAirport: null,
       mapView: { ...initialState.mapView },
       ui: { ...initialState.ui },
+      ga: {
+        ...initialState.ga,
+        scores: new Map(),
+        summaries: new Map()
+      },
       
       // Set airports and auto-filter
       setAirports: (airports) => {
@@ -353,6 +382,118 @@ const createStore = (set: any, get: any) => ({
       // Reset entire state
       resetState: () => {
         set(initialState);
+      },
+      
+      // --- GA Friendliness Actions ---
+      
+      // Set GA config from API
+      setGAConfig: (config) => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            config,
+            configLoaded: true,
+            configError: null
+          }
+        }));
+      },
+      
+      // Set GA config error
+      setGAConfigError: (error) => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            configLoaded: true,
+            configError: error
+          }
+        }));
+      },
+      
+      // Set selected persona
+      setGASelectedPersona: (personaId) => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            selectedPersona: personaId,
+            // Clear scores when persona changes (they need to be recomputed)
+            scores: new Map(),
+            computedQuartiles: null
+          }
+        }));
+      },
+      
+      // Set GA scores (batch update) and compute quartiles
+      setGAScores: (scores) => {
+        set((state) => {
+          // Merge new scores with existing
+          const newScoresMap = new Map(state.ga.scores);
+          for (const [icao, score] of Object.entries(scores)) {
+            newScoresMap.set(icao, score);
+          }
+          
+          // Compute quartiles from updated scores
+          const quartiles = computeQuartileThresholds(newScoresMap);
+          
+          return {
+            ga: {
+              ...state.ga,
+              scores: newScoresMap,
+              computedQuartiles: quartiles
+            }
+          };
+        });
+      },
+      
+      // Set GA summary for single airport
+      setGASummary: (icao, summary) => {
+        set((state) => {
+          const newSummaries = new Map(state.ga.summaries);
+          newSummaries.set(icao, summary);
+          
+          // Also update score in scores map if it exists
+          const newScores = new Map(state.ga.scores);
+          newScores.set(icao, {
+            icao: summary.icao,
+            has_data: summary.has_data,
+            score: summary.score,
+            features: summary.features,
+            review_count: summary.review_count
+          });
+          
+          // Recompute quartiles
+          const quartiles = computeQuartileThresholds(newScores);
+          
+          return {
+            ga: {
+              ...state.ga,
+              summaries: newSummaries,
+              scores: newScores,
+              computedQuartiles: quartiles
+            }
+          };
+        });
+      },
+      
+      // Set GA loading state
+      setGALoading: (loading) => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            isLoading: loading
+          }
+        }));
+      },
+      
+      // Clear GA scores (e.g., on persona change)
+      clearGAScores: () => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            scores: new Map(),
+            summaries: new Map(),
+            computedQuartiles: null
+          }
+        }));
       }
 });
 

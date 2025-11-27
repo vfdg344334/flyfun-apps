@@ -9,6 +9,7 @@ import { VisualizationEngine } from './engines/visualization-engine';
 import { UIManager } from './managers/ui-manager';
 import { LLMIntegration } from './adapters/llm-integration';
 import { ChatbotManager } from './managers/chatbot-manager';
+import { PersonaManager } from './managers/persona-manager';
 import type { AppState, RouteState, MapView, FilterConfig } from './store/types';
 
 // Global instances (for debugging/window access)
@@ -18,6 +19,7 @@ declare global {
     visualizationEngine: VisualizationEngine;
     uiManager: UIManager;
     llmIntegration: LLMIntegration;
+    personaManager: PersonaManager;
   }
 }
 
@@ -31,6 +33,7 @@ class Application {
   private uiManager: UIManager;
   private llmIntegration: LLMIntegration;
   private chatbotManager: ChatbotManager;
+  private personaManager: PersonaManager;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
   private storeUnsubscribe?: () => void; // Store unsubscribe function
   
@@ -53,11 +56,15 @@ class Application {
     // Initialize chatbot manager
     this.chatbotManager = new ChatbotManager(this.llmIntegration);
     
+    // Initialize persona manager
+    this.personaManager = new PersonaManager(this.apiAdapter);
+    
     // Expose to window for debugging
     window.appState = this.store as any;
     window.visualizationEngine = this.visualizationEngine;
     window.uiManager = this.uiManager;
     window.llmIntegration = this.llmIntegration;
+    window.personaManager = this.personaManager;
     (window as any).chatbotManager = this.chatbotManager;
   }
   
@@ -82,6 +89,11 @@ class Application {
     
     // Initialize UI manager
     this.uiManager.init();
+    
+    // Initialize persona manager (async, loads GA config)
+    this.personaManager.init().catch(error => {
+      console.error('Failed to initialize PersonaManager:', error);
+    });
     
     // Initialize event listeners
     this.initEventListeners();

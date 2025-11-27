@@ -36,11 +36,12 @@ from euro_aip.models.euro_aip_model import EuroAipModel
 # Import security configuration
 from security_config import (
     ALLOWED_ORIGINS, ALLOWED_HOSTS, RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_REQUESTS,
-    FORCE_HTTPS, get_safe_db_path, get_safe_rules_path, SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
+    FORCE_HTTPS, get_safe_db_path, get_safe_rules_path, get_safe_ga_meta_db_path,
+    SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
 )
 
 # Import API routes
-from api import airports, procedures, filters, statistics, rules, aviation_agent_chat
+from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness
 
 from shared.rules_manager import RulesManager
 
@@ -133,6 +134,14 @@ async def lifespan(app: FastAPI):
         if not rules_manager.load_rules():
             logger.warning("No rules loaded from %s", rules_path)
         rules.set_rules_manager(rules_manager)
+
+        # Initialize GA friendliness service (optional)
+        ga_meta_db_path = get_safe_ga_meta_db_path()
+        ga_friendliness.init_service(ga_meta_db_path)
+        if ga_friendliness.feature_enabled():
+            logger.info(f"GA Friendliness service enabled with DB: {ga_meta_db_path}")
+        else:
+            logger.info("GA Friendliness service disabled (no database configured)")
 
         logger.info("Application startup complete")
         
@@ -229,6 +238,9 @@ if aviation_agent_chat.feature_enabled():
     )
 else:
     logger.info("Aviation agent router disabled (AVIATION_AGENT_ENABLED is false)")
+
+# GA Friendliness API - always mount, graceful degradation if no DB
+app.include_router(ga_friendliness.router, prefix="/api/ga", tags=["ga-friendliness"])
 
 # Serve static files for client assets
 client_dir = Path(__file__).parent.parent / "client"
