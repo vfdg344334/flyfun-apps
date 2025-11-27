@@ -245,6 +245,7 @@ enum ConnectivityMode: Equatable, Sendable {
 
 ```swift
 import RZFlight
+import MapKit
 
 /// Protocol for airport data access - abstracts offline/online sources
 /// All methods return RZFlight types directly
@@ -252,9 +253,19 @@ import RZFlight
 /// IMPORTANT: Filtering is done HERE, not in FilterConfig.
 /// This keeps FilterConfig pure (no DB dependencies).
 protocol AirportRepositoryProtocol {
-    // MARK: - Airport Queries (returns RZFlight.Airport)
+    // MARK: - Region-Based Queries (for map performance)
     
-    /// Get airports matching filters - repository handles DB-dependent filters
+    /// Get airports within a bounding box - PRIMARY method for map display
+    /// This is the key to map performance: only load what's visible
+    func airportsInRegion(
+        boundingBox: BoundingBox,
+        filters: FilterConfig,
+        limit: Int
+    ) async throws -> [Airport]
+    
+    // MARK: - General Queries
+    
+    /// Get airports matching filters (no region constraint)
     func airports(matching filters: FilterConfig, limit: Int) async throws -> [Airport]
     
     /// Search airports by query string
@@ -263,13 +274,12 @@ protocol AirportRepositoryProtocol {
     /// Get airport with extended data (runways, procedures, AIP entries)
     func airportDetail(icao: String) async throws -> Airport?
     
-    // MARK: - Route & Location (returns RZFlight.Airport)
+    // MARK: - Route & Location
     func airportsNearRoute(from: String, to: String, distanceNm: Int, filters: FilterConfig) async throws -> RouteResult
     func airportsNearLocation(center: CLLocationCoordinate2D, radiusNm: Int, filters: FilterConfig) async throws -> [Airport]
     
     // MARK: - In-Memory Filtering (for already-loaded airports)
     /// Apply cheap in-memory filters only (no DB access)
-    /// Used for client-side filtering of already-fetched results
     func applyInMemoryFilters(_ filters: FilterConfig, to airports: [Airport]) -> [Airport]
     
     // MARK: - Extended Data
@@ -278,6 +288,53 @@ protocol AirportRepositoryProtocol {
     // MARK: - Metadata
     func availableCountries() async throws -> [String]
     func filterMetadata() async throws -> FilterMetadata
+}
+
+// MARK: - Bounding Box for Region Queries
+
+/// Geographic bounding box for region-based queries
+struct BoundingBox: Sendable, Equatable {
+    let minLatitude: Double
+    let maxLatitude: Double
+    let minLongitude: Double
+    let maxLongitude: Double
+    
+    /// Check if a coordinate is within this bounding box
+    func contains(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        coordinate.latitude >= minLatitude &&
+        coordinate.latitude <= maxLatitude &&
+        coordinate.longitude >= minLongitude &&
+        coordinate.longitude <= maxLongitude
+    }
+}
+
+extension MKCoordinateRegion {
+    /// Convert region to bounding box
+    var boundingBox: BoundingBox {
+        BoundingBox(
+            minLatitude: center.latitude - span.latitudeDelta / 2,
+            maxLatitude: center.latitude + span.latitudeDelta / 2,
+            minLongitude: center.longitude - span.longitudeDelta / 2,
+            maxLongitude: center.longitude + span.longitudeDelta / 2
+        )
+    }
+    
+    /// Expand region by a factor (for prefetching beyond visible area)
+    func paddedBy(factor: Double) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(
+                latitudeDelta: span.latitudeDelta * factor,
+                longitudeDelta: span.longitudeDelta * factor
+            )
+        )
+    }
+    
+    /// Default Europe region
+    static let europe = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 50.0, longitude: 10.0),
+        span: MKCoordinateSpan(latitudeDelta: 30, longitudeDelta: 40)
+    )
 }
 
 /// Route result wrapper
@@ -310,6 +367,37 @@ final class LocalAirportDataSource: AirportRepositoryProtocol {
         self.knownAirports = KnownAirports(db: db)
     }
     
+    // MARK: - Region-Based Query (Primary for Map Performance)
+    
+    func airportsInRegion(
+        boundingBox: BoundingBox,
+        filters: FilterConfig,
+        limit: Int
+    ) async throws -> [Airport] {
+        // Use KDTree spatial query for efficient bounding box lookup
+        // KnownAirports uses KDTree internally for spatial indexing
+        let regionAirports = knownAirports.known.values.filter { airport in
+            boundingBox.contains(airport.coord)
+        }
+        
+        // Apply DB-dependent filters first (if any)
+        var filtered: [Airport]
+        if filters.pointOfEntry == true {
+            // Intersection: in region AND is border crossing
+            let borderCrossings = Set(knownAirports.airportsWithBorderCrossing().map(\.icao))
+            filtered = regionAirports.filter { borderCrossings.contains($0.icao) }
+        } else {
+            filtered = Array(regionAirports)
+        }
+        
+        // Apply in-memory filters
+        filtered = applyInMemoryFilters(filters, to: filtered)
+        
+        return Array(filtered.prefix(limit))
+    }
+    
+    // MARK: - General Queries
+    
     func airports(matching filters: FilterConfig, limit: Int) async throws -> [Airport] {
         var airports: [Airport]
         
@@ -322,7 +410,7 @@ final class LocalAirportDataSource: AirportRepositoryProtocol {
             airports = Array(knownAirports.known.values)
         }
         
-        // Apply cheap in-memory filters (no DB access)
+        // Apply cheap in-memory filters
         airports = applyInMemoryFilters(filters, to: airports)
         
         return Array(airports.prefix(limit))
@@ -344,12 +432,9 @@ final class LocalAirportDataSource: AirportRepositoryProtocol {
     
     // MARK: - In-Memory Filtering (No DB Access)
     
-    /// Apply only the filters that don't require DB access
-    /// Uses RZFlight Array<Airport> extensions
     func applyInMemoryFilters(_ filters: FilterConfig, to airports: [Airport]) -> [Airport] {
         var result = airports
         
-        // These use RZFlight extensions - NO DB parameter
         if let country = filters.country {
             result = result.inCountry(country)
         }
@@ -365,8 +450,6 @@ final class LocalAirportDataSource: AirportRepositoryProtocol {
         if let maxLength = filters.maxRunwayLengthFt {
             result = result.withRunwayLength(minimumFeet: 0, maximumFeet: maxLength)
         }
-        // Note: pointOfEntry, hasAvgas, hasJetA, aipField require DB
-        // Those are handled in airports(matching:) above
         
         return result
     }
@@ -1529,7 +1612,7 @@ final class AirportDomain {
     private let repository: AirportRepository
     
     // MARK: - Airport Data
-    /// Airports already filtered by repository - ready for display
+    /// Airports in current visible region (region-based loading for performance)
     var airports: [Airport] = []
     var selectedAirport: Airport?
     
@@ -1544,17 +1627,13 @@ final class AirportDomain {
     
     // MARK: - Map State
     var mapPosition: MapCameraPosition = .automatic
+    var visibleRegion: MKCoordinateRegion?  // Track visible region for data loading
     var legendMode: LegendMode = .airportType
     var highlights: [String: MapHighlight] = [:]
     var activeRoute: RouteVisualization?
     
-    // MARK: - Computed
-    
-    /// For display - airports are already filtered by repository
-    /// Use applyInMemoryFilters only for additional client-side refinement
-    var displayAirports: [Airport] {
-        airports  // Already filtered when loaded
-    }
+    /// Debounce region changes to avoid excessive queries
+    private var regionUpdateTask: Task<Void, Never>?
     
     // MARK: - Init
     
@@ -1562,11 +1641,39 @@ final class AirportDomain {
         self.repository = repository
     }
     
-    // MARK: - Actions
+    // MARK: - Region-Based Loading
     
+    /// Called when map region changes - loads airports for visible area
+    /// Uses debouncing to avoid excessive queries during pan/zoom
+    func onRegionChange(_ region: MKCoordinateRegion) {
+        regionUpdateTask?.cancel()
+        regionUpdateTask = Task {
+            // Debounce: wait 300ms after last region change
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            
+            visibleRegion = region
+            try? await loadAirportsInRegion(region)
+        }
+    }
+    
+    /// Load airports within the visible map region
+    private func loadAirportsInRegion(_ region: MKCoordinateRegion) async throws {
+        // Calculate bounding box with some padding for smooth panning
+        let paddedRegion = region.paddedBy(factor: 1.3)
+        
+        airports = try await repository.airportsInRegion(
+            boundingBox: paddedRegion.boundingBox,
+            filters: filters,
+            limit: 500  // Cap markers for performance
+        )
+    }
+    
+    /// Initial load - loads airports for default Europe view
     func load() async throws {
-        // Repository handles all filtering (including DB-dependent ones)
-        airports = try await repository.airports(matching: filters, limit: 1000)
+        let defaultRegion = MKCoordinateRegion.europe
+        visibleRegion = defaultRegion
+        try await loadAirportsInRegion(defaultRegion)
     }
     
     func search(query: String) async throws {
@@ -1860,6 +1967,247 @@ final class SystemDomain {
 }
 ```
 
+#### SettingsDomain
+
+```swift
+import SwiftUI
+
+/// Domain: User preferences and persisted state
+/// Uses @AppStorage for automatic persistence
+@Observable
+@MainActor
+final class SettingsDomain {
+    
+    // MARK: - Unit Preferences
+    
+    @ObservationIgnored
+    @AppStorage("units.distance") private var _distanceUnit: String = DistanceUnit.nauticalMiles.rawValue
+    
+    @ObservationIgnored
+    @AppStorage("units.altitude") private var _altitudeUnit: String = AltitudeUnit.feet.rawValue
+    
+    @ObservationIgnored
+    @AppStorage("units.runway") private var _runwayUnit: String = RunwayUnit.feet.rawValue
+    
+    var distanceUnit: DistanceUnit {
+        get { DistanceUnit(rawValue: _distanceUnit) ?? .nauticalMiles }
+        set { _distanceUnit = newValue.rawValue }
+    }
+    
+    var altitudeUnit: AltitudeUnit {
+        get { AltitudeUnit(rawValue: _altitudeUnit) ?? .feet }
+        set { _altitudeUnit = newValue.rawValue }
+    }
+    
+    var runwayUnit: RunwayUnit {
+        get { RunwayUnit(rawValue: _runwayUnit) ?? .feet }
+        set { _runwayUnit = newValue.rawValue }
+    }
+    
+    // MARK: - Default Filters
+    
+    @ObservationIgnored
+    @AppStorage("defaults.legendMode") private var _defaultLegendMode: String = LegendMode.airportType.rawValue
+    
+    @ObservationIgnored
+    @AppStorage("defaults.filterOnlyProcedures") private var _defaultOnlyProcedures: Bool = false
+    
+    @ObservationIgnored
+    @AppStorage("defaults.filterOnlyBorderCrossing") private var _defaultOnlyBorderCrossing: Bool = false
+    
+    @ObservationIgnored
+    @AppStorage("defaults.filterCountry") private var _defaultCountry: String = ""
+    
+    var defaultLegendMode: LegendMode {
+        get { LegendMode(rawValue: _defaultLegendMode) ?? .airportType }
+        set { _defaultLegendMode = newValue.rawValue }
+    }
+    
+    var defaultFilters: FilterConfig {
+        var config = FilterConfig.default
+        if _defaultOnlyProcedures { config.hasProcedures = true }
+        if _defaultOnlyBorderCrossing { config.pointOfEntry = true }
+        if !_defaultCountry.isEmpty { config.country = _defaultCountry }
+        return config
+    }
+    
+    func setDefaultFilter(onlyProcedures: Bool) {
+        _defaultOnlyProcedures = onlyProcedures
+    }
+    
+    func setDefaultFilter(onlyBorderCrossing: Bool) {
+        _defaultOnlyBorderCrossing = onlyBorderCrossing
+    }
+    
+    func setDefaultFilter(country: String?) {
+        _defaultCountry = country ?? ""
+    }
+    
+    // MARK: - Last Session State (Restore on Launch)
+    
+    @ObservationIgnored
+    @AppStorage("session.lastMapLatitude") private var _lastMapLatitude: Double = 50.0
+    
+    @ObservationIgnored
+    @AppStorage("session.lastMapLongitude") private var _lastMapLongitude: Double = 10.0
+    
+    @ObservationIgnored
+    @AppStorage("session.lastMapSpan") private var _lastMapSpan: Double = 30.0
+    
+    @ObservationIgnored
+    @AppStorage("session.lastSelectedAirport") private var _lastSelectedAirport: String = ""
+    
+    @ObservationIgnored
+    @AppStorage("session.lastTab") private var _lastTab: String = "map"
+    
+    var lastMapRegion: MKCoordinateRegion {
+        get {
+            MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: _lastMapLatitude, longitude: _lastMapLongitude),
+                span: MKCoordinateSpan(latitudeDelta: _lastMapSpan, longitudeDelta: _lastMapSpan)
+            )
+        }
+        set {
+            _lastMapLatitude = newValue.center.latitude
+            _lastMapLongitude = newValue.center.longitude
+            _lastMapSpan = newValue.span.latitudeDelta
+        }
+    }
+    
+    var lastSelectedAirportICAO: String? {
+        get { _lastSelectedAirport.isEmpty ? nil : _lastSelectedAirport }
+        set { _lastSelectedAirport = newValue ?? "" }
+    }
+    
+    var lastTab: NavigationDomain.Tab {
+        get { NavigationDomain.Tab(rawValue: _lastTab) ?? .map }
+        set { _lastTab = newValue.rawValue }
+    }
+    
+    // MARK: - Behavior Preferences
+    
+    @ObservationIgnored
+    @AppStorage("behavior.restoreSession") var restoreSessionOnLaunch: Bool = true
+    
+    @ObservationIgnored
+    @AppStorage("behavior.autoSync") var autoSyncDatabase: Bool = true
+    
+    @ObservationIgnored
+    @AppStorage("behavior.showOfflineBanner") var showOfflineBanner: Bool = true
+    
+    // MARK: - Chatbot Preferences
+    
+    @ObservationIgnored
+    @AppStorage("chatbot.saveHistory") var saveChatHistory: Bool = false
+    
+    @ObservationIgnored
+    @AppStorage("chatbot.showThinking") var showChatbotThinking: Bool = true
+    
+    // MARK: - Actions
+    
+    /// Save current session state for restoration
+    func saveSessionState(
+        mapRegion: MKCoordinateRegion,
+        selectedAirport: Airport?,
+        tab: NavigationDomain.Tab
+    ) {
+        lastMapRegion = mapRegion
+        lastSelectedAirportICAO = selectedAirport?.icao
+        lastTab = tab
+    }
+    
+    /// Reset all settings to defaults
+    func resetToDefaults() {
+        distanceUnit = .nauticalMiles
+        altitudeUnit = .feet
+        runwayUnit = .feet
+        defaultLegendMode = .airportType
+        _defaultOnlyProcedures = false
+        _defaultOnlyBorderCrossing = false
+        _defaultCountry = ""
+        restoreSessionOnLaunch = true
+        autoSyncDatabase = true
+        showOfflineBanner = true
+    }
+}
+
+// MARK: - Unit Types
+
+enum DistanceUnit: String, CaseIterable, Identifiable {
+    case nauticalMiles = "nm"
+    case kilometers = "km"
+    case statuteMiles = "mi"
+    
+    var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .nauticalMiles: return "Nautical Miles"
+        case .kilometers: return "Kilometers"
+        case .statuteMiles: return "Statute Miles"
+        }
+    }
+    
+    var abbreviation: String {
+        switch self {
+        case .nauticalMiles: return "NM"
+        case .kilometers: return "km"
+        case .statuteMiles: return "mi"
+        }
+    }
+    
+    func convert(fromNauticalMiles nm: Double) -> Double {
+        switch self {
+        case .nauticalMiles: return nm
+        case .kilometers: return nm * 1.852
+        case .statuteMiles: return nm * 1.15078
+        }
+    }
+}
+
+enum AltitudeUnit: String, CaseIterable, Identifiable {
+    case feet = "ft"
+    case meters = "m"
+    
+    var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .feet: return "Feet"
+        case .meters: return "Meters"
+        }
+    }
+    
+    func convert(fromFeet ft: Int) -> Int {
+        switch self {
+        case .feet: return ft
+        case .meters: return Int(Double(ft) * 0.3048)
+        }
+    }
+}
+
+enum RunwayUnit: String, CaseIterable, Identifiable {
+    case feet = "ft"
+    case meters = "m"
+    
+    var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .feet: return "Feet"
+        case .meters: return "Meters"
+        }
+    }
+    
+    func convert(fromFeet ft: Int) -> Int {
+        switch self {
+        case .feet: return ft
+        case .meters: return Int(Double(ft) * 0.3048)
+        }
+    }
+}
+```
+
 ### 5.3 AppState (Thin Orchestration Layer)
 
 AppState composes domains and handles cross-domain coordination.
@@ -1879,6 +2227,7 @@ final class AppState {
     let chat: ChatDomain
     let navigation: NavigationDomain
     let system: SystemDomain
+    let settings: SettingsDomain
     
     // MARK: - Init
     
@@ -1887,6 +2236,7 @@ final class AppState {
         chatbotService: ChatbotService,
         connectivityMonitor: ConnectivityMonitor
     ) {
+        self.settings = SettingsDomain()
         self.airports = AirportDomain(repository: repository)
         self.chat = ChatDomain(chatbotService: chatbotService)
         self.navigation = NavigationDomain()
@@ -1912,10 +2262,53 @@ final class AppState {
         system.setLoading(true)
         defer { system.setLoading(false) }
         
+        // Restore session state if enabled
+        if settings.restoreSessionOnLaunch {
+            restoreLastSession()
+        }
+        
+        // Apply default filters from settings
+        airports.filters = settings.defaultFilters
+        airports.legendMode = settings.defaultLegendMode
+        
         do {
             try await airports.load()
         } catch {
             system.setError(error)
+        }
+    }
+    
+    // MARK: - Session Persistence
+    
+    /// Restore last session state
+    private func restoreLastSession() {
+        // Restore map position
+        airports.mapPosition = .region(settings.lastMapRegion)
+        airports.visibleRegion = settings.lastMapRegion
+        
+        // Restore tab
+        navigation.selectedTab = settings.lastTab
+        
+        // Note: selectedAirport restored after load completes
+        // (need to look up from repository)
+    }
+    
+    /// Save session state (call on app background/terminate)
+    func saveSession() {
+        settings.saveSessionState(
+            mapRegion: airports.visibleRegion ?? .europe,
+            selectedAirport: airports.selectedAirport,
+            tab: navigation.selectedTab
+        )
+    }
+    
+    /// Restore selected airport after data loads
+    func restoreSelectedAirportIfNeeded() async {
+        guard settings.restoreSessionOnLaunch,
+              let icao = settings.lastSelectedAirportICAO else { return }
+        
+        if let airport = try? await airports.repository.airportDetail(icao: icao) {
+            airports.selectedAirport = airport
         }
     }
     
@@ -2756,6 +3149,419 @@ struct ChatBubble: View {
     }
 }
 ```
+
+### 6.4 Settings UI
+
+```swift
+struct SettingsView: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        Form {
+            // MARK: - Units
+            Section("Units") {
+                Picker("Distance", selection: Binding(
+                    get: { state?.settings.distanceUnit ?? .nauticalMiles },
+                    set: { state?.settings.distanceUnit = $0 }
+                )) {
+                    ForEach(DistanceUnit.allCases) { unit in
+                        Text(unit.displayName).tag(unit)
+                    }
+                }
+                
+                Picker("Altitude", selection: Binding(
+                    get: { state?.settings.altitudeUnit ?? .feet },
+                    set: { state?.settings.altitudeUnit = $0 }
+                )) {
+                    ForEach(AltitudeUnit.allCases) { unit in
+                        Text(unit.displayName).tag(unit)
+                    }
+                }
+                
+                Picker("Runway Length", selection: Binding(
+                    get: { state?.settings.runwayUnit ?? .feet },
+                    set: { state?.settings.runwayUnit = $0 }
+                )) {
+                    ForEach(RunwayUnit.allCases) { unit in
+                        Text(unit.displayName).tag(unit)
+                    }
+                }
+            }
+            
+            // MARK: - Default View
+            Section("Default View") {
+                Picker("Legend Mode", selection: Binding(
+                    get: { state?.settings.defaultLegendMode ?? .airportType },
+                    set: { state?.settings.defaultLegendMode = $0 }
+                )) {
+                    ForEach(LegendMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                
+                Toggle("Only IFR Airports", isOn: Binding(
+                    get: { state?.settings._defaultOnlyProcedures ?? false },
+                    set: { state?.settings.setDefaultFilter(onlyProcedures: $0) }
+                ))
+                
+                Toggle("Only Border Crossings", isOn: Binding(
+                    get: { state?.settings._defaultOnlyBorderCrossing ?? false },
+                    set: { state?.settings.setDefaultFilter(onlyBorderCrossing: $0) }
+                ))
+            }
+            
+            // MARK: - Behavior
+            Section("Behavior") {
+                Toggle("Restore Session on Launch", isOn: Binding(
+                    get: { state?.settings.restoreSessionOnLaunch ?? true },
+                    set: { state?.settings.restoreSessionOnLaunch = $0 }
+                ))
+                .help("Remember last map position and selected airport")
+                
+                Toggle("Auto-Sync Database", isOn: Binding(
+                    get: { state?.settings.autoSyncDatabase ?? true },
+                    set: { state?.settings.autoSyncDatabase = $0 }
+                ))
+                .help("Automatically download database updates when online")
+                
+                Toggle("Show Offline Banner", isOn: Binding(
+                    get: { state?.settings.showOfflineBanner ?? true },
+                    set: { state?.settings.showOfflineBanner = $0 }
+                ))
+            }
+            
+            // MARK: - Chatbot
+            Section("Chatbot") {
+                Toggle("Show Thinking Process", isOn: Binding(
+                    get: { state?.settings.showChatbotThinking ?? true },
+                    set: { state?.settings.showChatbotThinking = $0 }
+                ))
+                .help("Show AI reasoning while generating responses")
+            }
+            
+            // MARK: - Data
+            Section("Data") {
+                LabeledContent("Database Version") {
+                    Text(state?.system.databaseVersion ?? "Unknown")
+                        .foregroundStyle(.secondary)
+                }
+                
+                LabeledContent("Last Sync") {
+                    Text(state?.system.lastSyncDate?.formatted() ?? "Never")
+                        .foregroundStyle(.secondary)
+                }
+                
+                Button("Sync Now") {
+                    Task { await state?.syncDatabase() }
+                }
+                .disabled(state?.system.connectivityMode == .offline)
+                
+                Button("Clear Cache", role: .destructive) {
+                    state?.clearCache()
+                }
+            }
+            
+            // MARK: - Reset
+            Section {
+                Button("Reset All Settings", role: .destructive) {
+                    state?.settings.resetToDefaults()
+                }
+            }
+            
+            // MARK: - About
+            Section("About") {
+                LabeledContent("Version") {
+                    Text(Bundle.main.appVersion)
+                        .foregroundStyle(.secondary)
+                }
+                Link("Privacy Policy", destination: URL(string: "https://flyfun.aero/privacy")!)
+                Link("Terms of Service", destination: URL(string: "https://flyfun.aero/terms")!)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Settings")
+    }
+}
+
+extension Bundle {
+    var appVersion: String {
+        let version = infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+}
+```
+
+**Settings Persistence:**
+- Uses `@AppStorage` for automatic UserDefaults persistence
+- Settings survive app restarts
+- Syncs across devices via iCloud (if enabled)
+
+**Unit Conversion Helper:**
+```swift
+extension View {
+    /// Format distance using user's preferred unit
+    func formattedDistance(_ nm: Double, settings: SettingsDomain) -> String {
+        let value = settings.distanceUnit.convert(fromNauticalMiles: nm)
+        return String(format: "%.1f %@", value, settings.distanceUnit.abbreviation)
+    }
+    
+    /// Format altitude using user's preferred unit
+    func formattedAltitude(_ ft: Int, settings: SettingsDomain) -> String {
+        let value = settings.altitudeUnit.convert(fromFeet: ft)
+        return "\(value) \(settings.altitudeUnit.rawValue)"
+    }
+}
+```
+
+### 6.5 Map Performance Strategy
+
+**Problem:** Europe has ~10,000+ airports. Rendering all markers kills performance.
+
+**Solution:** Region-based data loading + clustering
+
+```swift
+struct AirportMapView: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        Map(position: $mapPosition) {
+            // Only render airports in visible region (loaded by AirportDomain)
+            ForEach(state?.airports.airports ?? []) { airport in
+                Annotation(airport.icao, coordinate: airport.coord) {
+                    AirportMarker(airport: airport, legendMode: state?.airports.legendMode ?? .airportType)
+                }
+            }
+        }
+        // React to region changes
+        .onMapCameraChange(frequency: .onEnd) { context in
+            state?.airports.onRegionChange(context.region)
+        }
+        // Use MapKit clustering for dense areas
+        .mapStyle(.standard(elevation: .realistic))
+    }
+}
+```
+
+**Key Design Decisions:**
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Data Loading** | By visible region | Don't load all 10K airports |
+| **Debouncing** | 300ms after pan/zoom | Avoid excessive queries |
+| **Prefetch Padding** | 1.3x visible region | Smooth panning |
+| **Marker Limit** | 500 per region | Performance ceiling |
+| **Clustering** | MapKit native | Automatic zoom-based grouping |
+
+**Repository Method:**
+```swift
+func airportsInRegion(boundingBox:filters:limit:) async throws -> [Airport]
+```
+
+**RZFlight Enhancement Opportunity:**
+- Add `KnownAirports.airports(in: BoundingBox)` for efficient spatial query
+- Current approach filters `known.values` - O(n) scan
+- KDTree already exists in RZFlight - could expose bounding box query
+
+### 6.5 macOS-Specific Affordances
+
+**Goal:** Make the Mac version feel native, not "iPad on a bigger screen."
+
+#### Keyboard Shortcuts
+
+```swift
+struct ContentView: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        RegularLayout()
+            .focusedSceneValue(\.appState, state)
+            // Keyboard shortcuts
+            .keyboardShortcut("f", modifiers: .command) { focusSearch() }
+            .keyboardShortcut("l", modifiers: .command) { toggleFilters() }
+            .keyboardShortcut("k", modifiers: .command) { toggleChat() }
+            .keyboardShortcut(",", modifiers: .command) { showSettings() }
+    }
+}
+```
+
+| Shortcut | Action | Notes |
+|----------|--------|-------|
+| ⌘F | Focus search field | Standard find |
+| ⌘L | Toggle filter panel | L for "List filters" |
+| ⌘K | Toggle chat | K for "Konversation" (common pattern) |
+| ⌘, | Open settings | Standard preferences |
+| ⌘1-4 | Switch tabs | Standard tab switching |
+| ⌘R | Refresh/reload | Reload airport data |
+| ⌘⌫ | Clear route | Clear active route |
+| ⌘+ / ⌘- | Zoom map | Standard zoom |
+
+#### Menu Bar Items
+
+```swift
+@main
+struct FlyFunEuroAIPApp: App {
+    @State private var appState: AppState
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(\.appState, appState)
+        }
+        .commands {
+            // Replace default menus
+            CommandGroup(replacing: .newItem) { }  // Remove "New" - not applicable
+            
+            // View menu
+            CommandMenu("View") {
+                Button("Toggle Filters") { appState.navigation.showingFilters.toggle() }
+                    .keyboardShortcut("l")
+                Button("Toggle Chat") { appState.navigation.showingChat.toggle() }
+                    .keyboardShortcut("k")
+                Divider()
+                Picker("Legend Mode", selection: $appState.airports.legendMode) {
+                    ForEach(LegendMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                Divider()
+                Button("Zoom In") { zoomIn() }
+                    .keyboardShortcut("+")
+                Button("Zoom Out") { zoomOut() }
+                    .keyboardShortcut("-")
+            }
+            
+            // Map menu
+            CommandMenu("Map") {
+                Button("Clear Route") { appState.airports.clearRoute() }
+                    .keyboardShortcut(.delete)
+                    .disabled(appState.airports.activeRoute == nil)
+                Button("Center on Selection") { centerOnSelection() }
+                    .keyboardShortcut("e")
+                    .disabled(appState.airports.selectedAirport == nil)
+                Divider()
+                Button("Show All Airports") { resetMapView() }
+            }
+        }
+        
+        #if os(macOS)
+        // Settings window (macOS only)
+        Settings {
+            SettingsView()
+                .environment(\.appState, appState)
+        }
+        
+        // Multiple window support
+        Window("Route Planning", id: "route") {
+            RoutePlanningWindow()
+                .environment(\.appState, appState)
+        }
+        .keyboardShortcut("n", modifiers: [.command, .shift])
+        #endif
+    }
+}
+```
+
+#### Multiple Windows (macOS)
+
+```swift
+#if os(macOS)
+/// Separate window for focused route planning
+struct RoutePlanningWindow: View {
+    @Environment(\.appState) private var state
+    @Environment(\.openWindow) private var openWindow
+    
+    var body: some View {
+        HSplitView {
+            // Route list
+            List(selection: $selectedRoute) {
+                ForEach(savedRoutes) { route in
+                    RouteRow(route: route)
+                }
+            }
+            .frame(minWidth: 200)
+            
+            // Route detail / map
+            if let route = selectedRoute {
+                RouteDetailView(route: route)
+            } else {
+                ContentUnavailableView("Select a Route", systemImage: "point.topLeft.down.to.point.bottomright.curvepath")
+            }
+        }
+        .frame(minWidth: 800, minHeight: 500)
+    }
+}
+
+/// Airport detail as separate window
+struct AirportDetailWindow: View {
+    let airport: Airport
+    
+    var body: some View {
+        AirportDetailView(airport: airport)
+            .frame(minWidth: 400, minHeight: 600)
+    }
+}
+#endif
+```
+
+#### Mac-Specific UI Polish
+
+```swift
+struct RegularLayout: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        NavigationSplitView {
+            SearchSidebar()
+                #if os(macOS)
+                .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
+                #endif
+        } content: {
+            AirportMapView()
+        } detail: {
+            if let airport = state?.airports.selectedAirport {
+                AirportDetailView(airport: airport)
+                    #if os(macOS)
+                    // Mac: toolbar button to open in new window
+                    .toolbar {
+                        ToolbarItem {
+                            Button {
+                                openAirportWindow(airport)
+                            } label: {
+                                Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                            }
+                        }
+                    }
+                    #endif
+            }
+        }
+        #if os(macOS)
+        // Mac-specific toolbar style
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Text("FlyFun EuroAIP")
+                    .font(.headline)
+            }
+        }
+        .toolbarBackground(.visible, for: .windowToolbar)
+        #endif
+    }
+}
+```
+
+#### Platform Checks Summary
+
+| Feature | iOS/iPadOS | macOS |
+|---------|------------|-------|
+| Navigation | Bottom sheet / tabs | NavigationSplitView |
+| Keyboard shortcuts | N/A | Full support |
+| Menu bar | N/A | Custom menus |
+| Multiple windows | N/A | Supported |
+| Settings | In-app sheet | Separate Settings window |
+| Toolbar | iOS style | Mac window toolbar |
+| Sidebar width | Automatic | Customizable |
+| Right-click | N/A | Context menus |
+| Drag & drop | Limited | Full support |
 
 ---
 

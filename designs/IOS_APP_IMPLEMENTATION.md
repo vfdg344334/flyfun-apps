@@ -389,6 +389,40 @@ final class SystemDomain {
 }
 ```
 
+#### SettingsDomain
+
+**File:** `App/State/Domains/SettingsDomain.swift`
+
+- [ ] Create `SettingsDomain` with `@Observable` macro
+- [ ] Use `@AppStorage` for all persisted preferences
+- [ ] Unit preferences (distance, altitude, runway)
+- [ ] Default filters and legend mode
+- [ ] Session state (last map position, selected airport, tab)
+- [ ] Behavior preferences (restore session, auto-sync)
+
+```swift
+@Observable
+@MainActor
+final class SettingsDomain {
+    // Units
+    @AppStorage("units.distance") var distanceUnit: DistanceUnit = .nauticalMiles
+    @AppStorage("units.altitude") var altitudeUnit: AltitudeUnit = .feet
+    
+    // Defaults
+    @AppStorage("defaults.legendMode") var defaultLegendMode: LegendMode = .airportType
+    @AppStorage("defaults.filterOnlyProcedures") var defaultOnlyProcedures: Bool = false
+    
+    // Session
+    @AppStorage("session.lastMapLatitude") var lastMapLatitude: Double = 50.0
+    @AppStorage("session.lastSelectedAirport") var lastSelectedAirport: String = ""
+    
+    // Behavior
+    @AppStorage("behavior.restoreSession") var restoreSessionOnLaunch: Bool = true
+}
+```
+
+**Note:** Integrates with existing `Settings.swift` in the app.
+
 ### 2.2 AppState (Thin Orchestration)
 
 **File:** `App/State/AppState.swift`
@@ -466,10 +500,24 @@ extension EnvironmentValues {
 **File:** `UserInterface/Views/Map/`
 
 - [ ] **AirportMapView.swift** - Enhanced map view
+  - [ ] Region-based data loading (via `onMapCameraChange`)
+  - [ ] Debounced region updates (300ms)
   - [ ] Legend mode-based marker colors
   - [ ] Route polyline rendering
   - [ ] Highlight circles
-  - [ ] Annotation clustering (for large datasets)
+  - [ ] MapKit clustering for dense areas
+
+**Map Performance Strategy:**
+```swift
+.onMapCameraChange(frequency: .onEnd) { context in
+    state?.airports.onRegionChange(context.region)  // Triggers region-based load
+}
+```
+
+**Repository must support:**
+```swift
+func airportsInRegion(boundingBox:filters:limit:) async throws -> [Airport]
+```
 
 - [ ] **AirportMarker.swift** - Custom marker view
   ```swift
@@ -557,6 +605,44 @@ extension EnvironmentValues {
 - [ ] **LoadingOverlay.swift** - Loading state
 - [ ] **ErrorBanner.swift** - Error display
 - [ ] **EmptyStateView.swift** - No results state
+
+### 3.7 macOS-Specific Features
+
+**Goal:** Make Mac version feel native, not "iPad on bigger screen"
+
+**File:** `App/macOS/` (macOS-only)
+
+- [ ] **Keyboard Shortcuts**
+  - [ ] ⌘F - Focus search
+  - [ ] ⌘L - Toggle filters
+  - [ ] ⌘K - Toggle chat
+  - [ ] ⌘, - Settings
+  - [ ] ⌘1-4 - Tab switching
+
+- [ ] **Menu Bar Items**
+  - [ ] View menu (filters, chat, legend mode, zoom)
+  - [ ] Map menu (clear route, center, reset)
+  - [ ] Remove inapplicable items (New, etc.)
+
+- [ ] **Multiple Windows**
+  - [ ] Settings window (standard macOS pattern)
+  - [ ] Route planning window (⇧⌘N)
+  - [ ] Airport detail in new window
+
+- [ ] **Mac-Specific Polish**
+  - [ ] Window toolbar styling
+  - [ ] Sidebar width customization
+  - [ ] Context menus (right-click)
+  - [ ] Drag & drop support
+
+**Implementation Pattern:**
+```swift
+#if os(macOS)
+// Mac-specific code
+.commands { /* Menu bar */ }
+Window("Route", id: "route") { /* New window type */ }
+#endif
+```
 
 ---
 
@@ -867,7 +953,7 @@ enum ChatbotServiceFactory {
 - [ ] Profile and optimize filter queries
 - [ ] Lazy loading for large lists
 - [ ] Map marker clustering
-- [ ] Memory management for LLM
+- [ ] Memory management
 
 ### 7.2 Offline Experience
 
@@ -890,20 +976,669 @@ enum ChatbotServiceFactory {
 - [ ] Reduce motion support
 - [ ] Color contrast
 
-### 7.5 Testing
-
-- [ ] Unit tests for models
-- [ ] Unit tests for view models
-- [ ] Unit tests for repository
-- [ ] UI tests for critical flows
-- [ ] Performance tests
-
-### 7.6 App Store Preparation
+### 7.5 App Store Preparation
 
 - [ ] App icons (all sizes)
 - [ ] Screenshots for all devices
 - [ ] Privacy policy
 - [ ] App Store description
+
+---
+
+## Testing Strategy
+
+### Test Infrastructure
+
+**Test Database:**
+```
+FlyFunEuroAIPTests/
+├── Fixtures/
+│   ├── test_airports.db        # Small DB with ~100 known airports
+│   ├── test_airports.json      # Same data as JSON for unit tests
+│   └── test_visualization.json # Sample visualization payloads
+├── Helpers/
+│   ├── TestFixtures.swift      # Airport/filter test data factory
+│   ├── MockRepository.swift    # In-memory repository for unit tests
+│   └── PreviewFactory.swift    # AppState factory for previews
+└── ...
+```
+
+### 1. Filter Tests
+
+**Goal:** Ensure FilterConfig produces same results as Python `euro_aip` filters.
+
+**File:** `Tests/FilterTests.swift`
+
+```swift
+import XCTest
+@testable import FlyFunEuroAIP
+import RZFlight
+
+final class FilterTests: XCTestCase {
+    
+    var testAirports: [Airport]!
+    
+    override func setUp() {
+        // Load fixture airports with known properties
+        testAirports = TestFixtures.airports
+    }
+    
+    // MARK: - Country Filter
+    
+    func testFilterByCountry() {
+        let filters = FilterConfig(country: "FR")
+        let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+        
+        XCTAssertTrue(result.allSatisfy { $0.country == "FR" })
+        XCTAssertEqual(result.count, TestFixtures.frenchAirportCount)
+    }
+    
+    // MARK: - Procedure Filters
+    
+    func testFilterHasProcedures() {
+        let filters = FilterConfig(hasProcedures: true)
+        let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+        
+        XCTAssertTrue(result.allSatisfy { !$0.procedures.isEmpty })
+        XCTAssertEqual(result.count, TestFixtures.airportsWithProceduresCount)
+    }
+    
+    func testFilterPrecisionApproach() {
+        // Airports with ILS/LPV approaches
+        let airports = testAirports.withPrecisionApproaches()
+        
+        XCTAssertTrue(airports.allSatisfy { airport in
+            airport.approaches.contains { $0.precisionCategory == .precision }
+        })
+    }
+    
+    // MARK: - Runway Filters
+    
+    func testFilterMinRunwayLength() {
+        let filters = FilterConfig(minRunwayLengthFt: 3000)
+        let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+        
+        XCTAssertTrue(result.allSatisfy { airport in
+            airport.runways.contains { $0.length_ft >= 3000 }
+        })
+    }
+    
+    func testFilterHardRunway() {
+        let filters = FilterConfig(hasHardRunway: true)
+        let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+        
+        XCTAssertTrue(result.allSatisfy { airport in
+            airport.runways.contains { $0.isHardSurface }
+        })
+    }
+    
+    // MARK: - Combined Filters
+    
+    func testCombinedFilters() {
+        // French airports with IFR procedures and 2000ft+ runway
+        let filters = FilterConfig(
+            country: "FR",
+            hasProcedures: true,
+            minRunwayLengthFt: 2000
+        )
+        let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+        
+        XCTAssertTrue(result.allSatisfy { airport in
+            airport.country == "FR" &&
+            !airport.procedures.isEmpty &&
+            airport.runways.contains { $0.length_ft >= 2000 }
+        })
+    }
+    
+    // MARK: - Parity with Python euro_aip
+    
+    func testFilterParityWithPython() {
+        // Test cases exported from Python euro_aip tests
+        // Ensures Swift filters produce identical results
+        
+        let testCases: [(FilterConfig, Set<String>)] = [
+            // (filters, expected ICAOs)
+            (FilterConfig(country: "GB", hasProcedures: true), 
+             Set(["EGLL", "EGKK", "EGGW", "EGCC"])),
+            (FilterConfig(pointOfEntry: true, country: "FR"),
+             Set(["LFPG", "LFPO", "LFML", "LFMN"])),
+            // ... more test cases from Python
+        ]
+        
+        for (filters, expectedICAOs) in testCases {
+            let result = MockRepository.applyInMemoryFilters(filters, to: testAirports)
+            let resultICAOs = Set(result.map(\.icao))
+            
+            XCTAssertEqual(resultICAOs, expectedICAOs, 
+                "Filter mismatch: \(filters)")
+        }
+    }
+}
+```
+
+### 2. Repository Integration Tests
+
+**Goal:** Test LocalAirportDataSource with real SQLite queries.
+
+**File:** `Tests/RepositoryTests.swift`
+
+```swift
+import XCTest
+@testable import FlyFunEuroAIP
+import RZFlight
+
+final class RepositoryTests: XCTestCase {
+    
+    var repository: LocalAirportDataSource!
+    
+    override func setUp() async throws {
+        // Use test database with known data
+        let testDBPath = Bundle(for: Self.self).path(forResource: "test_airports", ofType: "db")!
+        repository = try LocalAirportDataSource(databasePath: testDBPath)
+    }
+    
+    // MARK: - Region Queries
+    
+    func testAirportsInRegion() async throws {
+        // Bounding box around London
+        let bbox = BoundingBox(
+            minLatitude: 51.0, maxLatitude: 52.0,
+            minLongitude: -1.0, maxLongitude: 1.0
+        )
+        
+        let airports = try await repository.airportsInRegion(
+            boundingBox: bbox, filters: .default, limit: 100
+        )
+        
+        // Should include EGLL, EGKK, EGLC, etc.
+        XCTAssertTrue(airports.contains { $0.icao == "EGLL" })
+        XCTAssertTrue(airports.allSatisfy { bbox.contains($0.coord) })
+    }
+    
+    // MARK: - Route Queries
+    
+    func testAirportsNearRoute() async throws {
+        // EGTF (Fairoaks) to LFMD (Cannes)
+        let result = try await repository.airportsNearRoute(
+            from: "EGTF", to: "LFMD", distanceNm: 30, filters: .default
+        )
+        
+        XCTAssertEqual(result.departure, "EGTF")
+        XCTAssertEqual(result.destination, "LFMD")
+        XCTAssertFalse(result.airports.isEmpty)
+        
+        // Should include airports along the route
+        // (Paris area, Lyon area, etc.)
+        let icaos = Set(result.airports.map(\.icao))
+        XCTAssertTrue(icaos.contains("LFPG") || icaos.contains("LFPO"),
+            "Should include Paris airports")
+    }
+    
+    func testRouteWithFilters() async throws {
+        // Only border crossings along route
+        let result = try await repository.airportsNearRoute(
+            from: "EGTF", to: "LFMD", distanceNm: 30,
+            filters: FilterConfig(pointOfEntry: true)
+        )
+        
+        // All results should be border crossings
+        // (This requires DB access to verify)
+        XCTAssertFalse(result.airports.isEmpty)
+    }
+    
+    // MARK: - Search
+    
+    func testSearchByICAO() async throws {
+        let results = try await repository.searchAirports(query: "EGLL", limit: 10)
+        
+        XCTAssertEqual(results.first?.icao, "EGLL")
+    }
+    
+    func testSearchByName() async throws {
+        let results = try await repository.searchAirports(query: "Heathrow", limit: 10)
+        
+        XCTAssertTrue(results.contains { $0.icao == "EGLL" })
+    }
+    
+    func testSearchByCity() async throws {
+        let results = try await repository.searchAirports(query: "London", limit: 50)
+        
+        // Should include multiple London airports
+        let icaos = Set(results.map(\.icao))
+        XCTAssertTrue(icaos.contains("EGLL"))  // Heathrow
+        XCTAssertTrue(icaos.contains("EGLC"))  // City
+    }
+    
+    // MARK: - Detail
+    
+    func testAirportDetail() async throws {
+        let airport = try await repository.airportDetail(icao: "EGLL")
+        
+        XCTAssertNotNil(airport)
+        XCTAssertEqual(airport?.icao, "EGLL")
+        XCTAssertFalse(airport?.runways.isEmpty ?? true)
+        XCTAssertFalse(airport?.procedures.isEmpty ?? true)
+    }
+}
+```
+
+### 3. Chat Visualization Tests
+
+**Goal:** Ensure `applyVisualization` correctly updates AppState.
+
+**File:** `Tests/VisualizationTests.swift`
+
+```swift
+import XCTest
+@testable import FlyFunEuroAIP
+import RZFlight
+
+@MainActor
+final class VisualizationTests: XCTestCase {
+    
+    var appState: AppState!
+    
+    override func setUp() async throws {
+        appState = await PreviewFactory.makeAppState()
+    }
+    
+    // MARK: - Markers Visualization
+    
+    func testMarkersVisualization() {
+        let airports = TestFixtures.airports.prefix(10).map { $0 }
+        let payload = VisualizationPayload(
+            kind: .markers,
+            airports: airports,
+            route: nil,
+            point: nil,
+            filterProfile: nil
+        )
+        
+        appState.airports.applyVisualization(payload)
+        
+        XCTAssertEqual(appState.airports.airports.count, 10)
+        XCTAssertEqual(
+            Set(appState.airports.airports.map(\.icao)),
+            Set(airports.map(\.icao))
+        )
+    }
+    
+    // MARK: - Route Visualization
+    
+    func testRouteWithMarkersVisualization() {
+        let airports = TestFixtures.airports.prefix(5).map { $0 }
+        let route = RouteVisualization(
+            coordinates: [
+                CLLocationCoordinate2D(latitude: 51.5, longitude: -0.5),
+                CLLocationCoordinate2D(latitude: 43.5, longitude: 7.0)
+            ],
+            departure: "EGTF",
+            destination: "LFMD"
+        )
+        let payload = VisualizationPayload(
+            kind: .routeWithMarkers,
+            airports: airports,
+            route: route,
+            point: nil,
+            filterProfile: nil
+        )
+        
+        appState.airports.applyVisualization(payload)
+        
+        // Check route is set
+        XCTAssertNotNil(appState.airports.activeRoute)
+        XCTAssertEqual(appState.airports.activeRoute?.departure, "EGTF")
+        XCTAssertEqual(appState.airports.activeRoute?.destination, "LFMD")
+        
+        // Check airports are set
+        XCTAssertEqual(appState.airports.airports.count, 5)
+        
+        // Check highlights are created
+        XCTAssertFalse(appState.airports.highlights.isEmpty)
+        for airport in airports {
+            XCTAssertNotNil(appState.airports.highlights["chat-\(airport.icao)"])
+        }
+    }
+    
+    // MARK: - Detail Visualization
+    
+    func testMarkerWithDetailsVisualization() {
+        let airport = TestFixtures.airports.first!
+        let payload = VisualizationPayload(
+            kind: .markerWithDetails,
+            airports: [airport],
+            route: nil,
+            point: nil,
+            filterProfile: nil
+        )
+        
+        appState.airports.applyVisualization(payload)
+        
+        XCTAssertEqual(appState.airports.selectedAirport?.icao, airport.icao)
+    }
+    
+    // MARK: - Filter Profile Application
+    
+    func testFilterProfileApplication() {
+        let filterConfig = FilterConfig(
+            country: "FR",
+            hasProcedures: true,
+            minRunwayLengthFt: 2000
+        )
+        let payload = VisualizationPayload(
+            kind: .markers,
+            airports: [],
+            route: nil,
+            point: nil,
+            filterProfile: filterConfig
+        )
+        
+        appState.airports.applyVisualization(payload)
+        
+        XCTAssertEqual(appState.airports.filters.country, "FR")
+        XCTAssertEqual(appState.airports.filters.hasProcedures, true)
+        XCTAssertEqual(appState.airports.filters.minRunwayLengthFt, 2000)
+    }
+    
+    // MARK: - Clearing State
+    
+    func testClearRoute() {
+        // Setup: add a route
+        appState.airports.activeRoute = RouteVisualization(
+            coordinates: [], departure: "EGTF", destination: "LFMD"
+        )
+        appState.airports.highlights["route-1"] = MapHighlight(
+            id: "route-1", coordinate: .init(latitude: 0, longitude: 0),
+            color: .blue, radius: 1000, popup: nil
+        )
+        appState.airports.highlights["chat-EGLL"] = MapHighlight(
+            id: "chat-EGLL", coordinate: .init(latitude: 0, longitude: 0),
+            color: .blue, radius: 1000, popup: nil
+        )
+        
+        appState.airports.clearRoute()
+        
+        XCTAssertNil(appState.airports.activeRoute)
+        XCTAssertNil(appState.airports.highlights["route-1"])
+        XCTAssertNotNil(appState.airports.highlights["chat-EGLL"])  // Chat highlights preserved
+    }
+}
+```
+
+### 4. Preview Infrastructure
+
+**Goal:** Robust SwiftUI previews with realistic mock data.
+
+**File:** `App/Preview/PreviewFactory.swift`
+
+```swift
+import SwiftUI
+import RZFlight
+import MapKit
+
+/// Factory for creating preview-ready AppState and components
+@MainActor
+enum PreviewFactory {
+    
+    // MARK: - AppState
+    
+    /// Create AppState with mock data for previews
+    static func makeAppState() -> AppState {
+        let repository = MockRepository()
+        let chatbot = MockChatbotService()
+        let connectivity = MockConnectivityMonitor()
+        
+        let state = AppState(
+            repository: repository,
+            chatbotService: chatbot,
+            connectivityMonitor: connectivity
+        )
+        
+        // Pre-populate with sample data
+        state.airports.airports = TestFixtures.airports
+        state.airports.selectedAirport = TestFixtures.airports.first
+        state.airports.mapPosition = .region(.europe)
+        
+        return state
+    }
+    
+    /// Create AppState with chat messages
+    static func makeAppStateWithChat() -> AppState {
+        let state = makeAppState()
+        
+        state.chat.messages = [
+            ChatMessage(role: .user, content: "Find airports near EGTF with ILS"),
+            ChatMessage(role: .assistant, content: "I found 5 airports near Fairoaks with ILS approaches:\n\n1. **EGLL** - London Heathrow\n2. **EGKK** - London Gatwick\n..."),
+        ]
+        
+        return state
+    }
+    
+    /// Create AppState with active route
+    static func makeAppStateWithRoute() -> AppState {
+        let state = makeAppState()
+        
+        state.airports.activeRoute = RouteVisualization(
+            coordinates: [
+                CLLocationCoordinate2D(latitude: 51.3, longitude: -0.5),  // EGTF
+                CLLocationCoordinate2D(latitude: 43.5, longitude: 7.0)   // LFMD
+            ],
+            departure: "EGTF",
+            destination: "LFMD"
+        )
+        
+        // Highlights along route
+        state.airports.highlights = [
+            "route-LFPG": MapHighlight(id: "route-LFPG", coordinate: .init(latitude: 49.0, longitude: 2.5), color: .blue, radius: 20000, popup: "Paris CDG"),
+            "route-LFLY": MapHighlight(id: "route-LFLY", coordinate: .init(latitude: 45.7, longitude: 5.0), color: .blue, radius: 20000, popup: "Lyon")
+        ]
+        
+        return state
+    }
+    
+    // MARK: - Individual Components
+    
+    static var sampleAirport: Airport {
+        TestFixtures.airports.first!
+    }
+    
+    static var sampleAirportWithProcedures: Airport {
+        TestFixtures.airports.first { !$0.procedures.isEmpty }!
+    }
+    
+    static var sampleChatMessages: [ChatMessage] {
+        [
+            ChatMessage(role: .user, content: "What's EGLL?"),
+            ChatMessage(role: .assistant, content: "**London Heathrow (EGLL)** is the busiest airport in the UK..."),
+            ChatMessage(role: .user, content: "Show me airports between EGTF and LFMD"),
+            ChatMessage(role: .assistant, content: "Here are airports along your route:", isStreaming: true)
+        ]
+    }
+}
+
+// MARK: - Mock Repository
+
+final class MockRepository: AirportRepositoryProtocol {
+    func airportsInRegion(boundingBox: BoundingBox, filters: FilterConfig, limit: Int) async throws -> [Airport] {
+        TestFixtures.airports.filter { boundingBox.contains($0.coord) }.prefix(limit).map { $0 }
+    }
+    
+    func airports(matching filters: FilterConfig, limit: Int) async throws -> [Airport] {
+        Array(TestFixtures.airports.prefix(limit))
+    }
+    
+    func searchAirports(query: String, limit: Int) async throws -> [Airport] {
+        TestFixtures.airports.filter { 
+            $0.icao.contains(query.uppercased()) || 
+            $0.name.localizedCaseInsensitiveContains(query)
+        }.prefix(limit).map { $0 }
+    }
+    
+    func airportDetail(icao: String) async throws -> Airport? {
+        TestFixtures.airports.first { $0.icao == icao }
+    }
+    
+    func airportsNearRoute(from: String, to: String, distanceNm: Int, filters: FilterConfig) async throws -> RouteResult {
+        RouteResult(airports: Array(TestFixtures.airports.prefix(10)), departure: from, destination: to)
+    }
+    
+    func airportsNearLocation(center: CLLocationCoordinate2D, radiusNm: Int, filters: FilterConfig) async throws -> [Airport] {
+        Array(TestFixtures.airports.prefix(10))
+    }
+    
+    func applyInMemoryFilters(_ filters: FilterConfig, to airports: [Airport]) -> [Airport] {
+        // Simplified for preview
+        airports
+    }
+    
+    func countryRules(for countryCode: String) async throws -> CountryRules? { nil }
+    func availableCountries() async throws -> [String] { ["GB", "FR", "DE", "IT", "ES"] }
+    func filterMetadata() async throws -> FilterMetadata { FilterMetadata() }
+}
+
+// MARK: - Mock Chatbot
+
+final class MockChatbotService: ChatbotService {
+    var isOnline: Bool { false }
+    var capabilities: ChatbotCapabilities { .fallback }
+    
+    func sendMessage(_ message: String) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.content("This is a mock response for: \(message)"))
+            continuation.yield(.done(nil))
+            continuation.finish()
+        }
+    }
+    
+    func clearHistory() {}
+}
+
+// MARK: - Mock Connectivity
+
+final class MockConnectivityMonitor: ConnectivityMonitor {
+    var modeStream: AsyncStream<ConnectivityMode> {
+        AsyncStream { continuation in
+            continuation.yield(.offline)
+        }
+    }
+}
+```
+
+**File:** `App/Preview/TestFixtures.swift`
+
+```swift
+import RZFlight
+import CoreLocation
+
+/// Test data fixtures for unit tests and previews
+enum TestFixtures {
+    
+    /// Sample airports with known properties for testing
+    static let airports: [Airport] = [
+        makeAirport(icao: "EGLL", name: "London Heathrow", city: "London", country: "GB",
+                   lat: 51.4700, lon: -0.4543, elevation: 83,
+                   hasProcedures: true, hasPrecision: true, runwayLength: 12800),
+        makeAirport(icao: "EGKK", name: "London Gatwick", city: "London", country: "GB",
+                   lat: 51.1481, lon: -0.1903, elevation: 202,
+                   hasProcedures: true, hasPrecision: true, runwayLength: 10879),
+        makeAirport(icao: "EGTF", name: "Fairoaks", city: "Chobham", country: "GB",
+                   lat: 51.3481, lon: -0.5589, elevation: 80,
+                   hasProcedures: false, hasPrecision: false, runwayLength: 2362),
+        makeAirport(icao: "LFPG", name: "Charles de Gaulle", city: "Paris", country: "FR",
+                   lat: 49.0097, lon: 2.5478, elevation: 392,
+                   hasProcedures: true, hasPrecision: true, runwayLength: 13829),
+        makeAirport(icao: "LFMD", name: "Cannes Mandelieu", city: "Cannes", country: "FR",
+                   lat: 43.5420, lon: 6.9533, elevation: 13,
+                   hasProcedures: true, hasPrecision: false, runwayLength: 5577),
+        // ... more airports
+    ]
+    
+    static let frenchAirportCount = airports.filter { $0.country == "FR" }.count
+    static let airportsWithProceduresCount = airports.filter { !$0.procedures.isEmpty }.count
+    
+    private static func makeAirport(
+        icao: String, name: String, city: String, country: String,
+        lat: Double, lon: Double, elevation: Int,
+        hasProcedures: Bool, hasPrecision: Bool, runwayLength: Int
+    ) -> Airport {
+        // Build using RZFlight Airport
+        // Note: May need API-friendly initializer (proposed RZFlight enhancement)
+        var airport = Airport(
+            location: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+            icao: icao
+        )
+        // Set properties...
+        return airport
+    }
+}
+```
+
+### 5. SwiftUI Preview Usage
+
+```swift
+// MARK: - Preview Examples
+
+#Preview("Map View") {
+    AirportMapView()
+        .environment(\.appState, PreviewFactory.makeAppState())
+}
+
+#Preview("Map with Route") {
+    AirportMapView()
+        .environment(\.appState, PreviewFactory.makeAppStateWithRoute())
+}
+
+#Preview("Chat View") {
+    ChatView()
+        .environment(\.appState, PreviewFactory.makeAppStateWithChat())
+}
+
+#Preview("Airport Detail") {
+    AirportDetailView(airport: PreviewFactory.sampleAirportWithProcedures)
+        .environment(\.appState, PreviewFactory.makeAppState())
+}
+
+#Preview("Filter Panel") {
+    FilterPanel()
+        .environment(\.appState, PreviewFactory.makeAppState())
+}
+
+#Preview("Settings") {
+    SettingsView()
+        .environment(\.appState, PreviewFactory.makeAppState())
+}
+```
+
+### Test Coverage Priorities
+
+| Component | Priority | Test Type | Notes |
+|-----------|----------|-----------|-------|
+| FilterConfig + Repository filtering | **Critical** | Unit + Integration | Must match Python euro_aip |
+| Visualization payload handling | **Critical** | Unit | Chat→Map integration |
+| Route search | High | Integration | Complex spatial logic |
+| Region-based loading | High | Integration | Map performance |
+| Session restore | Medium | Unit | Settings persistence |
+| Chat streaming | Medium | Integration | SSE parsing |
+| Unit conversions | Low | Unit | Simple math |
+
+### CI/CD Test Configuration
+
+```yaml
+# .github/workflows/tests.yml
+- name: Run Tests
+  run: |
+    xcodebuild test \
+      -scheme FlyFunEuroAIP \
+      -destination 'platform=iOS Simulator,name=iPhone 15' \
+      -testPlan UnitTests
+      
+- name: Run Integration Tests
+  run: |
+    xcodebuild test \
+      -scheme FlyFunEuroAIP \
+      -destination 'platform=iOS Simulator,name=iPhone 15' \
+      -testPlan IntegrationTests
+```
 
 ---
 
@@ -928,7 +1663,8 @@ app/FlyFunEuroAIP/
 │   │       ├── AirportDomain.swift      # Airports, filters, map state
 │   │       ├── ChatDomain.swift         # Messages, streaming, LLM
 │   │       ├── NavigationDomain.swift   # Tabs, sheets, path
-│   │       └── SystemDomain.swift       # Connectivity, loading, errors
+│   │       ├── SystemDomain.swift       # Connectivity, loading, errors
+│   │       └── SettingsDomain.swift     # User preferences, persisted state
 │   │
 │   ├── Models/                          # App-specific types ONLY
 │   │   ├── FilterConfig.swift           # Filter state
@@ -1017,6 +1753,9 @@ app/FlyFunEuroAIP/
 │   │   ├── ThinkingBubble.swift
 │   │   └── FloatingChatButton.swift
 │   │
+│   ├── Settings/
+│   │   └── SettingsView.swift           # User preferences UI
+│   │
 │   ├── Components/
 │   │   ├── OfflineBanner.swift
 │   │   ├── LoadingView.swift
@@ -1026,13 +1765,28 @@ app/FlyFunEuroAIP/
 │   │   └── MapViewCoordinator.swift     # Complex view-specific computations
 │   │
 │   └── Preview/
-│       └── PreviewHelpers.swift              # Preview providers
+│       ├── PreviewFactory.swift         # AppState factory for previews
+│       └── TestFixtures.swift           # Sample data for tests/previews
 │
 ├── Assets.xcassets/
 ├── Data/
 │   └── airports.db                           # Bundled database
 └── Development Assets/
     └── airports_small.db                     # Preview database
+
+FlyFunEuroAIPTests/
+├── Fixtures/
+│   ├── test_airports.db                 # Small test DB (~100 airports)
+│   ├── test_airports.json               # Same data as JSON
+│   └── test_visualizations.json         # Sample payloads
+├── Helpers/
+│   ├── MockRepository.swift             # In-memory repository
+│   └── MockChatbotService.swift         # Mock chatbot
+├── FilterTests.swift                    # FilterConfig tests
+├── RepositoryTests.swift                # LocalAirportDataSource tests
+├── VisualizationTests.swift             # applyVisualization tests
+├── SettingsTests.swift                  # SettingsDomain tests
+└── ChatDomainTests.swift                # Chat streaming tests
 ```
 
 **Architecture Choices:**
@@ -1078,10 +1832,29 @@ When implementing features, if functionality exists in `euro_aip` (Python) but n
 | Feature | Python Reference | Priority | Workaround |
 |---------|-----------------|----------|------------|
 | **API-friendly initializers** | For API → RZFlight | **Critical** | Extension in app |
+| **Bounding box query** | For map performance | **High** | Filter `known.values` (O(n)) |
 | Fuel filtering (AVGAS/Jet-A) | `has_avgas`, `has_jet_a` | High | AIP entry search |
 | Landing fee filtering | `max_landing_fee` | Medium | AIP entry search |
 | Country list | `get_countries()` | High | SQL query |
 | Airport count by country | `count_by_country()` | Low | Compute locally |
+
+### Bounding Box Query (High Priority for Map Performance)
+
+RZFlight has a KDTree for spatial indexing. Expose it for efficient region queries:
+
+```swift
+// Proposed addition to KnownAirports
+extension KnownAirports {
+    /// Get airports within a geographic bounding box
+    /// Uses KDTree for O(log n) spatial query instead of O(n) scan
+    func airports(in boundingBox: BoundingBox) -> [Airport] {
+        // Use existing KDTree to find airports in region
+    }
+}
+```
+
+**Current workaround:** Filter `known.values` - O(n) for each region change
+**With enhancement:** O(log n + k) where k = results
 
 ### API-Friendly Initializers (Critical for Phase 4)
 
