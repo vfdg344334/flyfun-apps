@@ -366,6 +366,18 @@ class Application {
       });
     }
     
+    // Persona selector listener - reload GA relevance data when persona changes
+    const personaSelector = document.getElementById('persona-selector');
+    if (personaSelector) {
+      personaSelector.addEventListener('change', () => {
+        // Check if relevance tab is currently active and an airport is selected
+        const relevancePanel = document.getElementById('relevance-panel');
+        if (relevancePanel?.classList.contains('show') && this.currentSelectedIcao) {
+          this.loadGARelevanceData(this.currentSelectedIcao);
+        }
+      });
+    }
+    
     // Display airport details event
     window.addEventListener('display-airport-details', ((e: Event) => {
       const customEvent = e as CustomEvent<{
@@ -1016,7 +1028,7 @@ class Application {
             </div>
             <div class="text-muted small">
               Based on ${summary.review_count || 0} review${summary.review_count !== 1 ? 's' : ''}
-              ${summary.last_review_utc ? `<br>Last review: ${new Date(summary.last_review_utc).toLocaleDateString()}` : ''}
+              ${summary.last_review_utc ? `<br>Last review: ${this.formatReviewDate(summary.last_review_utc)}` : ''}
             </div>
           </div>
         </div>
@@ -1144,6 +1156,36 @@ class Application {
     if (score >= 0.50) return '#2471a3';
     if (score >= 0.25) return '#d68910';
     return '#c0392b';
+  }
+  
+  /**
+   * Format review date from various formats
+   * Handles formats like "2025-08-28 07:27:20 UTC"
+   */
+  private formatReviewDate(dateStr: string): string {
+    try {
+      // Remove "UTC" suffix and replace space with "T" for ISO format
+      const normalized = dateStr
+        .replace(' UTC', 'Z')
+        .replace(' ', 'T');
+      
+      const date = new Date(normalized);
+      
+      if (isNaN(date.getTime())) {
+        // If still invalid, try parsing as-is without the UTC part
+        const withoutUtc = dateStr.replace(' UTC', '').replace('UTC', '');
+        const fallbackDate = new Date(withoutUtc);
+        
+        if (isNaN(fallbackDate.getTime())) {
+          return dateStr; // Return original if all parsing fails
+        }
+        return fallbackDate.toLocaleDateString();
+      }
+      
+      return date.toLocaleDateString();
+    } catch {
+      return dateStr; // Return original on error
+    }
   }
   
   /**
