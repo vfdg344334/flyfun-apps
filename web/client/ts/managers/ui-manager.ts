@@ -117,12 +117,11 @@ export class UIManager {
   
   /**
    * Update persona selector visibility based on legend mode.
+   * Note: Persona selector is now in the global header and always visible.
    */
-  private updatePersonaSelectorVisibility(legendMode: LegendMode): void {
-    const container = document.getElementById('persona-selector-container');
-    if (container) {
-      container.style.display = legendMode === 'relevance' ? 'block' : 'none';
-    }
+  private updatePersonaSelectorVisibility(_legendMode: LegendMode): void {
+    // Persona selector is now in global header - always visible
+    // No visibility toggle needed
   }
   
   /**
@@ -759,6 +758,26 @@ export class UIManager {
           </div>
         `;
         break;
+        
+      case 'relevance': {
+        // Get bucket colors from GA config or use defaults
+        const state = this.store.getState();
+        const buckets = state.ga?.config?.relevance_buckets || [
+          { id: 'top-quartile', label: 'Most Relevant', color: '#27ae60' },
+          { id: 'second-quartile', label: 'Relevant', color: '#3498db' },
+          { id: 'third-quartile', label: 'Less Relevant', color: '#f39c12' },
+          { id: 'bottom-quartile', label: 'Least Relevant', color: '#e74c3c' },
+          { id: 'unknown', label: 'No Data', color: '#95a5a6' }
+        ];
+        
+        html = buckets.map(bucket => `
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: ${bucket.color};"></div>
+            <span>${bucket.label}</span>
+          </div>
+        `).join('');
+        break;
+      }
     }
     
     legendContent.innerHTML = html;

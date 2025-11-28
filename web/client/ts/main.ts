@@ -148,6 +148,7 @@ class Application {
     // Subscribe to filtered airports changes
     let lastAirports: any[] = [];
     let lastLegendMode: string = '';
+    let lastSelectedPersona: string = '';
     let lastHighlightsHash: string = '';
     let lastRouteHash: string = '';
     let lastLocateHash: string = '';
@@ -170,17 +171,24 @@ class Application {
           const lastAirportsHash = JSON.stringify(lastAirports.map((a: any) => a.ident).sort());
           const airportsChanged = currentAirportsHash !== lastAirportsHash;
           const legendModeChanged = state.visualization.legendMode !== lastLegendMode;
+          const personaChanged = state.ga.selectedPersona !== lastSelectedPersona;
           
           // Capture previous legend mode BEFORE updating it (needed for procedure lines clearing)
           const wasProcedurePrecision = lastLegendMode === 'procedure-precision';
           const isProcedurePrecision = state.visualization.legendMode === 'procedure-precision';
           
-          if (airportsChanged || legendModeChanged) {
+          // Update markers when airports, legend mode, or persona changes (persona affects relevance coloring)
+          const needsMarkerUpdate = airportsChanged || legendModeChanged || 
+            (personaChanged && state.visualization.legendMode === 'relevance');
+          
+          if (needsMarkerUpdate) {
             console.log('Store subscription: Updating markers', {
               airportCount: state.filteredAirports.length,
               legendMode: state.visualization.legendMode,
               airportsChanged,
-              legendModeChanged
+              legendModeChanged,
+              personaChanged,
+              selectedPersona: state.ga.selectedPersona
             });
             
             const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0;
@@ -192,6 +200,7 @@ class Application {
             
             lastAirports = [...state.filteredAirports]; // Copy array for comparison
             lastLegendMode = state.visualization.legendMode;
+            lastSelectedPersona = state.ga.selectedPersona;
           }
           
           // Build reference point highlights from route/locate state
