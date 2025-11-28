@@ -34,6 +34,7 @@ class Application {
   private llmIntegration: LLMIntegration;
   private chatbotManager: ChatbotManager;
   private personaManager: PersonaManager;
+  private currentSelectedIcao: string | null = null;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
   private storeUnsubscribe?: () => void; // Store unsubscribe function
   
@@ -354,6 +355,16 @@ class Application {
         searchInput.dispatchEvent(new Event('input'));
       }
     }) as EventListener);
+    
+    // Relevance tab listener - reload GA data when tab is shown (in case persona changed)
+    const relevanceTab = document.getElementById('relevance-tab');
+    if (relevanceTab) {
+      relevanceTab.addEventListener('shown.bs.tab', () => {
+        if (this.currentSelectedIcao) {
+          this.loadGARelevanceData(this.currentSelectedIcao);
+        }
+      });
+    }
     
     // Display airport details event
     window.addEventListener('display-airport-details', ((e: Event) => {
@@ -722,6 +733,10 @@ class Application {
     // Display AIP data and rules
     this.displayAIPData(aipEntries);
     this.displayCountryRules(rules, airport.iso_country);
+    
+    // Track selected airport and load GA relevance data
+    this.currentSelectedIcao = airport.ident;
+    this.loadGARelevanceData(airport.ident);
   }
   
   /**
@@ -949,6 +964,186 @@ class Application {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
     return `rules-${countryCode}-${slug || 'general'}`;
+  }
+  
+  /**
+   * Load and display GA relevance data for an airport
+   */
+  private async loadGARelevanceData(icao: string): Promise<void> {
+    const loadingEl = document.getElementById('relevance-loading');
+    const dataEl = document.getElementById('relevance-data');
+    const noDataEl = document.getElementById('relevance-no-data');
+    
+    if (!loadingEl || !dataEl || !noDataEl) return;
+    
+    // Show loading state
+    loadingEl.style.display = 'block';
+    dataEl.style.display = 'none';
+    noDataEl.style.display = 'none';
+    
+    try {
+      const persona = useStore.getState().ga.selectedPersona;
+      const summary = await this.apiAdapter.getGASummary(icao, persona);
+      
+      if (!summary.has_data) {
+        loadingEl.style.display = 'none';
+        noDataEl.style.display = 'block';
+        return;
+      }
+      
+      // Get feature display names from config
+      const config = useStore.getState().ga.config;
+      const displayNames = config?.feature_display_names || {};
+      const descriptions = config?.feature_descriptions || {};
+      
+      // Build the HTML
+      let html = '';
+      
+      // Overall score section
+      html += `
+        <div class="airport-detail-section">
+          <h6><i class="fas fa-star"></i> Overall Score</h6>
+          <div class="d-flex align-items-center gap-3 mb-2">
+            <div class="relevance-score-badge" style="
+              background: linear-gradient(135deg, ${this.getScoreColor(summary.score)} 0%, ${this.getScoreColorDark(summary.score)} 100%);
+              color: white;
+              padding: 8px 16px;
+              border-radius: 8px;
+              font-size: 1.5em;
+              font-weight: bold;
+            ">
+              ${summary.score !== null ? (summary.score * 100).toFixed(0) : 'N/A'}%
+            </div>
+            <div class="text-muted small">
+              Based on ${summary.review_count || 0} review${summary.review_count !== 1 ? 's' : ''}
+              ${summary.last_review_utc ? `<br>Last review: ${new Date(summary.last_review_utc).toLocaleDateString()}` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+      
+      // Feature breakdown section
+      if (summary.features) {
+        html += `
+          <div class="airport-detail-section">
+            <h6><i class="fas fa-chart-bar"></i> Feature Breakdown</h6>
+            <table class="table table-sm">
+        `;
+        
+        for (const [featureName, value] of Object.entries(summary.features)) {
+          const displayName = displayNames[featureName] || featureName.replace(/_/g, ' ').replace('ga ', '');
+          const description = descriptions[featureName] || '';
+          const percentage = value !== null ? (value * 100).toFixed(0) : 'N/A';
+          const barWidth = value !== null ? Math.max(5, value * 100) : 0;
+          const barColor = value !== null ? this.getScoreColor(value) : '#ccc';
+          
+          html += `
+            <tr title="${this.escapeAttribute(description)}">
+              <td style="width: 40%"><strong>${this.escapeHtml(displayName)}</strong></td>
+              <td style="width: 45%">
+                <div class="progress" style="height: 8px;">
+                  <div class="progress-bar" role="progressbar" 
+                       style="width: ${barWidth}%; background-color: ${barColor};"
+                       aria-valuenow="${barWidth}" aria-valuemin="0" aria-valuemax="100">
+                  </div>
+                </div>
+              </td>
+              <td style="width: 15%; text-align: right;">${percentage}${value !== null ? '%' : ''}</td>
+            </tr>
+          `;
+        }
+        
+        html += `
+            </table>
+          </div>
+        `;
+      }
+      
+      // Tags section
+      if (summary.tags && summary.tags.length > 0) {
+        html += `
+          <div class="airport-detail-section">
+            <h6><i class="fas fa-tags"></i> Review Tags</h6>
+            <div class="d-flex flex-wrap gap-1">
+              ${summary.tags.map(tag => 
+                `<span class="badge bg-secondary">${this.escapeHtml(tag)}</span>`
+              ).join('')}
+            </div>
+          </div>
+        `;
+      }
+      
+      // Summary text section
+      if (summary.summary_text) {
+        html += `
+          <div class="airport-detail-section">
+            <h6><i class="fas fa-quote-left"></i> Summary</h6>
+            <p class="text-muted small">${this.escapeHtml(summary.summary_text)}</p>
+          </div>
+        `;
+      }
+      
+      // Notification/hassle section
+      if (summary.notification_summary || summary.hassle_level) {
+        html += `
+          <div class="airport-detail-section">
+            <h6><i class="fas fa-clipboard-list"></i> Requirements</h6>
+        `;
+        if (summary.hassle_level) {
+          html += `<p><strong>Hassle Level:</strong> ${this.escapeHtml(summary.hassle_level)}</p>`;
+        }
+        if (summary.notification_summary) {
+          html += `<p class="text-muted small">${this.escapeHtml(summary.notification_summary)}</p>`;
+        }
+        html += `</div>`;
+      }
+      
+      // Hotel/Restaurant info
+      if (summary.hotel_info || summary.restaurant_info) {
+        html += `
+          <div class="airport-detail-section">
+            <h6><i class="fas fa-concierge-bell"></i> Amenities</h6>
+        `;
+        if (summary.hotel_info) {
+          html += `<p><strong>Hotels:</strong> ${this.escapeHtml(summary.hotel_info)}</p>`;
+        }
+        if (summary.restaurant_info) {
+          html += `<p><strong>Restaurants:</strong> ${this.escapeHtml(summary.restaurant_info)}</p>`;
+        }
+        html += `</div>`;
+      }
+      
+      dataEl.innerHTML = html;
+      loadingEl.style.display = 'none';
+      dataEl.style.display = 'block';
+      
+    } catch (error) {
+      console.error('[Application] Failed to load GA relevance data:', error);
+      loadingEl.style.display = 'none';
+      noDataEl.style.display = 'block';
+    }
+  }
+  
+  /**
+   * Get color based on score (0-1)
+   */
+  private getScoreColor(score: number | null): string {
+    if (score === null) return '#95a5a6';
+    if (score >= 0.75) return '#27ae60';
+    if (score >= 0.50) return '#3498db';
+    if (score >= 0.25) return '#f39c12';
+    return '#e74c3c';
+  }
+  
+  /**
+   * Get darker color for gradient
+   */
+  private getScoreColorDark(score: number | null): string {
+    if (score === null) return '#7f8c8d';
+    if (score >= 0.75) return '#1e8449';
+    if (score >= 0.50) return '#2471a3';
+    if (score >= 0.25) return '#d68910';
+    return '#c0392b';
   }
   
   /**

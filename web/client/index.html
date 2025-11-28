@@ -1192,6 +1192,11 @@
                                     <i class="fas fa-scale-balanced"></i> Rules
                                 </button>
                             </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="relevance-tab" data-bs-toggle="tab" data-bs-target="#relevance-panel" type="button" role="tab">
+                                    <i class="fas fa-star"></i> Relevance
+                                </button>
+                            </li>
                         </ul>
 
                         <!-- Tab Content -->
@@ -1245,6 +1250,25 @@
                                     <div id="rules-content">
                                         <div class="text-center text-muted py-4">
                                             <i class="fas fa-info-circle"></i> Select an airport to load country rules
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- GA Relevance Tab -->
+                            <div class="tab-pane fade" id="relevance-panel" role="tabpanel">
+                                <div class="tab-pane-content">
+                                    <div id="relevance-content">
+                                        <div class="text-center text-muted py-4" id="relevance-loading">
+                                            <i class="fas fa-spinner fa-spin"></i> Loading GA data...
+                                        </div>
+                                        <div id="relevance-data" style="display: none;">
+                                            <!-- GA relevance data will be populated here -->
+                                        </div>
+                                        <div id="relevance-no-data" style="display: none;">
+                                            <div class="text-center text-muted py-4">
+                                                <i class="fas fa-info-circle"></i> No GA friendliness data available for this airport
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
