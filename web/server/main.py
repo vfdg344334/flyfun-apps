@@ -137,8 +137,9 @@ async def lifespan(app: FastAPI):
 
         # Initialize GA friendliness service (optional)
         ga_meta_db_path = get_safe_ga_meta_db_path()
-        ga_friendliness.init_service(ga_meta_db_path)
-        if ga_friendliness.feature_enabled():
+        ga_service = ga_friendliness.GAFriendlinessService(ga_meta_db_path)
+        ga_friendliness.set_service(ga_service)
+        if ga_service.enabled:
             logger.info(f"GA Friendliness service enabled with DB: {ga_meta_db_path}")
         else:
             logger.info("GA Friendliness service disabled (no database configured)")

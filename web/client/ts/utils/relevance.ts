@@ -8,7 +8,8 @@ import type {
   AirportGAScore, 
   QuartileThresholds, 
   RelevanceBucket, 
-  RelevanceBucketConfig 
+  RelevanceBucketConfig,
+  Airport
 } from '../store/types';
 
 /**
@@ -29,6 +30,36 @@ export function computeQuartileThresholds(
   const validScores = Array.from(scores.values())
     .filter(s => s.has_data && s.score !== null)
     .map(s => s.score as number)
+    .sort((a, b) => a - b);
+  
+  // Need at least 4 data points for meaningful quartiles
+  if (validScores.length < 4) {
+    return null;
+  }
+  
+  const n = validScores.length;
+  return {
+    q1: validScores[Math.floor(n * 0.25)],  // 25th percentile
+    q2: validScores[Math.floor(n * 0.50)],  // 50th percentile (median)
+    q3: validScores[Math.floor(n * 0.75)],  // 75th percentile
+  };
+}
+
+/**
+ * Compute quartile thresholds from airports with embedded GA data.
+ * 
+ * @param airports Array of airports
+ * @param personaId Persona ID to get scores for
+ * @returns Quartile thresholds or null if insufficient data
+ */
+export function computeQuartilesFromAirports(
+  airports: Airport[],
+  personaId: string
+): QuartileThresholds | null {
+  // Extract valid scores from airport.ga.persona_scores
+  const validScores = airports
+    .filter(a => a.ga?.persona_scores?.[personaId] !== null && a.ga?.persona_scores?.[personaId] !== undefined)
+    .map(a => a.ga!.persona_scores[personaId] as number)
     .sort((a, b) => a - b);
   
   // Need at least 4 data points for meaningful quartiles

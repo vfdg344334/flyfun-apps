@@ -151,6 +151,7 @@ interface StoreActions {
   setGAScores: (scores: Record<string, AirportGAScore>) => void;
   setGASummary: (icao: string, summary: AirportGASummary) => void;
   setGALoading: (loading: boolean) => void;
+  setGAComputedQuartiles: (quartiles: QuartileThresholds | null) => void;
   clearGAScores: () => void;
 }
 
@@ -410,13 +411,14 @@ const createStore = (set: any, get: any) => ({
       },
       
       // Set selected persona
+      // Note: scores are now embedded in airport.ga.persona_scores with ALL personas pre-computed
+      // So we only need to recompute quartile thresholds, not reload scores
       setGASelectedPersona: (personaId) => {
         set((state) => ({
           ga: {
             ...state.ga,
             selectedPersona: personaId,
-            // Clear scores when persona changes (they need to be recomputed)
-            scores: new Map(),
+            // Quartiles will be recomputed by PersonaManager.computeQuartiles()
             computedQuartiles: null
           }
         }));
@@ -480,6 +482,16 @@ const createStore = (set: any, get: any) => ({
           ga: {
             ...state.ga,
             isLoading: loading
+          }
+        }));
+      },
+      
+      // Set computed quartiles (called by PersonaManager when airports/persona change)
+      setGAComputedQuartiles: (quartiles) => {
+        set((state) => ({
+          ga: {
+            ...state.ga,
+            computedQuartiles: quartiles
           }
         }));
       },

@@ -10,7 +10,7 @@
 
 import { APIAdapter } from '../adapters/api-adapter';
 import { useStore } from '../store/store';
-import type { GAConfig, Persona, AirportGAScore } from '../store/types';
+import type { GAConfig, Persona, AirportGAScore, Airport, QuartileThresholds } from '../store/types';
 
 const PERSONA_STORAGE_KEY = 'flyfun-selected-persona';
 const DEFAULT_PERSONA = 'ifr_touring_sr22';
@@ -106,7 +106,7 @@ export class PersonaManager {
   
   /**
    * Select a different persona.
-   * Updates store and localStorage, clears cached scores.
+   * Updates store and localStorage, recomputes quartiles for the new persona.
    */
   selectPersona(personaId: string): void {
     const state = useStore.getState();
@@ -123,9 +123,13 @@ export class PersonaManager {
       console.warn(`[PersonaManager] Persona "${personaId}" not found, using "${validPersona}"`);
     }
     
-    // Update store (this also clears cached scores)
+    // Update store
     state.setGASelectedPersona(validPersona);
     this.savePersona(validPersona);
+    
+    // Recompute quartiles for the new persona
+    // (Uses airport.ga.persona_scores which has all personas pre-computed)
+    this.computeQuartiles();
     
     console.log('[PersonaManager] Selected persona:', validPersona);
   }
@@ -153,40 +157,61 @@ export class PersonaManager {
   }
   
   /**
-   * Load GA scores for a list of airports.
-   * Skips airports that are already cached.
+   * Compute quartile thresholds from the current airports.
+   * Called when airports change or persona changes to recompute visualization buckets.
+   * 
+   * Note: GA scores are now embedded in airport.ga from the API response.
+   * This method computes dynamic quartile thresholds for the relevance legend.
    */
-  async loadScores(icaos: string[]): Promise<void> {
+  computeQuartiles(): void {
     const state = useStore.getState();
-    const cachedScores = state.ga.scores;
+    const airports = state.filteredAirports;
     const persona = state.ga.selectedPersona;
     
-    // Filter out already cached airports
-    const uncachedIcaos = icaos.filter(icao => !cachedScores.has(icao.toUpperCase()));
+    // Extract scores for the selected persona from airports with GA data
+    const scores: number[] = [];
+    for (const airport of airports) {
+      if (airport.ga?.persona_scores) {
+        const score = airport.ga.persona_scores[persona];
+        if (score !== null && score !== undefined) {
+          scores.push(score);
+        }
+      }
+    }
     
-    if (uncachedIcaos.length === 0) {
-      console.log('[PersonaManager] All scores already cached');
+    if (scores.length < 4) {
+      console.log(`[PersonaManager] Not enough scores (${scores.length}) to compute quartiles`);
+      state.setGAComputedQuartiles(null);
       return;
     }
     
-    console.log(`[PersonaManager] Loading scores for ${uncachedIcaos.length} airports`);
-    state.setGALoading(true);
+    // Sort scores ascending
+    scores.sort((a, b) => a - b);
     
-    try {
-      // Batch into chunks of 200 (API limit)
-      const chunkSize = 200;
-      for (let i = 0; i < uncachedIcaos.length; i += chunkSize) {
-        const chunk = uncachedIcaos.slice(i, i + chunkSize);
-        const scores = await this.api.getGAScores(chunk, persona);
-        state.setGAScores(scores);
-      }
-      
-      console.log(`[PersonaManager] Loaded scores for ${uncachedIcaos.length} airports`);
-    } catch (error) {
-      console.error('[PersonaManager] Failed to load scores:', error);
-    } finally {
-      state.setGALoading(false);
-    }
+    // Compute quartile thresholds
+    const q1Index = Math.floor(scores.length * 0.25);
+    const q2Index = Math.floor(scores.length * 0.5);
+    const q3Index = Math.floor(scores.length * 0.75);
+    
+    const quartiles: QuartileThresholds = {
+      q1: scores[q1Index],
+      q2: scores[q2Index],
+      q3: scores[q3Index]
+    };
+    
+    console.log(`[PersonaManager] Computed quartiles from ${scores.length} scores:`, quartiles);
+    state.setGAComputedQuartiles(quartiles);
+  }
+  
+  /**
+   * Legacy method - no longer needed as scores come with airport data.
+   * Kept for backwards compatibility but does nothing.
+   * @deprecated Use airport.ga.persona_scores instead
+   */
+  async loadScores(_icaos: string[]): Promise<void> {
+    // GA scores are now embedded in airport response via include_ga=true
+    // Just compute quartiles from the current airports
+    this.computeQuartiles();
   }
   
   /**

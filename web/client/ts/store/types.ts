@@ -5,6 +5,19 @@
 /**
  * Airport data structure (matches API response)
  */
+/**
+ * GA Friendliness summary embedded in Airport (all personas pre-computed)
+ */
+export interface GAFriendlySummary {
+  features: Record<string, number | null>;        // Raw feature scores
+  persona_scores: Record<string, number | null>;  // Pre-computed scores for ALL personas
+  review_count: number;
+  last_review_utc?: string | null;
+  tags?: string[] | null;
+  summary_text?: string | null;
+  notification_hassle?: string | null;
+}
+
 export interface Airport {
   ident: string;
   name?: string;
@@ -23,6 +36,8 @@ export interface Airport {
   _routeSegmentDistance?: number;
   _routeEnrouteDistance?: number;
   _closestSegment?: [string, string];
+  // GA Friendliness data (populated when include_ga=true)
+  ga?: GAFriendlySummary | null;
 }
 
 /**

@@ -3,7 +3,8 @@
  * Reactive to Zustand store changes, manages Leaflet map layers
  */
 
-import type { Airport, LegendMode, Highlight, RouteState } from '../store/types';
+import type { Airport, LegendMode, Highlight, RouteState, GAFriendlySummary } from '../store/types';
+import { useStore } from '../store/store';
 
 // Leaflet types (will be imported when Leaflet is available)
 declare const L: any;
@@ -220,6 +221,11 @@ export class VisualizationEngine {
         color = 'rgba(128, 128, 128, 0.3)';
         radius = 6;
         break;
+        
+      case 'relevance':
+        color = this.getRelevanceColor(airport);
+        radius = 7;
+        break;
     }
     
     const icon = L.divIcon({
@@ -237,6 +243,59 @@ export class VisualizationEngine {
     });
     
     return { color, radius, icon };
+  }
+  
+  /**
+   * Get relevance color based on GA scores (using embedded airport.ga data)
+   */
+  private getRelevanceColor(airport: Airport): string {
+    const state = useStore.getState();
+    const selectedPersona = state.ga.selectedPersona;
+    const quartiles = state.ga.computedQuartiles;
+    const buckets = state.ga.config?.relevance_buckets;
+    
+    // Default colors if config not loaded
+    const defaultColors = {
+      'top-quartile': '#27ae60',      // Green
+      'second-quartile': '#3498db',   // Blue
+      'third-quartile': '#f39c12',    // Orange
+      'bottom-quartile': '#e74c3c',   // Red
+      'unknown': '#95a5a6'            // Gray
+    };
+    
+    const getColor = (bucketId: string): string => {
+      const bucket = buckets?.find(b => b.id === bucketId);
+      return bucket?.color || defaultColors[bucketId as keyof typeof defaultColors] || '#95a5a6';
+    };
+    
+    // No GA data on airport = unknown
+    if (!airport.ga) {
+      return getColor('unknown');
+    }
+    
+    // Get the score for the selected persona
+    const score = airport.ga.persona_scores?.[selectedPersona];
+    
+    // No score for this persona = unknown
+    if (score === null || score === undefined) {
+      return getColor('unknown');
+    }
+    
+    // No quartiles computed yet = show all as unknown
+    if (!quartiles) {
+      return getColor('unknown');
+    }
+    
+    // Assign bucket based on quartile thresholds
+    if (score >= quartiles.q3) {
+      return getColor('top-quartile');
+    } else if (score >= quartiles.q2) {
+      return getColor('second-quartile');
+    } else if (score >= quartiles.q1) {
+      return getColor('third-quartile');
+    } else {
+      return getColor('bottom-quartile');
+    }
   }
   
   /**
