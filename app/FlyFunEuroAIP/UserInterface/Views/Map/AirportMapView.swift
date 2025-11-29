@@ -27,7 +27,8 @@ struct AirportMapView: View {
                     AirportMarkerView(
                         airport: airport,
                         legendMode: currentLegendMode,
-                        isSelected: airport.icao == state?.airports.selectedAirport?.icao
+                        isSelected: airport.icao == state?.airports.selectedAirport?.icao,
+                        isBorderCrossing: state?.airports.isBorderCrossing(airport) ?? false
                     )
                 }
                 .tag(airport.icao)
@@ -191,10 +192,12 @@ struct AirportMapView: View {
 // MARK: - Custom Airport Marker View
 
 /// Custom marker that supports variable color AND size based on legend mode
+/// Matches web app legend behavior
 struct AirportMarkerView: View {
     let airport: RZFlight.Airport
     let legendMode: LegendMode
     let isSelected: Bool
+    let isBorderCrossing: Bool
     
     var body: some View {
         ZStack {
@@ -212,10 +215,11 @@ struct AirportMarkerView: View {
             }
             
             // IFR indicator dot (small white dot for airports with procedures)
-            if airport.hasInstrumentProcedures && legendMode != .procedures {
+            // Only show in airport-type mode for non-border-crossing IFR airports
+            if legendMode == .airportType && airport.hasInstrumentProcedures && !isBorderCrossing {
                 Circle()
                     .fill(.white)
-                    .frame(width: 6, height: 6)
+                    .frame(width: 5, height: 5)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isSelected)
@@ -232,37 +236,32 @@ struct AirportMarkerView: View {
         case .procedures:
             return procedureSize
         case .country:
-            return 16 // Fixed size for country mode
+            return 14 // Fixed size for country mode
         }
     }
     
+    /// Airport Type mode: Border Crossing > IFR > VFR
     private var airportTypeSize: CGFloat {
-        switch airport.type {
-        case .large_airport: return 24
-        case .medium_airport: return 18
-        case .small_airport: return 12
-        case .seaplane_base: return 14
-        default: return 10
-        }
+        if isBorderCrossing { return 16 }
+        if airport.hasInstrumentProcedures { return 14 }
+        return 12
     }
     
+    /// Runway Length mode: Size by longest runway
     private var runwayLengthSize: CGFloat {
-        let maxLength = airport.runways.map(\.length_ft).max() ?? 0
-        // Scale from 8 to 28 based on runway length
-        if maxLength >= 10000 { return 28 }
-        if maxLength >= 8000 { return 24 }
-        if maxLength >= 6000 { return 20 }
-        if maxLength >= 4000 { return 16 }
-        if maxLength >= 2000 { return 12 }
-        return 8
+        let maxLength = longestRunwayFt
+        if maxLength > 8000 { return 20 }
+        if maxLength > 4000 { return 14 }
+        return 10
     }
     
+    /// Procedures mode: Size by procedure count
     private var procedureSize: CGFloat {
         let count = airport.procedures.count
-        if count >= 10 { return 24 }
-        if count >= 5 { return 18 }
-        if count >= 1 { return 14 }
-        return 8 // No procedures
+        if count >= 10 { return 20 }
+        if count >= 5 { return 16 }
+        if count >= 1 { return 12 }
+        return 8 // VFR only
     }
     
     // MARK: - Color Calculation
@@ -280,43 +279,66 @@ struct AirportMarkerView: View {
         }
     }
     
+    /// Airport Type mode - matches web app:
+    /// - Green (#28a745) = Border Crossing
+    /// - Yellow (#ffc107) = Has procedures (IFR)
+    /// - Red (#dc3545) = VFR only
     private var airportTypeColor: Color {
-        switch airport.type {
-        case .large_airport: return .red
-        case .medium_airport: return .orange
-        case .small_airport: return .green
-        case .seaplane_base: return .teal
-        case .balloonport: return .purple
-        case .closed: return .gray
-        case .none: return .gray
+        if isBorderCrossing {
+            return Color(red: 0.157, green: 0.655, blue: 0.271) // #28a745 Green
         }
+        if airport.hasInstrumentProcedures {
+            return Color(red: 1.0, green: 0.757, blue: 0.027) // #ffc107 Yellow
+        }
+        return Color(red: 0.863, green: 0.208, blue: 0.271) // #dc3545 Red
     }
     
+    /// Runway Length mode - matches web app:
+    /// - Green = > 8000 ft
+    /// - Yellow = 4000-8000 ft
+    /// - Red = < 4000 ft
     private var runwayLengthColor: Color {
-        let maxLength = airport.runways.map(\.length_ft).max() ?? 0
-        if maxLength >= 8000 { return .green }
-        if maxLength >= 5000 { return .blue }
-        if maxLength >= 3000 { return .orange }
-        return .red
+        let maxLength = longestRunwayFt
+        if maxLength > 8000 {
+            return Color(red: 0.157, green: 0.655, blue: 0.271) // Green
+        }
+        if maxLength > 4000 {
+            return Color(red: 1.0, green: 0.757, blue: 0.027) // Yellow
+        }
+        return Color(red: 0.863, green: 0.208, blue: 0.271) // Red
     }
     
+    /// Procedures mode - by precision category
     private var procedureColor: Color {
-        if airport.procedures.isEmpty { return .gray }
+        if airport.procedures.isEmpty {
+            return .gray
+        }
         let hasPrecision = airport.procedures.contains { $0.precisionCategory == .precision }
         let hasRNAV = airport.procedures.contains { $0.precisionCategory == .rnav }
-        if hasPrecision { return .green }
-        if hasRNAV { return .blue }
-        return .orange
+        if hasPrecision {
+            return Color(red: 1.0, green: 1.0, blue: 0.0) // Yellow for ILS
+        }
+        if hasRNAV {
+            return Color(red: 0.0, green: 0.5, blue: 1.0) // Blue for RNAV
+        }
+        return .orange // Non-precision
     }
     
+    /// Country mode - consistent color per country
     private var countryColor: Color {
-        // Consistent color per country using hash
         let hash = abs(airport.country.hashValue)
         let colors: [Color] = [
             .blue, .green, .orange, .purple, .pink,
             .cyan, .mint, .indigo, .teal, .brown
         ]
         return colors[hash % colors.count]
+    }
+    
+    // MARK: - Helpers
+    
+    /// Get longest runway length in feet
+    private var longestRunwayFt: Int {
+        airport.runways.map(\.length_ft).max() ?? 0
     }
 }
 
@@ -332,33 +354,31 @@ extension LegendMode {
         }
     }
     
-    /// Legend key items showing what colors/sizes mean
+    /// Legend key items showing what colors/sizes mean - matches web app
     var legendItems: [LegendItem] {
         switch self {
         case .airportType:
             return [
-                LegendItem(color: .red, size: 24, label: "Large"),
-                LegendItem(color: .orange, size: 18, label: "Medium"),
-                LegendItem(color: .green, size: 12, label: "Small"),
-                LegendItem(color: .teal, size: 14, label: "Seaplane"),
+                LegendItem(color: Color(red: 0.157, green: 0.655, blue: 0.271), size: 16, label: "Border Crossing"),
+                LegendItem(color: Color(red: 1.0, green: 0.757, blue: 0.027), size: 14, label: "IFR (with procedures)"),
+                LegendItem(color: Color(red: 0.863, green: 0.208, blue: 0.271), size: 12, label: "VFR only"),
             ]
         case .runwayLength:
             return [
-                LegendItem(color: .green, size: 24, label: "≥8000 ft"),
-                LegendItem(color: .blue, size: 18, label: "5000-8000 ft"),
-                LegendItem(color: .orange, size: 14, label: "3000-5000 ft"),
-                LegendItem(color: .red, size: 10, label: "<3000 ft"),
+                LegendItem(color: Color(red: 0.157, green: 0.655, blue: 0.271), size: 20, label: ">8000 ft"),
+                LegendItem(color: Color(red: 1.0, green: 0.757, blue: 0.027), size: 14, label: "4000-8000 ft"),
+                LegendItem(color: Color(red: 0.863, green: 0.208, blue: 0.271), size: 10, label: "<4000 ft"),
             ]
         case .procedures:
             return [
-                LegendItem(color: .green, size: 20, label: "Precision (ILS)"),
-                LegendItem(color: .blue, size: 16, label: "RNAV/GPS"),
+                LegendItem(color: Color(red: 1.0, green: 1.0, blue: 0.0), size: 16, label: "Precision (ILS)"),
+                LegendItem(color: Color(red: 0.0, green: 0.5, blue: 1.0), size: 14, label: "RNAV/GPS"),
                 LegendItem(color: .orange, size: 12, label: "Non-precision"),
                 LegendItem(color: .gray, size: 8, label: "VFR only"),
             ]
         case .country:
             return [
-                LegendItem(color: .blue, size: 16, label: "Colored by country"),
+                LegendItem(color: .blue, size: 14, label: "Colored by country"),
             ]
         }
     }

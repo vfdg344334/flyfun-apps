@@ -37,6 +37,10 @@ final class AirportDomain {
     var highlights: [String: MapHighlight] = [:]
     var activeRoute: RouteVisualization?
     
+    // MARK: - Cached Lookups (for legend coloring)
+    /// Set of ICAOs that are border crossing points - loaded once at startup
+    var borderCrossingICAOs: Set<String> = []
+    
     // MARK: - Region Loading
     private var regionUpdateTask: Task<Void, Never>?
     
@@ -77,9 +81,18 @@ final class AirportDomain {
     
     /// Initial load - loads airports for default Europe view
     func load() async throws {
+        // Load border crossing ICAOs for legend coloring
+        borderCrossingICAOs = try await repository.borderCrossingICAOs()
+        Logger.app.info("Loaded \(self.borderCrossingICAOs.count) border crossing ICAOs")
+        
         let defaultRegion = MKCoordinateRegion.europe
         visibleRegion = defaultRegion
         try await loadAirportsInRegion(defaultRegion)
+    }
+    
+    /// Check if an airport is a border crossing (uses cached set)
+    func isBorderCrossing(_ airport: RZFlight.Airport) -> Bool {
+        borderCrossingICAOs.contains(airport.icao)
     }
     
     // MARK: - Search

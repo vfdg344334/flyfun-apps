@@ -140,8 +140,14 @@ final class LocalAirportDataSource: AirportRepositoryProtocol, @unchecked Sendab
     func availableCountries() async throws -> [String] {
         // Get all airports and extract unique countries
         let allAirports = knownAirports.matching(needle: "")
-        let countries = Set(allAirports.compactMap(\.country))
+        let countries = Set(allAirports.compactMap { $0.country.isEmpty ? nil : $0.country })
         return countries.sorted()
+    }
+    
+    func borderCrossingICAOs() async throws -> Set<String> {
+        // Get all border crossing airports and return their ICAOs
+        let borderCrossingAirports = knownAirports.airportsWithBorderCrossing()
+        return Set(borderCrossingAirports.map(\.icao))
     }
 }
 

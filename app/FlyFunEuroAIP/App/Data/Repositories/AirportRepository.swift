@@ -57,6 +57,9 @@ protocol AirportRepositoryProtocol: Sendable {
     
     /// Get list of available countries in the database
     func availableCountries() async throws -> [String]
+    
+    /// Get set of ICAOs that are border crossing points
+    func borderCrossingICAOs() async throws -> Set<String>
 }
 
 // MARK: - Unified Repository
@@ -154,6 +157,10 @@ final class AirportRepository: AirportRepositoryProtocol {
     
     nonisolated func availableCountries() async throws -> [String] {
         return try await localDataSource.availableCountries()
+    }
+    
+    nonisolated func borderCrossingICAOs() async throws -> Set<String> {
+        return try await localDataSource.borderCrossingICAOs()
     }
 }
 
