@@ -260,10 +260,22 @@ class Application {
           referenceHighlights.forEach((highlight, id) => {
             combinedHighlights.set(id, highlight);
           });
-          
-          const highlightsHash = JSON.stringify(Array.from(combinedHighlights.entries()));
+
+          // Filter highlights by country if country filter is set
+          let filteredHighlights = combinedHighlights;
+          if (state.filters.country) {
+            filteredHighlights = new globalThis.Map<string, any>();
+            combinedHighlights.forEach((highlight, id) => {
+              // Keep highlights that match the country filter or have no country (e.g., generic points, reference highlights)
+              if (!highlight.country || highlight.country === state.filters.country) {
+                filteredHighlights.set(id, highlight);
+              }
+            });
+          }
+
+          const highlightsHash = JSON.stringify(Array.from(filteredHighlights.entries()));
           if (highlightsHash !== lastHighlightsHash) {
-            this.visualizationEngine.updateHighlights(combinedHighlights as any);
+            this.visualizationEngine.updateHighlights(filteredHighlights as any);
             lastHighlightsHash = highlightsHash;
           }
           
