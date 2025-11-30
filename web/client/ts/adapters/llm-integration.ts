@@ -287,16 +287,39 @@ export class LLMIntegration {
   private handlePointWithMarkers(viz: Visualization): boolean {
     const airports = (viz.markers || []) as Airport[];
     const pointData = viz.point as {lat: number; lng: number; label?: string} | undefined;
-    
+
     if (!Array.isArray(airports) || airports.length === 0) {
       console.error('point_with_markers missing valid airports array');
       return false;
     }
-    
+
+    // Clear old LLM highlights
+    this.clearLLMHighlights();
+
     // Update store with airports
     const store = this.store as any;
     store.getState().setAirports(airports as Airport[]);
-    
+
+    // Add blue highlights for airports mentioned in chat (same as route_with_markers)
+    let highlightCount = 0;
+    airports.forEach((airport) => {
+      if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
+        store.getState().highlightPoint({
+          id: `llm-airport-${airport.ident}`,
+          type: 'airport' as const,
+          lat: airport.latitude_deg,
+          lng: airport.longitude_deg,
+          color: '#007bff',
+          radius: 15,
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
+          country: airport.iso_country || airport.country  // Add country for filtering
+        });
+        highlightCount++;
+      }
+    });
+
+    console.log(`✅ Point with markers: highlighted ${highlightCount} airports from chat`);
+
     // Fit bounds to show all airports after markers are updated
     if (this.visualizationEngine && airports.length > 0) {
       setTimeout(() => {
@@ -304,7 +327,7 @@ export class LLMIntegration {
         console.log('LLMIntegration: Fitted map bounds for point with airports');
       }, 300);
     }
-    
+
     // Set locate state if point provided
     if (pointData) {
       (this.store as any).getState().setLocate({
@@ -317,13 +340,13 @@ export class LLMIntegration {
         radiusNm: 50.0 // Default, will be updated from filter profile if provided
       });
     }
-    
+
     // Apply filter profile if provided
     const filterProfile = viz.filter_profile;
     if (filterProfile) {
       this.applyFilterProfile(filterProfile);
     }
-    
+
     return true;
   }
   
