@@ -87,12 +87,12 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
         history: [ChatMessage],
         continuation: AsyncThrowingStream<ChatEvent, Error>.Continuation
     ) async throws {
-        // Build request
-        let url = baseURL.appendingPathComponent("api/aviation-agent/chat/stream")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        // Build URL - ensure proper path construction
+        let urlString = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) 
+            + "/api/aviation-agent/chat/stream"
+        guard let url = URL(string: urlString) else {
+            throw ChatbotError.invalidURL("Failed to construct chat URL: \(urlString)")
+        }
         
         // Build message history for API
         let chatMessages = history.map { msg -> [String: String] in
@@ -100,26 +100,45 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
         } + [["role": "user", "content": message]]
         
         let body: [String: Any] = ["messages": chatMessages]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
         
-        Logger.app.info("Sending chat request to \(url.absoluteString)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("\(bodyData.count)", forHTTPHeaderField: "Content-Length")
+        request.httpBody = bodyData
         
-        // Stream response
-        let (bytes, response) = try await session.bytes(for: request)
+        Logger.app.info("Sending POST chat request to \(url.absoluteString)")
+        Logger.app.info("Request body: \(String(data: bodyData, encoding: .utf8) ?? "nil")")
+        
+        // Use upload for POST request (bytes(for:) may ignore httpMethod)
+        let (data, response) = try await session.upload(for: request, from: bodyData)
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ChatbotError.invalidResponse
         }
         
+        Logger.app.info("Chat response status: \(httpResponse.statusCode)")
+        
         guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "unknown"
+            Logger.app.error("Chat error response: \(errorBody)")
             throw ChatbotError.httpError(httpResponse.statusCode)
         }
         
-        // Parse SSE stream
+        // Parse complete SSE response (not streaming, but still SSE format)
+        guard let responseText = String(data: data, encoding: .utf8) else {
+            throw ChatbotError.invalidResponse
+        }
+        
+        Logger.app.info("Chat response: \(responseText.prefix(500))...")
+        
+        // Parse SSE events from complete response
         var currentEvent: String?
         var dataBuffer = ""
         
-        for try await line in bytes.lines {
+        for line in responseText.components(separatedBy: "\n") {
             if line.isEmpty {
                 // Empty line = end of event
                 if let event = currentEvent, !dataBuffer.isEmpty {
@@ -130,13 +149,8 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
                     continuation.yield(parsedEvent)
                     
                     // Check for terminal events
-                    if case .done = parsedEvent {
-                        continuation.finish()
-                        return
-                    }
                     if case .error(let msg) = parsedEvent {
-                        continuation.finish(throwing: ChatbotError.serverError(msg))
-                        return
+                        Logger.app.error("Chat event error: \(msg)")
                     }
                 }
                 currentEvent = nil
@@ -144,11 +158,11 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
             } else if line.hasPrefix("event:") {
                 currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("data:") {
-                let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                let eventData = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                 if !dataBuffer.isEmpty {
                     dataBuffer += "\n"
                 }
-                dataBuffer += data
+                dataBuffer += eventData
             }
         }
         
