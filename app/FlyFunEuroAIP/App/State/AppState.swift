@@ -67,8 +67,21 @@ final class AppState {
     
     private func setupCrossDomainWiring() {
         // Chat visualization → Airport visualization
-        chat.onVisualization = { [weak self] payload in
-            self?.airports.applyVisualization(payload)
+        chat.onVisualization = { [weak self] chatPayload in
+            self?.airports.applyVisualization(chatPayload)
+        }
+    }
+    
+    // MARK: - Chatbot Configuration
+    
+    /// Configure the chatbot service (call after initialization)
+    func configureChatbot(baseURL: String) {
+        do {
+            let service = try OnlineChatbotService(baseURLString: baseURL)
+            chat.configure(service: service)
+            Logger.app.info("Chatbot configured with URL: \(baseURL)")
+        } catch {
+            Logger.app.error("Failed to configure chatbot: \(error.localizedDescription)")
         }
     }
     

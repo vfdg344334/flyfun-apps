@@ -33,6 +33,12 @@ struct ContentView: View {
                 .presentationDetents([.medium, .large])
             }
         }
+        .sheet(isPresented: chatSheetBinding) {
+            NavigationStack {
+                ChatView()
+            }
+            .presentationDetents([.large])
+        }
         .overlay {
             // Error banner
             if let error = state?.system.error {
@@ -72,6 +78,13 @@ struct ContentView: View {
         Binding(
             get: { state?.navigation.showingAirportDetail ?? false },
             set: { state?.navigation.showingAirportDetail = $0 }
+        )
+    }
+    
+    private var chatSheetBinding: Binding<Bool> {
+        Binding(
+            get: { state?.navigation.showingChat ?? false },
+            set: { state?.navigation.showingChat = $0 }
         )
     }
 }
@@ -153,6 +166,14 @@ struct SidebarView: View {
             .navigationBarTitleDisplayMode(.large)
             #endif
             .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        state?.navigation.toggleChat()
+                    } label: {
+                        Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                    }
+                }
+                
                 #if os(iOS)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -169,8 +190,8 @@ struct SidebarView: View {
         state?.airports.filters.hasActiveFilters == true
             ? "line.3.horizontal.decrease.circle.fill"
             : "line.3.horizontal.decrease.circle"
-                }
-            }
+    }
+}
 
 // MARK: - Floating Search Bar (Compact)
 
@@ -301,6 +322,17 @@ struct CompactToolbar: View {
                 VStack(spacing: 4) {
                     Image(systemName: filterIcon)
                     Text("Filters")
+                        .font(.caption2)
+                }
+            }
+            
+            // Chat / Assistant
+            Button {
+                state?.navigation.toggleChat()
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                    Text("Chat")
                         .font(.caption2)
                 }
             }

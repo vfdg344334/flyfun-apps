@@ -118,10 +118,15 @@ struct FlyFunEuroAIPApp: App {
                 connectivityMonitor: connectivityMonitor
             )
             
-            self.appState = AppState(
+            let appState = AppState(
                 repository: repository,
                 connectivityMonitor: connectivityMonitor
             )
+            
+            // Configure chatbot with API URL
+            appState.configureChatbot(baseURL: AirportRepository.apiBaseURL)
+            
+            self.appState = appState
             
             Logger.app.info("App initialization complete")
         } catch {
