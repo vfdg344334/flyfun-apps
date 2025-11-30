@@ -62,8 +62,16 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
     }
     
     func isAvailable() async -> Bool {
-        // Check if the API is reachable
-        let healthURL = baseURL.appendingPathComponent("api/health")
+        // Check if the API is reachable (server health endpoint is at /health)
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
+            return false
+        }
+        components.path = "/health"
+        
+        guard let healthURL = components.url else {
+            return false
+        }
+        
         var request = URLRequest(url: healthURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 5
@@ -87,11 +95,14 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
         history: [ChatMessage],
         continuation: AsyncThrowingStream<ChatEvent, Error>.Continuation
     ) async throws {
-        // Build URL - ensure proper path construction
-        let urlString = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) 
-            + "/api/aviation-agent/chat/stream"
-        guard let url = URL(string: urlString) else {
-            throw ChatbotError.invalidURL("Failed to construct chat URL: \(urlString)")
+        // Build URL using URLComponents for safe path construction
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
+            throw ChatbotError.invalidURL("Invalid base URL: \(baseURL)")
+        }
+        components.path = "/api/aviation-agent/chat/stream"
+        
+        guard let url = components.url else {
+            throw ChatbotError.invalidURL("Failed to construct chat URL")
         }
         
         // Build message history for API
