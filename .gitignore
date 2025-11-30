@@ -13,6 +13,7 @@ t.*
 
 # secret files
 secrets.*
+!secrets.*.sample
 *.env
 
 # Python build artifacts (should NOT be checked in)
