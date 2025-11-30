@@ -47,6 +47,13 @@ final class APIClient: Sendable {
         return try await perform(request)
     }
     
+    /// Perform a GET request and decode using a custom decoder
+    /// Use this for RZFlight models which have their own CodingKeys handling
+    func get<T: Decodable>(_ endpoint: Endpoint, decoder customDecoder: JSONDecoder) async throws -> T {
+        let request = try buildRequest(for: endpoint, method: "GET")
+        return try await perform(request, decoder: customDecoder)
+    }
+    
     /// Perform a POST request with body and decode the response
     func post<T: Decodable, B: Encodable>(_ endpoint: Endpoint, body: B) async throws -> T {
         var request = try buildRequest(for: endpoint, method: "POST")
@@ -142,13 +149,17 @@ final class APIClient: Sendable {
     }
     
     private func perform<T: Decodable>(_ request: URLRequest) async throws -> T {
+        return try await perform(request, decoder: decoder)
+    }
+    
+    private func perform<T: Decodable>(_ request: URLRequest, decoder customDecoder: JSONDecoder) async throws -> T {
         Logger.app.info("API Request: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")")
         
         let (data, response) = try await session.data(for: request)
         try validateResponse(response)
         
         do {
-            return try decoder.decode(T.self, from: data)
+            return try customDecoder.decode(T.self, from: data)
         } catch {
             Logger.app.error("Decode error: \(error.localizedDescription)")
             // Log the raw response for debugging

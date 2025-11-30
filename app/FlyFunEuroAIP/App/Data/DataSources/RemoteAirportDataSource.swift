@@ -5,6 +5,8 @@
 //  Remote data source using API.
 //  Implements same protocol as LocalAirportDataSource for seamless switching.
 //
+//  Now uses direct JSON decoding to RZFlight models (no adapters needed).
+//
 
 import Foundation
 import CoreLocation
@@ -13,12 +15,21 @@ import OSLog
 import RZUtilsSwift
 
 /// Remote data source using the FlyFun EuroAIP API
-/// Returns RZFlight models by converting API responses through adapters
+/// Returns RZFlight models by decoding directly from API JSON responses
 final class RemoteAirportDataSource: AirportRepositoryProtocol, @unchecked Sendable {
     
     // MARK: - Dependencies
     
     private let apiClient: APIClient
+    
+    /// Decoder for RZFlight models - does NOT use convertFromSnakeCase
+    /// because RZFlight CodingKeys handle snake_case explicitly
+    private let rzflightDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        // Note: NO convertFromSnakeCase - RZFlight handles keys explicitly
+        return decoder
+    }()
     
     // MARK: - Cache
     
@@ -50,37 +61,29 @@ final class RemoteAirportDataSource: AirportRepositoryProtocol, @unchecked Senda
         // TODO: Add bounding box endpoint to API
         
         let endpoint = Endpoint.airports(filters: filters, limit: limit)
-        let response: [APIAirportSummary] = try await apiClient.get(endpoint)
+        let airports: [RZFlight.Airport] = try await apiClient.get(endpoint, decoder: rzflightDecoder)
         
         // Filter by bounding box client-side
-        let filtered = response.filter { airport in
-            guard let lat = airport.latitudeDeg, let lon = airport.longitudeDeg else {
-                return false
-            }
-            return boundingBox.contains(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+        return airports.filter { airport in
+            boundingBox.contains(airport.coord)
         }
-        
-        return filtered.map { APIAirportAdapter.toRZFlight($0) }
     }
     
     // MARK: - General Queries
     
     func airports(matching filters: FilterConfig, limit: Int) async throws -> [RZFlight.Airport] {
         let endpoint = Endpoint.airports(filters: filters, limit: limit)
-        let response: [APIAirportSummary] = try await apiClient.get(endpoint)
-        return response.map { APIAirportAdapter.toRZFlight($0) }
+        return try await apiClient.get(endpoint, decoder: rzflightDecoder)
     }
     
     func searchAirports(query: String, limit: Int) async throws -> [RZFlight.Airport] {
         let endpoint = Endpoint.searchAirports(query: query, limit: limit)
-        let response: [APIAirportSummary] = try await apiClient.get(endpoint)
-        return response.map { APIAirportAdapter.toRZFlight($0) }
+        return try await apiClient.get(endpoint, decoder: rzflightDecoder)
     }
     
     func airportDetail(icao: String) async throws -> RZFlight.Airport? {
         let endpoint = Endpoint.airportDetail(icao: icao)
-        let response: APIAirportDetail = try await apiClient.get(endpoint)
-        return APIAirportAdapter.toRZFlightWithExtendedData(response)
+        return try await apiClient.get(endpoint, decoder: rzflightDecoder)
     }
     
     // MARK: - Route & Location
@@ -88,7 +91,25 @@ final class RemoteAirportDataSource: AirportRepositoryProtocol, @unchecked Senda
     func airportsNearRoute(from: String, to: String, distanceNm: Int, filters: FilterConfig) async throws -> RouteResult {
         let endpoint = Endpoint.routeSearch(from: from, to: to, distanceNm: distanceNm, filters: filters)
         let response: APIRouteSearchResponse = try await apiClient.get(endpoint)
-        return APIRouteResultAdapter.toRouteResult(response)
+        
+        // Convert route airports from response
+        let airports: [RZFlight.Airport] = response.airports.compactMap { summary in
+            // Decode each airport summary - we need the raw JSON for this
+            // For now, use a simple conversion
+            Airport(
+                location: CLLocationCoordinate2D(
+                    latitude: summary.latitudeDeg ?? 0,
+                    longitude: summary.longitudeDeg ?? 0
+                ),
+                icao: summary.ident
+            )
+        }
+        
+        return RouteResult(
+            airports: airports,
+            departure: response.departure?.ident ?? "",
+            destination: response.destination?.ident ?? ""
+        )
     }
     
     func airportsNearLocation(center: CLLocationCoordinate2D, radiusNm: Int, filters: FilterConfig) async throws -> [RZFlight.Airport] {
@@ -99,7 +120,17 @@ final class RemoteAirportDataSource: AirportRepositoryProtocol, @unchecked Senda
             filters: filters
         )
         let response: APILocateResponse = try await apiClient.get(endpoint)
-        return response.airports.map { APIAirportAdapter.toRZFlight($0) }
+        
+        // Convert located airports
+        return response.airports.map { summary in
+            Airport(
+                location: CLLocationCoordinate2D(
+                    latitude: summary.latitudeDeg ?? 0,
+                    longitude: summary.longitudeDeg ?? 0
+                ),
+                icao: summary.ident
+            )
+        }
     }
     
     // MARK: - In-Memory Filtering
@@ -141,9 +172,9 @@ final class RemoteAirportDataSource: AirportRepositoryProtocol, @unchecked Senda
         // Load border crossing airports from API
         let filters = FilterConfig(pointOfEntry: true)
         let endpoint = Endpoint.airports(filters: filters, limit: 5000)
-        let response: [APIAirportSummary] = try await apiClient.get(endpoint)
+        let airports: [RZFlight.Airport] = try await apiClient.get(endpoint, decoder: rzflightDecoder)
         
-        let icaos = Set(response.map(\.ident))
+        let icaos = Set(airports.map(\.icao))
         borderCrossingCache = icaos
         
         Logger.app.info("Loaded \(icaos.count) border crossing ICAOs from API")

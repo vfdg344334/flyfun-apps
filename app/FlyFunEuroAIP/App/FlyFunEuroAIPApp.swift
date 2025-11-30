@@ -25,7 +25,7 @@ struct FlyFunEuroAIPApp: App {
         WindowGroup {
             Group {
                 if let appState = appState {
-                    ContentView()
+            ContentView()
                         .environment(\.appState, appState)
                         .task {
                             await appState.onAppear()
@@ -245,6 +245,6 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 400, height: 300)
+        }
     }
-}
 #endif

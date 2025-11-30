@@ -169,8 +169,8 @@ struct SidebarView: View {
         state?.airports.filters.hasActiveFilters == true
             ? "line.3.horizontal.decrease.circle.fill"
             : "line.3.horizontal.decrease.circle"
-    }
-}
+                }
+            }
 
 // MARK: - Floating Search Bar (Compact)
 
@@ -257,7 +257,7 @@ struct CompactSearchRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(airport.icao)
+                        Text(airport.icao)
                     .font(.headline.monospaced())
                 Text(airport.name)
                     .font(.caption)
@@ -335,8 +335,8 @@ struct CompactToolbar: View {
             set: { state?.airports.legendMode = $0 }
         )
     }
-}
-
+    }
+    
 // MARK: - Error & Offline Banners
 
 struct ErrorBanner: View {
