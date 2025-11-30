@@ -187,6 +187,7 @@ export interface Highlight {
   color?: string;
   radius?: number;
   popup?: string;
+  country?: string;  // ISO country code for filtering
 }
 
 /**

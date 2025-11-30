@@ -146,27 +146,45 @@ export class LLMIntegration {
    * Shows all airports along route via search, highlights specific airports from chat
    */
   private handleRouteWithMarkers(viz: Visualization): boolean {
+    console.log('🔵 handleRouteWithMarkers called with viz:', viz);
+
     if (!viz.route || !viz.markers) {
-      console.error('route_with_markers missing route or markers');
+      console.error('route_with_markers missing route or markers', {
+        hasRoute: !!viz.route,
+        hasMarkers: !!viz.markers,
+        viz
+      });
       return false;
     }
-    
+
     const route = viz.route as Visualization['route'];
     const airports = (viz.markers || []) as Airport[];
     const fromIcao = route?.from?.icao;
     const toIcao = route?.to?.icao;
-    
+
+    console.log('🔵 Route data:', { fromIcao, toIcao, airportCount: airports.length });
+
     if (!fromIcao || !toIcao) {
       console.error('route_with_markers missing from/to ICAO codes');
       return false;
     }
-    
+
     // Clear old LLM highlights (use prefix to identify them)
     this.clearLLMHighlights();
-    
+    console.log('🔵 Cleared old highlights');
+
     // Set highlights for airports mentioned in chat
     const store = this.store as any;
+    let highlightCount = 0;
     airports.forEach((airport) => {
+      console.log('🔵 Processing airport:', {
+        ident: airport.ident,
+        hasLat: !!airport.latitude_deg,
+        hasLng: !!airport.longitude_deg,
+        lat: airport.latitude_deg,
+        lng: airport.longitude_deg
+      });
+
       if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
         store.getState().highlightPoint({
           id: `llm-airport-${airport.ident}`,
@@ -175,10 +193,15 @@ export class LLMIntegration {
           lng: airport.longitude_deg,
           color: '#007bff',
           radius: 15,
-          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
+          country: airport.iso_country || airport.country  // Add country for filtering
         });
+        highlightCount++;
+        console.log(`🔵 Added highlight for ${airport.ident} (${airport.iso_country || airport.country || 'unknown'})`);
       }
     });
+
+    console.log(`🔵 Total highlights added: ${highlightCount}`);
     
     // Build route query string for search
     const routeQuery = [fromIcao, toIcao].join(' ');
