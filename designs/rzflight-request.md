@@ -1,353 +1,186 @@
-# RZFlight Enhancement Request: API-Friendly Initializers
+# RZFlight Enhancement Request: API JSON Compatibility
 
-## Context
+## TL;DR
 
-The FlyFun EuroAIP iOS app (Phase 4: Online Integration) needs to convert API JSON responses into RZFlight models. Currently, RZFlight models only have `FMResultSet` initializers, which makes it impossible to create `Airport`, `Runway`, `Procedure`, and `AIPEntry` instances from API data.
+RZFlight models are already `Codable` - we just need to align the `CodingKeys` with the API's JSON keys so we can decode directly without any adapters.
 
-## Problem
+## Current State
 
-When the iOS app receives airport data from the REST API, it needs to convert JSON responses to RZFlight models. The current initializers require `FMResultSet`, which is SQLite-specific and not available for API responses.
+RZFlight already has:
+- ✅ `Airport: Codable` with custom `init(from decoder:)`
+- ✅ `Runway: Codable`
+- ✅ `Procedure: Codable`
+- ✅ `AIPEntry: Codable`
 
-**Current situation:**
+**Problem:** The JSON keys from the Python API don't match RZFlight's CodingKeys.
+
+## Key Mapping Needed
+
+### Airport
+
+| RZFlight Key | API JSON Key | Notes |
+|--------------|--------------|-------|
+| `icao` | `ident` | Primary identifier |
+| `city` | `municipality` | City name |
+| `country` | `iso_country` | ISO country code |
+| `latitude` | `latitude_deg` | Coordinates |
+| `longitude` | `longitude_deg` | Coordinates |
+| `isoRegion` | `iso_region` | With snake_case conversion |
+| `elevation_ft` | `elevation_ft` | ✅ Already matches |
+| `type` | `type` | ✅ Already matches |
+| `name` | `name` | ✅ Already matches |
+
+### Runway
+
+| RZFlight Key | API JSON Key |
+|--------------|--------------|
+| `le.ident` | `le_ident` |
+| `he.ident` | `he_ident` |
+| `length_ft` | `length_ft` | ✅ Matches |
+| `width_ft` | `width_ft` | ✅ Matches |
+| `surface` | `surface` | ✅ Matches |
+| `lighted` | `lighted` | ✅ Matches |
+| `closed` | `closed` | ✅ Matches |
+| `le.latitude` | `le_latitude_deg` |
+| `le.longitude` | `le_longitude_deg` |
+| `le.headingTrue` | `le_heading_degT` |
+
+### Procedure
+
+| RZFlight Key | API JSON Key |
+|--------------|--------------|
+| `name` | `name` | ✅ Matches |
+| `procedureType` | `procedure_type` | snake_case |
+| `approachType` | `approach_type` | snake_case |
+| `runwayNumber` | `runway_number` | snake_case |
+| `runwayLetter` | `runway_letter` | snake_case |
+| `runwayIdent` | `runway_ident` | snake_case |
+
+### AIPEntry
+
+| RZFlight Key | API JSON Key |
+|--------------|--------------|
+| `ident` | `ident` | ✅ Matches |
+| `section` | `section` | ✅ Matches |
+| `field` | `field` | ✅ Matches |
+| `value` | `value` | ✅ Matches |
+| `standardField` | needs lookup from `std_field_id` |
+| `mappingScore` | `mapping_score` | snake_case |
+| `altField` | `alt_field` | snake_case |
+| `altValue` | `alt_value` | snake_case |
+
+## Proposed Solution
+
+Update `CodingKeys` in each model to support API JSON keys:
+
+### Airport.swift
+
 ```swift
-// ❌ Can't do this - no API-friendly initializer
-let airport = Airport(
-    icao: "EGLL",
-    name: "London Heathrow",
-    latitude: 51.4700,
-    longitude: -0.4543,
-    // ... other properties
-)
-```
-
-**Workaround (temporary):**
-- Create minimal `Airport` with only location/ICAO
-- Lose all other data (runways, procedures, AIP entries)
-- Can't properly display airport details from API
-
-## Requested Enhancements
-
-### 1. Airport Initializer
-
-**File:** `Sources/RZFlight/Airport.swift`
-
-Add a public initializer that accepts all airport properties:
-
-```swift
-public init(
-    icao: String,
-    name: String,
-    latitude: Double,
-    longitude: Double,
-    elevationFt: Int = 0,
-    type: AirportType = .none,
-    continent: Continent = .none,
-    country: String = "",
-    isoRegion: String? = nil,
-    city: String = "",
-    scheduledService: String? = nil,
-    gpsCode: String? = nil,
-    iataCode: String? = nil,
-    localCode: String? = nil,
-    homeLink: String? = nil,
-    wikipediaLink: String? = nil,
-    keywords: String? = nil,
-    sources: [String] = [],
-    runways: [Runway] = [],
-    procedures: [Procedure] = [],
-    aipEntries: [AIPEntry] = [],
-    createdAt: Date? = nil,
-    updatedAt: Date? = nil
-) {
-    self.icao = icao
-    self.name = name
-    self.latitude = latitude
-    self.longitude = longitude
-    self.elevation_ft = elevationFt
-    self.type = type
-    self.continent = continent
-    self.country = country
-    self.isoRegion = isoRegion
-    self.city = city
-    self.scheduledService = scheduledService
-    self.gpsCode = gpsCode
-    self.iataCode = iataCode
-    self.localCode = localCode
-    self.homeLink = homeLink
-    self.wikipediaLink = wikipediaLink
-    self.keywords = keywords
-    self.sources = sources
-    self.runways = runways
-    self.procedures = procedures
-    self.aipEntries = aipEntries
-    self.createdAt = createdAt
-    self.updatedAt = updatedAt
+enum CodingKeys: String, CodingKey {
+    case name
+    case city = "municipality"           // API uses municipality
+    case country = "iso_country"         // API uses iso_country
+    case isoRegion = "iso_region"
+    case scheduledService = "scheduled_service"
+    case gpsCode = "gps_code"
+    case iataCode = "iata_code"
+    case localCode = "local_code"
+    case homeLink = "home_link"
+    case wikipediaLink = "wikipedia_link"
+    case keywords
+    case sources
+    case createdAt = "created_at"
+    case updatedAt = "updated_at"
+    case elevation_ft
+    case icao = "ident"                  // API uses ident
+    case type
+    case continent
+    case latitude = "latitude_deg"       // API uses latitude_deg
+    case longitude = "longitude_deg"     // API uses longitude_deg
+    case runways
+    case procedures
+    case aipEntries = "aip_entries"
 }
 ```
 
-**Usage in iOS app:**
-```swift
-let airport = Airport(
-    icao: api.ident,
-    name: api.name ?? "",
-    latitude: api.latitudeDeg ?? 0,
-    longitude: api.longitudeDeg ?? 0,
-    elevationFt: Int(api.elevationFt ?? 0),
-    type: AirportType(rawValue: api.type ?? "") ?? .none,
-    country: api.isoCountry ?? "",
-    city: api.municipality ?? "",
-    runways: api.runways.compactMap { APIRunwayAdapter.toRZFlight($0) },
-    procedures: api.procedures.compactMap { APIProcedureAdapter.toRZFlight($0) },
-    aipEntries: api.aipEntries.compactMap { APIAIPEntryAdapter.toRZFlight($0) }
-)
-```
+### Alternative: Support Both Formats
 
-### 2. Runway Initializer
-
-**File:** `Sources/RZFlight/Runway.swift`
-
-Add a public initializer for creating runways from API data:
+If you want to support both the current format AND the API format, use a custom decoder that tries both keys:
 
 ```swift
-public init(
-    leIdent: String,
-    heIdent: String,
-    lengthFt: Int? = nil,
-    widthFt: Int? = nil,
-    surface: String? = nil,
-    lighted: Bool? = nil,
-    closed: Bool? = nil,
-    leLatitude: Double? = nil,
-    leLongitude: Double? = nil,
-    leElevationFt: Double? = nil,
-    leHeadingTrue: Double? = nil,
-    leDisplacedThresholdFt: Double? = nil,
-    heLatitude: Double? = nil,
-    heLongitude: Double? = nil,
-    heElevationFt: Double? = nil,
-    heHeadingTrue: Double? = nil,
-    heDisplacedThresholdFt: Double? = nil
-) {
-    self.le = RunwayEnd(
-        ident: leIdent,
-        latitude: leLatitude,
-        longitude: leLongitude,
-        elevationFt: leElevationFt,
-        headingTrue: leHeadingTrue ?? 0,
-        displacedThresholdFt: leDisplacedThresholdFt
-    )
-    self.he = RunwayEnd(
-        ident: heIdent,
-        latitude: heLatitude,
-        longitude: heLongitude,
-        elevationFt: heElevationFt,
-        headingTrue: heHeadingTrue ?? 0,
-        displacedThresholdFt: heDisplacedThresholdFt
-    )
-    self.length_ft = lengthFt
-    self.width_ft = widthFt
-    self.surface = surface
-    self.lighted = lighted
-    self.closed = closed
+public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    
+    // Support both "icao" and "ident"
+    self.icao = try container.decodeIfPresent(String.self, forKey: .icao) 
+        ?? try container.decodeIfPresent(String.self, forKey: .ident) 
+        ?? ""
+    
+    // Support both "city" and "municipality"
+    self.city = try container.decodeIfPresent(String.self, forKey: .city)
+        ?? try container.decodeIfPresent(String.self, forKey: .municipality)
+        ?? ""
+    
+    // ... etc
+}
+
+enum CodingKeys: String, CodingKey {
+    case icao, ident                    // Both supported
+    case city, municipality             // Both supported
+    case country, iso_country           // Both supported
+    case latitude, latitude_deg         // Both supported
+    case longitude, longitude_deg       // Both supported
+    // ... etc
 }
 ```
 
-**Usage:**
-```swift
-let runway = Runway(
-    leIdent: api.leIdent,
-    heIdent: api.heIdent,
-    lengthFt: api.lengthFt,
-    widthFt: api.widthFt,
-    surface: api.surface,
-    lighted: api.lighted,
-    closed: api.closed,
-    leLatitude: api.leLatitudeDeg,
-    leLongitude: api.leLongitudeDeg,
-    leElevationFt: api.leElevationFt.map { Double($0) },
-    leHeadingTrue: api.leHeadingDegT,
-    leDisplacedThresholdFt: api.leDisplacedThresholdFt.map { Double($0) },
-    heLatitude: api.heLatitudeDeg,
-    heLongitude: api.heLongitudeDeg,
-    heElevationFt: api.heElevationFt.map { Double($0) },
-    heHeadingTrue: api.heHeadingDegT,
-    heDisplacedThresholdFt: api.heDisplacedThresholdFt.map { Double($0) }
-)
-```
+## iOS App Usage (After Fix)
 
-### 3. Procedure Initializer
-
-**File:** `Sources/RZFlight/Procedure.swift`
-
-Add a public initializer:
+Once CodingKeys are aligned, the iOS app can decode directly:
 
 ```swift
-public init(
-    name: String,
-    procedureType: ProcedureType,
-    approachType: ApproachType? = nil,
-    runwayNumber: String? = nil,
-    runwayLetter: String? = nil,
-    runwayIdent: String? = nil,
-    source: String? = nil,
-    authority: String? = nil,
-    rawName: String? = nil,
-    data: [String: Any]? = nil
-) {
-    self.name = name
-    self.procedureType = procedureType
-    self.approachType = approachType
-    self.runwayNumber = runwayNumber
-    self.runwayLetter = runwayLetter
-    self.runwayIdent = runwayIdent
-    self.source = source
-    self.authority = authority
-    self.rawName = rawName
-    self.data = data
-}
+// BEFORE (with adapters - complex)
+let apiResponse: [APIAirportSummary] = try await apiClient.get(endpoint)
+let airports = apiResponse.map { APIAirportAdapter.toRZFlight($0) }
+
+// AFTER (direct decode - simple!)
+let airports: [Airport] = try await apiClient.get(endpoint)
 ```
 
-**Note:** `precisionCategory` should be computed from `approachType` (existing logic).
+**No more:**
+- `APIAirportModels.swift` (600+ lines)
+- `APIAirportAdapter.swift`
+- Manual property mapping
 
-### 4. AIPEntry Initializer
+## JSONDecoder Configuration
 
-**File:** `Sources/RZFlight/AIPEntry.swift`
-
-Add a public initializer:
+The iOS app will use:
 
 ```swift
-public init(
-    ident: String,
-    section: Section,
-    field: String,
-    value: String,
-    standardField: AIPField? = nil,
-    mappingScore: Double? = nil,
-    altField: String? = nil,
-    altValue: String? = nil,
-    source: String? = nil,
-    createdAt: Date? = nil
-) {
-    self.ident = ident
-    self.section = section
-    self.field = field
-    self.value = value
-    self.standardField = standardField
-    self.mappingScore = mappingScore
-    self.altField = altField
-    self.altValue = altValue
-    self.source = source
-    // Note: createdAt might need to be parsed from ISO8601 string
-}
+let decoder = JSONDecoder()
+decoder.keyDecodingStrategy = .convertFromSnakeCase  // Handles most cases
+decoder.dateDecodingStrategy = .iso8601              // For dates
 ```
 
-**Note:** If `standardField` is provided via `stdFieldId`, look it up using `AIPFieldCatalog.field(for:)`.
+## Testing
 
-## Additional Considerations
-
-### Date Parsing
-
-If the API returns ISO8601 date strings, consider adding a convenience initializer that accepts strings:
-
-```swift
-// In Airport
-public init(
-    // ... other params
-    createdAtString: String? = nil,
-    updatedAtString: String? = nil
-) {
-    // ... set other properties
-    if let created = createdAtString {
-        self.createdAt = ISO8601DateFormatter().date(from: created)
-    }
-    if let updated = updatedAtString {
-        self.updatedAt = ISO8601DateFormatter().date(from: updated)
-    }
-}
-```
-
-### Backward Compatibility
-
-- Keep existing `FMResultSet` initializers (they're still needed for local DB access)
-- New initializers should be additive, not replacements
-- Ensure all computed properties still work correctly
-
-### Testing
-
-Please add unit tests for the new initializers:
-- Test with all properties set
-- Test with minimal properties (defaults)
-- Test with nil optionals
-- Verify computed properties (e.g., `precisionCategory` for procedures)
+Please verify:
+1. Decode from API JSON (snake_case keys)
+2. Decode from existing JSON (if any uses current format)
+3. Encode to JSON (for caching)
+4. All computed properties still work after decode
 
 ## Priority
 
-**High** - This blocks Phase 4 (Online Integration) completion. The iOS app can work with minimal data, but full feature parity requires these initializers.
+**High** - This simplifies the entire Phase 4 (Online Integration) significantly.
 
-## Timeline
+## Summary
 
-The iOS app is currently in Phase 4. We can work around this temporarily, but would like to have these initializers available before Phase 5 (Online Chatbot) to ensure full API integration.
+| Before | After |
+|--------|-------|
+| API models + Adapters | Direct decode to RZFlight |
+| ~800 lines of code | ~20 lines (CodingKeys update) |
+| Manual mapping | Automatic |
+| Potential bugs | Type-safe |
 
-## Example: Complete Conversion
-
-With these initializers, the iOS app adapter would look like:
-
-```swift
-// App/Data/Adapters/APIAirportAdapter.swift
-
-enum APIAirportAdapter {
-    static func toRZFlight(_ api: APIAirportDetail) -> Airport {
-        return Airport(
-            icao: api.ident,
-            name: api.name ?? "",
-            latitude: api.latitudeDeg ?? 0,
-            longitude: api.longitudeDeg ?? 0,
-            elevationFt: Int(api.elevationFt ?? 0),
-            type: AirportType(rawValue: api.type ?? "") ?? .none,
-            continent: Continent(rawValue: api.continent ?? "") ?? .none,
-            country: api.isoCountry ?? "",
-            isoRegion: api.isoRegion,
-            city: api.municipality ?? "",
-            scheduledService: api.scheduledService,
-            gpsCode: api.gpsCode,
-            iataCode: api.iataCode,
-            localCode: api.localCode,
-            homeLink: api.homeLink,
-            wikipediaLink: api.wikipediaLink,
-            keywords: api.keywords,
-            sources: api.sources,
-            runways: api.runways.compactMap { APIRunwayAdapter.toRZFlight($0) },
-            procedures: api.procedures.compactMap { APIProcedureAdapter.toRZFlight($0) },
-            aipEntries: api.aipEntries.compactMap { APIAIPEntryAdapter.toRZFlight($0) },
-            createdAtString: api.createdAt,
-            updatedAtString: api.updatedAt
-        )
-    }
-}
-```
-
-## Questions / Clarifications
-
-1. **Date handling:** Should we use `Date?` or ISO8601 strings in the initializers? (Prefer `Date?` with optional string parsing helper)
-
-2. **AIPField lookup:** Should the initializer handle `stdFieldId` → `AIPField` lookup automatically, or should the caller do it?
-
-3. **Procedure data:** The `data` field is `[String: Any]` - should this be `Codable` or remain as `Any`? (Current implementation uses `Any`)
-
-4. **Backward compatibility:** Are there any breaking changes we should be aware of?
-
-## Related Files in RZFlight
-
-- `Sources/RZFlight/Airport.swift` - Add Airport initializer
-- `Sources/RZFlight/Runway.swift` - Add Runway initializer  
-- `Sources/RZFlight/Procedure.swift` - Add Procedure initializer
-- `Sources/RZFlight/AIPEntry.swift` - Add AIPEntry initializer
-
-## Contact
-
-If you have questions about the iOS app's usage patterns or need clarification on any requirements, please reach out!
-
----
-
-**Thank you for considering this enhancement!** 🙏
-
+The models are already `Codable` - we just need the keys to match! 🎉
