@@ -25,7 +25,7 @@ struct FlyFunEuroAIPApp: App {
         WindowGroup {
             Group {
                 if let appState = appState {
-                    ContentView()
+            ContentView()
                         .environment(\.appState, appState)
                         .task {
                             await appState.onAppear()
@@ -94,6 +94,18 @@ struct FlyFunEuroAIPApp: App {
         Logger.app.info("Starting app initialization")
         
         do {
+            // Initialize secrets (for API URL, etc.)
+            // secrets.json is gitignored - create locally with: {"api_base_url": "http://localhost:8000"}
+            Secrets.shared = Secrets(url: Bundle.main.url(forResource: "secrets", withExtension: "json"))
+            
+            // Configure API URL from secrets (falls back to production)
+            if let apiURL = Secrets.shared["api_base_url"] {
+                AirportRepository.apiBaseURL = apiURL
+                Logger.app.info("API URL from secrets: \(apiURL)")
+            } else {
+                Logger.app.info("Using default API URL: \(AirportRepository.apiBaseURL)")
+            }
+            
             // Initialize database
             guard let dbPath = Bundle.main.path(forResource: "airports", ofType: "db") else {
                 throw AppError.databaseOpenFailed(path: "airports.db not found in bundle")
@@ -106,10 +118,15 @@ struct FlyFunEuroAIPApp: App {
                 connectivityMonitor: connectivityMonitor
             )
             
-            self.appState = AppState(
+            let appState = AppState(
                 repository: repository,
                 connectivityMonitor: connectivityMonitor
             )
+            
+            // Configure chatbot with API URL
+            appState.configureChatbot(baseURL: AirportRepository.apiBaseURL)
+            
+            self.appState = appState
             
             Logger.app.info("App initialization complete")
         } catch {
@@ -245,6 +262,6 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 400, height: 300)
+        }
     }
-}
 #endif

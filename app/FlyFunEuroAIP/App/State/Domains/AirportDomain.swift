@@ -200,6 +200,130 @@ final class AirportDomain {
     
     // MARK: - Visualization (from Chat)
     
+    /// Apply visualization from chat API response
+    func applyVisualization(_ chatPayload: ChatVisualizationPayload) {
+        Logger.app.info("Applying chat visualization: \(chatPayload.kind.rawValue)")
+        
+        // Clear previous chat highlights
+        clearChatHighlights()
+        
+        // Apply filters if provided
+        if let chatFilters = chatPayload.filters {
+            filters = chatFilters.toFilterConfig()
+        }
+        
+        // Apply visualization data
+        if let viz = chatPayload.visualization {
+            // Handle markers
+            if let markers = viz.markers, !markers.isEmpty {
+                // Add highlights for each marker
+                for marker in markers {
+                    let id = "chat-\(marker.icao)"
+                    highlights[id] = MapHighlight(
+                        id: id,
+                        coordinate: marker.coordinate.clLocationCoordinate,
+                        color: colorForMarkerStyle(marker.style),
+                        radius: 15000,
+                        popup: marker.name ?? marker.icao
+                    )
+                }
+                
+                // Fit map to show all markers
+                if markers.count > 1 {
+                    fitMapToMarkers(markers)
+                } else if let first = markers.first {
+                    focusMap(on: first.coordinate.clLocationCoordinate, span: 2.0)
+                }
+            }
+            
+            // Handle route
+            if let route = viz.route {
+                // Prefer using coordinates directly from the payload
+                if let depCoord = route.departureCoord,
+                   let destCoord = route.destinationCoord {
+                    activeRoute = RouteVisualization(
+                        coordinates: [depCoord.clLocationCoordinate, destCoord.clLocationCoordinate],
+                        departure: route.departure ?? "DEP",
+                        destination: route.destination ?? "DEST"
+                    )
+                    Logger.app.info("Route created from coordinates: \(route.departure ?? "?") to \(route.destination ?? "?")")
+                    fitMapToRoute()
+                }
+                // Fallback: try to find airports in current list
+                else if let departure = route.departure,
+                        let destination = route.destination,
+                        let depAirport = airports.first(where: { $0.icao == departure }),
+                        let destAirport = airports.first(where: { $0.icao == destination }) {
+                    activeRoute = RouteVisualization(
+                        coordinates: [depAirport.coord, destAirport.coord],
+                        departure: departure,
+                        destination: destination
+                    )
+                    Logger.app.info("Route created from airport lookup: \(departure) to \(destination)")
+                    fitMapToRoute()
+                } else {
+                    Logger.app.warning("Could not create route - no coordinates and airports not found")
+                }
+            }
+            
+            // Handle center point
+            if let center = viz.center {
+                focusMap(on: center.clLocationCoordinate, span: viz.zoom ?? 5.0)
+            }
+        }
+        
+        // Handle airports list (for highlighting)
+        if let airportICAOs = chatPayload.airports {
+            for icao in airportICAOs {
+                let id = "chat-\(icao)"
+                // Find the airport to get its coordinate
+                if let airport = airports.first(where: { $0.icao == icao }) {
+                    highlights[id] = MapHighlight(
+                        id: id,
+                        coordinate: airport.coord,
+                        color: .blue,
+                        radius: 15000,
+                        popup: airport.name
+                    )
+                }
+            }
+        }
+    }
+    
+    private func colorForMarkerStyle(_ style: MapMarker.MarkerStyle?) -> MapHighlight.HighlightColor {
+        switch style {
+        case .departure: return .green
+        case .destination: return .red
+        case .alternate: return .orange
+        case .waypoint: return .purple
+        case .result: return .blue
+        case .highlight: return .orange
+        case .default, .none: return .blue
+        }
+    }
+    
+    private func fitMapToMarkers(_ markers: [MapMarker]) {
+        guard !markers.isEmpty else { return }
+        
+        let coords = markers.map { $0.coordinate.clLocationCoordinate }
+        let minLat = coords.map(\.latitude).min() ?? 0
+        let maxLat = coords.map(\.latitude).max() ?? 0
+        let minLon = coords.map(\.longitude).min() ?? 0
+        let maxLon = coords.map(\.longitude).max() ?? 0
+        
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: (maxLat - minLat) * 1.5 + 0.5,
+            longitudeDelta: (maxLon - minLon) * 1.5 + 0.5
+        )
+        
+        mapPosition = .region(MKCoordinateRegion(center: center, span: span))
+    }
+    
+    /// Apply internal visualization payload (for programmatic use)
     func applyVisualization(_ payload: VisualizationPayload) {
         switch payload.kind {
         case .markers:
