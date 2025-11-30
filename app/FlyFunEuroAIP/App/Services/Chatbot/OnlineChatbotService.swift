@@ -106,13 +106,12 @@ final class OnlineChatbotService: ChatbotService, @unchecked Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue("\(bodyData.count)", forHTTPHeaderField: "Content-Length")
-        request.httpBody = bodyData
+        // Don't set httpBody when using upload(for:from:) - the body is provided separately
         
         Logger.app.info("Sending POST chat request to \(url.absoluteString)")
         Logger.app.info("Request body: \(String(data: bodyData, encoding: .utf8) ?? "nil")")
         
-        // Use upload for POST request (bytes(for:) may ignore httpMethod)
+        // Use upload for POST request - body is passed as second argument, not in request.httpBody
         let (data, response) = try await session.upload(for: request, from: bodyData)
         
         guard let httpResponse = response as? HTTPURLResponse else {
