@@ -2,24 +2,166 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 
+from .config import get_settings
 from .execution import ToolRunner
 from .formatting import build_formatter_chain
 from .planning import AviationPlan
+from .routing import QueryRouter, RouterDecision
+from .rules_rag import RulesRAG
+from .rules_agent import RulesAgent
 from .state import AgentState
 
 logger = logging.getLogger(__name__)
 
 
-def build_agent_graph(planner, tool_runner: ToolRunner, formatter_llm):
+def build_agent_graph(
+    planner,
+    tool_runner: ToolRunner,
+    formatter_llm,
+    router_llm=None,
+    rules_llm=None,
+    enable_routing: bool = True
+):
     """
-    Assemble the LangGraph workflow using injected planner/formatter runnables.
+    Assemble the LangGraph workflow with routing support.
+    
+    Args:
+        planner: Planner runnable for database path
+        tool_runner: Tool execution runner
+        formatter_llm: LLM for formatting responses
+        router_llm: Optional LLM for query routing (uses default if None)
+        rules_llm: Optional LLM for rules synthesis (uses formatter_llm if None)
+        enable_routing: Whether to enable routing (default True)
+    
+    Flow:
+        1. Router decides: rules, database, or both
+        2a. Rules path: RAG retrieval → Rules agent → END
+        2b. Database path: Planner → Tool → Formatter → END
+        2c. Both path: Database → Rules → Formatter → END
     """
+    
+    settings = get_settings()
+    
+    # Initialize routing components (if enabled)
+    router = None
+    rag_system = None
+    rules_agent = None
+    
+    if enable_routing:
+        router = QueryRouter(llm=router_llm)
+        
+        # Initialize RAG system
+        try:
+            rag_system = RulesRAG(
+                vector_db_path=settings.vector_db_path,
+                embedding_model=settings.embedding_model,
+                enable_reformulation=settings.enable_query_reformulation,
+                llm=router_llm
+            )
+            logger.info(f"✓ RAG system initialized: {settings.vector_db_path}")
+        except Exception as e:
+            logger.warning(f"Could not initialize RAG system: {e}")
+            logger.warning("Rules path will be disabled")
+            rag_system = None
+        
+        # Initialize rules agent
+        rules_agent = RulesAgent(llm=rules_llm or formatter_llm)
 
     graph = StateGraph(AgentState)
+
+    def router_node(state: AgentState) -> Dict[str, Any]:
+        """Route query to appropriate path (rules, database, or both)."""
+        if not enable_routing or router is None:
+            # Skip routing, go directly to planner (backward compatibility)
+            return {}
+        
+        try:
+            messages = state.get("messages") or []
+            if not messages:
+                return {"error": "No messages to route"}
+            
+            # Get last user message
+            query = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+            
+            # Route query
+            decision = router.route(query, conversation=messages)
+            
+            logger.info(f"Router: {decision.path} path (confidence: {decision.confidence:.2f}, countries: {decision.countries})")
+            
+            return {"router_decision": decision}
+        except Exception as e:
+            logger.error(f"Router error: {e}", exc_info=True)
+            # Fallback to database path on error
+            return {"router_decision": RouterDecision(
+                path="database",
+                confidence=0.5,
+                reasoning=f"Router failed, defaulting to database: {e}"
+            )}
+    
+    def rules_rag_node(state: AgentState) -> Dict[str, Any]:
+        """Retrieve relevant rules using RAG."""
+        if rag_system is None:
+            return {"error": "RAG system not available"}
+        
+        try:
+            decision = state.get("router_decision")
+            if not decision:
+                return {"error": "No routing decision"}
+            
+            messages = state.get("messages") or []
+            query = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+            
+            # Retrieve rules
+            retrieved_rules = rag_system.retrieve_rules(
+                query=query,
+                countries=decision.countries if decision.countries else None,
+                top_k=5
+            )
+            
+            logger.info(f"RAG: Retrieved {len(retrieved_rules)} rules for countries: {decision.countries}")
+            
+            return {"retrieved_rules": retrieved_rules}
+        except Exception as e:
+            logger.error(f"RAG retrieval error: {e}", exc_info=True)
+            return {"error": str(e)}
+    
+    def rules_agent_node(state: AgentState) -> Dict[str, Any]:
+        """Synthesize answer from retrieved rules."""
+        if rules_agent is None:
+            return {"error": "Rules agent not available"}
+        
+        try:
+            decision = state.get("router_decision")
+            retrieved_rules = state.get("retrieved_rules") or []
+            messages = state.get("messages") or []
+            
+            query = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+            countries = decision.countries if decision else []
+            
+            # Synthesize answer
+            result = rules_agent.synthesize(
+                query=query,
+                retrieved_rules=retrieved_rules,
+                countries=countries,
+                conversation=messages
+            )
+            
+            logger.info(f"Rules Agent: Generated answer using {len(retrieved_rules)} rules")
+            
+            return {
+                "rules_answer": result["answer"],
+                "rules_sources": result["sources"],
+                "final_answer": result["answer"],  # For rules-only path
+                "thinking": f"Retrieved {len(retrieved_rules)} relevant regulations. Countries: {', '.join(countries) if countries else 'N/A'}"
+            }
+        except Exception as e:
+            logger.error(f"Rules agent error: {e}", exc_info=True)
+            return {"error": str(e)}
 
     def planner_node(state: AgentState) -> Dict[str, Any]:
         try:
@@ -66,12 +208,51 @@ def build_agent_graph(planner, tool_runner: ToolRunner, formatter_llm):
             }
         
         try:
-            # Transform state to chain inputs
+            decision = state.get("router_decision")
+            
+            # Check if this is a "both" path (has both rules and database results)
+            has_rules = state.get("rules_answer") is not None
+            has_database = state.get("tool_result") is not None
+            
+            if decision and decision.path == "both" and has_rules and has_database:
+                # Combine rules and database answers
+                rules_answer = state.get("rules_answer", "")
+                tool_result = state.get("tool_result") or {}
+                
+                # Format database results
+                plan = state.get("plan")
+                db_result_json = json.dumps(tool_result, indent=2, ensure_ascii=False)
+                
+                chain_result = formatter_chain.invoke({
+                    "messages": state.get("messages") or [],
+                    "answer_style": plan.answer_style if plan else "narrative_markdown",
+                    "tool_result_json": db_result_json,
+                    "pretty_text": tool_result.get("pretty", ""),
+                })
+                
+                db_answer = chain_result if isinstance(chain_result, str) else str(chain_result.content if hasattr(chain_result, 'content') else chain_result)
+                
+                # Combine answers
+                combined_answer = f"{db_answer}\n\n---\n\n## Relevant Regulations\n\n{rules_answer}"
+                
+                from .formatting import build_ui_payload
+                ui_payload = build_ui_payload(plan, tool_result) if plan else None
+                
+                return {
+                    "final_answer": combined_answer,
+                    "thinking": f"Combined database results with regulations from {', '.join(decision.countries)}",
+                    "ui_payload": ui_payload
+                }
+            
+            # Rules-only path (answer already in state from rules_agent_node)
+            if has_rules and not has_database:
+                # Rules answer is already final_answer from rules_agent_node
+                return {}  # No changes needed
+            
+            # Database-only path (existing formatter logic)
             plan = state.get("plan")
             tool_result = state.get("tool_result") or {}
             
-            # Use chain directly - LangGraph's astream_events() will capture streaming
-            # The chain is: prompt | llm | StrOutputParser(), so it should return a string
             chain_result = formatter_chain.invoke(
                 {
                     "messages": state.get("messages") or [],
@@ -83,16 +264,13 @@ def build_agent_graph(planner, tool_runner: ToolRunner, formatter_llm):
             
             # Process the answer and build UI payload
             from .formatting import build_ui_payload, _extract_icao_codes, _enhance_visualization
-            from langchain_core.messages import BaseMessage
             
             # Handle different return types from the chain
             if isinstance(chain_result, str):
                 answer = chain_result.strip()
             elif hasattr(chain_result, "content"):
-                # AIMessage or similar - extract content
                 answer = str(chain_result.content).strip()
             else:
-                # Fallback to string conversion
                 answer = str(chain_result).strip()
             
             # Build UI payload
@@ -133,14 +311,116 @@ def build_agent_graph(planner, tool_runner: ToolRunner, formatter_llm):
                 "thinking": state.get("planning_reasoning", ""),
             }
 
+    # Add nodes
+    if enable_routing and router:
+        graph.add_node("router", router_node)
+        graph.add_node("rules_rag", rules_rag_node)
+        # rules_agent node will be added with wrapper below
+    
     graph.add_node("planner", planner_node)
     graph.add_node("tool", tool_node)
     graph.add_node("formatter", formatter_node)
 
-    graph.set_entry_point("planner")
-    graph.add_edge("planner", "tool")
-    graph.add_edge("tool", "formatter")
-    graph.add_edge("formatter", END)
+    # Set entry point
+    if enable_routing and router:
+        graph.set_entry_point("router")
+        
+        # Conditional routing based on RouterDecision
+        def route_decision(state: AgentState) -> str:
+            """Route based on router decision."""
+            decision = state.get("router_decision")
+            if not decision:
+                return "planner"  # Fallback to database path
+            
+            if decision.path == "rules":
+                return "rules_rag"
+            elif decision.path == "both":
+                return "planner"  # Start with database, then add rules
+            else:  # database
+                return "planner"
+        
+        # Add conditional edge from router
+        graph.add_conditional_edges(
+            "router",
+            route_decision,
+            {
+                "rules_rag": "rules_rag",
+                "planner": "planner"
+            }
+        )
+        
+        # Rules path: RAG → Rules Agent → END
+        graph.add_edge("rules_rag", "rules_agent")
+        graph.add_edge("rules_agent", END)
+        
+        # Database path: Planner → Tool → check if "both"
+        graph.add_edge("planner", "tool")
+        
+        def after_tool_routing(state: AgentState) -> str:
+            """After tool execution, check if we need rules too."""
+            decision = state.get("router_decision")
+            if decision and decision.path == "both":
+                return "rules_rag"  # Add rules to database results
+            else:
+                return "formatter"  # Just format database results
+        
+        graph.add_conditional_edges(
+            "tool",
+            after_tool_routing,
+            {
+                "rules_rag": "rules_rag",
+                "formatter": "formatter"
+            }
+        )
+        
+        # Both path: after rules, go to formatter to combine
+        # (rules_agent already added edge to END, but we override for "both")
+        # Actually, we need a different flow for "both" - let me think...
+        # For "both": Tool → Rules RAG → Rules Agent (but skip the END edge)
+        
+        # Let's use a wrapper for rules_agent that checks the path
+        def rules_agent_with_both_support(state: AgentState) -> Dict[str, Any]:
+            """Rules agent that doesn't set final_answer for 'both' path."""
+            result = rules_agent_node(state)
+            decision = state.get("router_decision")
+            
+            if decision and decision.path == "both":
+                # Don't set final_answer yet, let formatter combine
+                result_copy = result.copy()
+                result_copy.pop("final_answer", None)
+                return result_copy
+            return result
+        
+        # Replace the rules_agent node with the wrapper
+        graph.add_node("rules_agent", rules_agent_with_both_support)
+        
+        # After rules_agent, check if "both" path
+        def after_rules_routing(state: AgentState) -> str:
+            """After rules agent, check if we need to combine with database."""
+            decision = state.get("router_decision")
+            if decision and decision.path == "both":
+                return "formatter"  # Combine results
+            else:
+                return END  # Rules-only, already have final answer
+        
+        graph.add_conditional_edges(
+            "rules_agent",
+            after_rules_routing,
+            {
+                "formatter": "formatter",
+                END: END
+            }
+        )
+        
+        # Formatter always goes to END
+        graph.add_edge("formatter", END)
+        
+    else:
+        # Original flow (backward compatibility)
+        graph.set_entry_point("planner")
+        graph.add_edge("planner", "tool")
+        graph.add_edge("tool", "formatter")
+        graph.add_edge("formatter", END)
 
     return graph.compile()
 
