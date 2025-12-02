@@ -204,5 +204,14 @@
       "to_location": "LEMD"
     },
     "description": "ICAO codes only - Paris to Madrid"
+  },
+  {
+    "question": "Find airports between LFPO and EDDM",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "LFPO",
+      "to_location": "EDDM"
+    },
+    "description": "ICAO codes only - Paris Orly to Munich route query"
   }
 ]
