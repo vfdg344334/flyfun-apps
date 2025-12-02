@@ -231,10 +231,10 @@ export class LLMIntegration {
     const store = this.store as any;
     const state = store.getState();
     const highlights = state.visualization.highlights;
-    
+
     // Collect IDs to remove first (avoid modifying Map during iteration)
     const idsToRemove: string[] = [];
-    
+
     if (highlights instanceof globalThis.Map) {
       highlights.forEach((_, id: string) => {
         if (id.startsWith('llm-airport-')) {
@@ -248,11 +248,50 @@ export class LLMIntegration {
         }
       });
     }
-    
+
     // Remove collected IDs
     idsToRemove.forEach(id => {
       store.getState().removeHighlight(id);
     });
+  }
+
+  /**
+   * Reset all visualizations (public method for clearing chat)
+   * Complete reset - clears everything and loads all airports
+   */
+  async resetVisualization(): Promise<void> {
+    const store = this.store as any;
+
+    // Clear LLM highlights
+    this.clearLLMHighlights();
+
+    // Clear all highlights
+    store.getState().clearHighlights();
+
+    // Clear route
+    store.getState().setRoute(null);
+
+    // Clear locate state
+    store.getState().setLocate(null);
+
+    // Clear filters to default
+    store.getState().clearFilters();
+
+    // Clear search query
+    store.getState().setSearchQuery('');
+
+    // Load all airports with default filters (limit to 1000)
+    try {
+      store.getState().setLoading(true);
+      const response = await this.apiAdapter.getAirports({ limit: 1000 });
+      store.getState().setAirports(response.data);
+      store.getState().setLoading(false);
+      console.log(`✅ Complete reset - loaded ${response.data.length} airports`);
+    } catch (error) {
+      console.error('Error loading airports after reset:', error);
+      store.getState().setAirports([]);
+      store.getState().setLoading(false);
+    }
   }
   
   /**
@@ -287,16 +326,39 @@ export class LLMIntegration {
   private handlePointWithMarkers(viz: Visualization): boolean {
     const airports = (viz.markers || []) as Airport[];
     const pointData = viz.point as {lat: number; lng: number; label?: string} | undefined;
-    
+
     if (!Array.isArray(airports) || airports.length === 0) {
       console.error('point_with_markers missing valid airports array');
       return false;
     }
-    
+
+    // Clear old LLM highlights
+    this.clearLLMHighlights();
+
     // Update store with airports
     const store = this.store as any;
     store.getState().setAirports(airports as Airport[]);
-    
+
+    // Add blue highlights for airports mentioned in chat (same as route_with_markers)
+    let highlightCount = 0;
+    airports.forEach((airport) => {
+      if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
+        store.getState().highlightPoint({
+          id: `llm-airport-${airport.ident}`,
+          type: 'airport' as const,
+          lat: airport.latitude_deg,
+          lng: airport.longitude_deg,
+          color: '#007bff',
+          radius: 15,
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
+          country: airport.iso_country || airport.country  // Add country for filtering
+        });
+        highlightCount++;
+      }
+    });
+
+    console.log(`✅ Point with markers: highlighted ${highlightCount} airports from chat`);
+
     // Fit bounds to show all airports after markers are updated
     if (this.visualizationEngine && airports.length > 0) {
       setTimeout(() => {
@@ -304,7 +366,7 @@ export class LLMIntegration {
         console.log('LLMIntegration: Fitted map bounds for point with airports');
       }, 300);
     }
-    
+
     // Set locate state if point provided
     if (pointData) {
       (this.store as any).getState().setLocate({
@@ -317,13 +379,13 @@ export class LLMIntegration {
         radiusNm: 50.0 // Default, will be updated from filter profile if provided
       });
     }
-    
+
     // Apply filter profile if provided
     const filterProfile = viz.filter_profile;
     if (filterProfile) {
       this.applyFilterProfile(filterProfile);
     }
-    
+
     return true;
   }
   

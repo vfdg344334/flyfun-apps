@@ -1064,11 +1064,16 @@ def find_airports_near_location(
     total_count = len(airports)
     airports_for_llm = airports[:20] if total_count > 20 else airports
 
-    pretty = (
-        f"Found {total_count} airports within {max_distance_nm}nm of {geocode['formatted']}."
-        if total_count else
-        f"No airports within {max_distance_nm}nm of {geocode['formatted']}."
-    )
+    # Build pretty output with airport list (similar to search_airports)
+    if airports:
+        pretty = f"Found {total_count} airports within {max_distance_nm}nm of {geocode['formatted']}:\n\n"
+        pretty += "\n\n".join(
+            f"**{a['ident']} - {a['name']}** ({a['distance_nm']}nm)\n"
+            f"Location: {a['municipality'] or 'Unknown'}, {a['country'] or 'Unknown'}"
+            for a in airports_for_llm[:20]  # Only show first 20 in text
+        )
+    else:
+        pretty = f"No airports within {max_distance_nm}nm of {geocode['formatted']}."
 
     # Generate filter profile for UI synchronization
     filter_profile: Dict[str, Any] = {
