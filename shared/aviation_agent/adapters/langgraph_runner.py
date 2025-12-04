@@ -19,6 +19,9 @@ def build_agent(
     settings: Optional[AviationAgentSettings] = None,
     planner_llm: Optional[Runnable] = None,
     formatter_llm: Optional[Runnable] = None,
+    router_llm: Optional[Runnable] = None,
+    rules_llm: Optional[Runnable] = None,
+    enable_routing: bool = True,
 ):
     settings = settings or get_settings()
     if not settings.enabled:
@@ -26,11 +29,26 @@ def build_agent(
 
     planner_llm = _resolve_llm(planner_llm, settings.planner_model, role="planner")
     formatter_llm = _resolve_llm(formatter_llm, settings.formatter_model, role="formatter")
+    
+    # Router and rules LLMs default to None (will be initialized from settings in graph)
+    if router_llm is None and settings.router_model:
+        router_llm = _resolve_llm(None, settings.router_model, role="router")
+    
+    if rules_llm is None:
+        rules_llm = formatter_llm  # Default to formatter LLM for rules
 
     tool_client = AviationToolClient(settings.build_tool_context())
     tool_runner = ToolRunner(tool_client)
     planner = build_planner_runnable(planner_llm, tuple(tool_client.tools.values()))
-    graph = build_agent_graph(planner, tool_runner, formatter_llm)
+    
+    graph = build_agent_graph(
+        planner,
+        tool_runner,
+        formatter_llm,
+        router_llm=router_llm,
+        rules_llm=rules_llm,
+        enable_routing=enable_routing
+    )
     return graph
 
 

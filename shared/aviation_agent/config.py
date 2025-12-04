@@ -22,6 +22,11 @@ RULES_JSON_CANDIDATES = [
     "rules.json",
     "web/server/rules.json",
 ]
+VECTOR_DB_CANDIDATES = [
+    "out/rules_vector_db",
+    "cache/rules_vector_db",
+    "rules_vector_db",
+]
 
 
 def _locate_file(candidates: list[str]) -> Path:
@@ -49,6 +54,13 @@ def _default_rules_json() -> Path:
         if env_path.exists():
             return env_path
     return _locate_file(RULES_JSON_CANDIDATES)
+
+
+def _default_vector_db() -> Path:
+    env_value = os.environ.get("VECTOR_DB_PATH")
+    if env_value:
+        return Path(env_value)
+    return _locate_file(VECTOR_DB_CANDIDATES)
 
 
 class AviationAgentSettings(BaseSettings):
@@ -85,6 +97,28 @@ class AviationAgentSettings(BaseSettings):
         default_factory=_default_rules_json,
         description="Path to rules.json used by ToolContext.",
         alias="RULES_JSON",
+    )
+    vector_db_path: Path = Field(
+        default_factory=_default_vector_db,
+        description="Path to rules vector database for RAG retrieval.",
+        alias="VECTOR_DB_PATH",
+    )
+    
+    # RAG settings
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Embedding model for RAG (all-MiniLM-L6-v2 or text-embedding-3-small)",
+        alias="EMBEDDING_MODEL",
+    )
+    enable_query_reformulation: bool = Field(
+        default=True,
+        description="Whether to reformulate queries for better RAG matching",
+        alias="ENABLE_QUERY_REFORMULATION",
+    )
+    router_model: Optional[str] = Field(
+        default="gpt-4o-mini",
+        description="LLM model for query routing",
+        alias="ROUTER_MODEL",
     )
 
     def build_tool_context(self, *, load_rules: bool = True) -> ToolContext:
