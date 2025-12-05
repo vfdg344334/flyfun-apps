@@ -37,6 +37,11 @@ final class AirportDomain {
     var highlights: [String: MapHighlight] = [:]
     var activeRoute: RouteVisualization?
     
+    // MARK: - Procedure Lines
+    /// Procedure lines for visualization (keyed by airport ICAO)
+    var procedureLines: [String: [RZFlight.Airport.ProcedureLine]] = [:]
+    private var procedureLinesLoadingTask: Task<Void, Never>?
+    
     // MARK: - Cached Lookups (for legend coloring)
     /// Set of ICAOs that are border crossing points - loaded once at startup
     var borderCrossingICAOs: Set<String> = []
@@ -88,6 +93,11 @@ final class AirportDomain {
             limit: 500  // Cap markers for performance
         )
         Logger.app.info("Loaded \(self.airports.count) airports in region")
+        
+        // Load procedure lines if in procedure legend mode
+        if legendMode == .procedures {
+            await loadProcedureLines()
+        }
     }
     
     /// Initial load - loads airports for default Europe view
@@ -435,6 +445,46 @@ final class AirportDomain {
         Task {
             try? await applyFilters()
         }
+    }
+    
+    // MARK: - Procedure Lines Loading
+    
+    /// Load procedure lines for visible airports
+    /// Only loads for airports that have procedures and aren't already loaded
+    func loadProcedureLines() async {
+        // Cancel any existing loading task
+        procedureLinesLoadingTask?.cancel()
+        
+        procedureLinesLoadingTask = Task {
+            // Filter to airports with procedures that don't have lines loaded yet
+            let airportsToLoad = airports.filter { airport in
+                !airport.procedures.isEmpty && procedureLines[airport.icao] == nil
+            }
+            
+            // Limit to reasonable number for performance
+            let airportsToProcess = Array(airportsToLoad.prefix(50))
+            
+            for airport in airportsToProcess {
+                guard !Task.isCancelled else { break }
+                
+                // Get procedure lines from the airport
+                let result = airport.procedureLines(distanceNm: 10.0)
+                if !result.procedureLines.isEmpty {
+                    procedureLines[airport.icao] = result.procedureLines
+                }
+            }
+            
+            Logger.app.info("Loaded procedure lines for \(procedureLines.count) airports")
+        }
+        
+        await procedureLinesLoadingTask?.value
+    }
+    
+    /// Clear procedure lines (e.g., when switching away from procedure legend mode)
+    func clearProcedureLines() {
+        procedureLines.removeAll()
+        procedureLinesLoadingTask?.cancel()
+        procedureLinesLoadingTask = nil
     }
     
     // MARK: - Metadata Loading
