@@ -15,6 +15,7 @@ from .routing import QueryRouter, RouterDecision
 from .rules_rag import RulesRAG
 from .rules_agent import RulesAgent
 from .state import AgentState
+from .next_query_predictor import NextQueryPredictor, extract_context_from_plan
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,12 @@ def build_agent_graph(
     formatter_llm,
     router_llm=None,
     rules_llm=None,
-    enable_routing: bool = True
+    enable_routing: bool = True,
+    enable_next_query_prediction: bool = True
 ):
     """
     Assemble the LangGraph workflow with routing support.
-    
+
     Args:
         planner: Planner runnable for database path
         tool_runner: Tool execution runner
@@ -37,11 +39,12 @@ def build_agent_graph(
         router_llm: Optional LLM for query routing (uses default if None)
         rules_llm: Optional LLM for rules synthesis (uses formatter_llm if None)
         enable_routing: Whether to enable routing (default True)
-    
+        enable_next_query_prediction: Whether to enable next query prediction (default True)
+
     Flow:
         1. Router decides: rules, database, or both
         2a. Rules path: RAG retrieval → Rules agent → END
-        2b. Database path: Planner → Tool → Formatter → END
+        2b. Database path: Planner → Predict Next Queries → Tool → Formatter → END
         2c. Both path: Database → Rules → Formatter → END
     """
     
@@ -54,8 +57,10 @@ def build_agent_graph(
     
     if enable_routing:
         router = QueryRouter(llm=router_llm)
-        
+
         # Initialize RAG system
+        # NOTE: ChromaDB requires local filesystem (not CIFS/NFS)
+        # Vector DB is stored at /root/Projects/flyfun/rules_vector_db
         try:
             rag_system = RulesRAG(
                 vector_db_path=settings.vector_db_path,
@@ -68,9 +73,15 @@ def build_agent_graph(
             logger.warning(f"Could not initialize RAG system: {e}")
             logger.warning("Rules path will be disabled")
             rag_system = None
-        
+
         # Initialize rules agent
         rules_agent = RulesAgent(llm=rules_llm or formatter_llm)
+
+    # Initialize next query predictor (if enabled)
+    predictor = None
+    if enable_next_query_prediction:
+        predictor = NextQueryPredictor(rules_json_path=settings.rules_json)
+        logger.info("✓ Next query predictor enabled")
 
     graph = StateGraph(AgentState)
 
@@ -134,15 +145,15 @@ def build_agent_graph(
         """Synthesize answer from retrieved rules."""
         if rules_agent is None:
             return {"error": "Rules agent not available"}
-        
+
         try:
             decision = state.get("router_decision")
             retrieved_rules = state.get("retrieved_rules") or []
             messages = state.get("messages") or []
-            
+
             query = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
             countries = decision.countries if decision else []
-            
+
             # Synthesize answer
             result = rules_agent.synthesize(
                 query=query,
@@ -150,15 +161,24 @@ def build_agent_graph(
                 countries=countries,
                 conversation=messages
             )
-            
+
             logger.info(f"Rules Agent: Generated answer using {len(retrieved_rules)} rules")
-            
-            return {
+
+            # Build response with suggested queries if available
+            response = {
                 "rules_answer": result["answer"],
                 "rules_sources": result["sources"],
                 "final_answer": result["answer"],  # For rules-only path
                 "thinking": f"Retrieved {len(retrieved_rules)} relevant regulations. Countries: {', '.join(countries) if countries else 'N/A'}"
             }
+
+            # Include suggested queries if they were generated
+            suggested_queries = state.get("suggested_queries")
+            if suggested_queries:
+                response["ui_payload"] = {"suggested_queries": suggested_queries}
+                logger.info(f"Including {len(suggested_queries)} suggested queries in rules response")
+
+            return response
         except Exception as e:
             logger.error(f"Rules agent error: {e}", exc_info=True)
             return {"error": str(e)}
@@ -176,11 +196,113 @@ def build_agent_graph(
                 if other_args:
                     arg_str = ", ".join(f"{k}={v}" for k, v in other_args.items())
                     reasoning_parts.append(f"with arguments: {arg_str}")
-            
+
             reasoning = ". ".join(reasoning_parts) + "."
             return {"plan": plan, "planning_reasoning": reasoning}
         except Exception as e:
             return {"error": str(e)}
+
+    def predict_next_queries_node(state: AgentState) -> Dict[str, Any]:
+        """
+        Generate next query suggestions based on plan ONLY.
+
+        Runs AFTER planner, uses only:
+        - User query text
+        - Tool selected
+        - Tool arguments (including filters)
+
+        Does NOT use tool results.
+        """
+        if not enable_next_query_prediction or predictor is None:
+            return {}
+
+        try:
+            plan = state.get("plan")
+            if not plan:
+                return {}
+
+            # Extract context from query and plan only (NO RESULTS)
+            messages = state.get("messages", [])
+            user_query = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+
+            context = extract_context_from_plan(user_query, plan)
+
+            # Generate suggestions (rule-based, fast)
+            suggestions = predictor.predict_next_queries(context, max_suggestions=4)
+
+            # Format for UI
+            suggested_queries = [
+                {
+                    "text": s.query_text,
+                    "tool": s.tool_name,
+                    "category": s.category,
+                    "priority": s.priority
+                }
+                for s in suggestions
+            ]
+
+            logger.info(f"Generated {len(suggested_queries)} query suggestions")
+
+            # Store in state for formatter to include in ui_payload
+            return {"suggested_queries": suggested_queries}
+
+        except Exception as e:
+            logger.error(f"Next query prediction failed: {e}", exc_info=True)
+            return {}
+
+    def predict_next_queries_for_rules_node(state: AgentState) -> Dict[str, Any]:
+        """
+        Generate next query suggestions for rules-only path.
+
+        Simpler than database path - just suggests other rule questions
+        based on the user's query without needing a plan.
+        """
+        if not enable_next_query_prediction or predictor is None:
+            return {}
+
+        try:
+            # Extract user query
+            messages = state.get("messages", [])
+            user_query = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+
+            # Extract countries from router decision
+            decision = state.get("router_decision")
+            countries = decision.countries if decision else []
+
+            # Create a simple context for rules queries
+            # We use "list_rules_for_country" as the tool since that's what rules queries map to
+            from .next_query_predictor import QueryContext
+            context = QueryContext(
+                user_query=user_query,
+                tool_used="list_rules_for_country",
+                tool_arguments={},
+                filters_applied={},
+                locations_mentioned=[],
+                icao_codes_mentioned=[],
+                countries_mentioned=countries  # Include countries from router decision
+            )
+
+            # Generate suggestions
+            suggestions = predictor.predict_next_queries(context, max_suggestions=4)
+
+            # Format for UI
+            suggested_queries = [
+                {
+                    "text": s.query_text,
+                    "tool": s.tool_name,
+                    "category": s.category,
+                    "priority": s.priority
+                }
+                for s in suggestions
+            ]
+
+            logger.info(f"Generated {len(suggested_queries)} query suggestions for rules path (countries: {countries})")
+
+            return {"suggested_queries": suggested_queries}
+
+        except Exception as e:
+            logger.error(f"Next query prediction for rules failed: {e}", exc_info=True)
+            return {}
 
     def tool_node(state: AgentState) -> Dict[str, Any]:
         if state.get("error"):
@@ -236,8 +358,9 @@ def build_agent_graph(
                 combined_answer = f"{db_answer}\n\n---\n\n## Relevant Regulations\n\n{rules_answer}"
                 
                 from .formatting import build_ui_payload
-                ui_payload = build_ui_payload(plan, tool_result) if plan else None
-                
+                suggested_queries = state.get("suggested_queries")
+                ui_payload = build_ui_payload(plan, tool_result, suggested_queries) if plan else None
+
                 return {
                     "final_answer": combined_answer,
                     "thinking": f"Combined database results with regulations from {', '.join(decision.countries)}",
@@ -273,8 +396,9 @@ def build_agent_graph(
             else:
                 answer = str(chain_result).strip()
             
-            # Build UI payload
-            ui_payload = build_ui_payload(plan, tool_result) if plan else None
+            # Build UI payload with suggested queries
+            suggested_queries = state.get("suggested_queries")
+            ui_payload = build_ui_payload(plan, tool_result, suggested_queries) if plan else None
 
             # Optional: Enhance visualization with ICAOs from answer
             mentioned_icaos = []
@@ -316,8 +440,12 @@ def build_agent_graph(
         graph.add_node("router", router_node)
         graph.add_node("rules_rag", rules_rag_node)
         # rules_agent node will be added with wrapper below
-    
+        if enable_next_query_prediction and predictor:
+            graph.add_node("predict_next_queries_for_rules", predict_next_queries_for_rules_node)
+
     graph.add_node("planner", planner_node)
+    if enable_next_query_prediction and predictor:
+        graph.add_node("predict_next_queries", predict_next_queries_node)
     graph.add_node("tool", tool_node)
     graph.add_node("formatter", formatter_node)
 
@@ -349,12 +477,20 @@ def build_agent_graph(
             }
         )
         
-        # Rules path: RAG → Rules Agent → END
-        graph.add_edge("rules_rag", "rules_agent")
+        # Rules path: RAG → Predict Next Queries (optional) → Rules Agent → END
+        if enable_next_query_prediction and predictor:
+            graph.add_edge("rules_rag", "predict_next_queries_for_rules")
+            graph.add_edge("predict_next_queries_for_rules", "rules_agent")
+        else:
+            graph.add_edge("rules_rag", "rules_agent")
         graph.add_edge("rules_agent", END)
         
-        # Database path: Planner → Tool → check if "both"
-        graph.add_edge("planner", "tool")
+        # Database path: Planner → Predict Next Queries → Tool → check if "both"
+        if enable_next_query_prediction and predictor:
+            graph.add_edge("planner", "predict_next_queries")
+            graph.add_edge("predict_next_queries", "tool")
+        else:
+            graph.add_edge("planner", "tool")
         
         def after_tool_routing(state: AgentState) -> str:
             """After tool execution, check if we need rules too."""
@@ -418,7 +554,11 @@ def build_agent_graph(
     else:
         # Original flow (backward compatibility)
         graph.set_entry_point("planner")
-        graph.add_edge("planner", "tool")
+        if enable_next_query_prediction and predictor:
+            graph.add_edge("planner", "predict_next_queries")
+            graph.add_edge("predict_next_queries", "tool")
+        else:
+            graph.add_edge("planner", "tool")
         graph.add_edge("tool", "formatter")
         graph.add_edge("formatter", END)
 

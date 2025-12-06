@@ -586,3 +586,92 @@
 #chat-toggle-btn:hover + .chat-keyboard-hint {
     opacity: 1;
 }
+
+/* Suggested Queries Styles */
+.suggested-queries-container {
+  margin-top: 12px;
+  padding: 12px;
+  background: #e3f2fd;
+  border-radius: 8px;
+  border-left: 3px solid #1976d2;
+}
+
+.suggestions-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #1565c0;
+  font-size: 14px;
+}
+
+.suggestions-header i {
+  color: #1976d2;
+  font-size: 14px;
+}
+
+.suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggestion-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #bbdefb;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  width: 100%;
+  font-size: 14px;
+}
+
+.suggestion-button:hover {
+  background: #f5f5f5;
+  border-color: #1976d2;
+  transform: translateX(2px);
+  box-shadow: 0 2px 6px rgba(25, 118, 210, 0.15);
+}
+
+.category-badge {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+
+.category-badge.rules {
+  background: #1976d2;
+  color: white;
+}
+
+.category-badge.route {
+  background: #7b1fa2;
+  color: white;
+}
+
+.category-badge.details {
+  background: #388e3c;
+  color: white;
+}
+
+.category-badge.pricing {
+  background: #f57c00;
+  color: white;
+}
+
+.query-text {
+  flex: 1;
+  color: #424242;
+  font-size: 14px;
+  line-height: 1.5;
+}

@@ -72,11 +72,16 @@ def build_formatter_runnable(llm: Runnable) -> Runnable:
     return RunnableLambda(_transform_state) | chain
 
 
-def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> Dict[str, Any] | None:
+def build_ui_payload(
+    plan: AviationPlan,
+    tool_result: Dict[str, Any] | None,
+    suggested_queries: List[dict] | None = None
+) -> Dict[str, Any] | None:
     """
     Build UI payload using hybrid approach:
     - Flatten commonly-used fields (filters, visualization, airports) for convenience
     - Keep mcp_raw for everything else and as authoritative source
+    - Include suggested_queries for next query prediction
     """
     if not tool_result:
         return None
@@ -142,6 +147,10 @@ def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> 
     
     if "airports" in tool_result:
         base_payload["airports"] = tool_result["airports"]
+
+    # Add suggested queries if available
+    if suggested_queries:
+        base_payload["suggested_queries"] = suggested_queries
 
     return base_payload
 

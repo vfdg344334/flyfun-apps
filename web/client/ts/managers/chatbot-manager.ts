@@ -335,6 +335,11 @@ export class ChatbotManager {
                   filterProfileApplied = true;
                 }
               }
+
+              // Handle suggested queries
+              if (eventData.suggested_queries && eventData.suggested_queries.length > 0) {
+                this.renderSuggestedQueries(eventData.suggested_queries, messageDiv);
+              }
               break;
               
             case 'tool_call_end':
@@ -759,6 +764,65 @@ export class ChatbotManager {
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
   }
   
+  /**
+   * Render suggested queries
+   */
+  private renderSuggestedQueries(suggestions: Array<{text: string; tool: string; category: string; priority: number}>, messageDiv: HTMLElement): void {
+    if (!suggestions || suggestions.length === 0) return;
+
+    const suggestionsContainer = document.createElement('div');
+    suggestionsContainer.className = 'suggested-queries-container';
+
+    const header = document.createElement('div');
+    header.className = 'suggestions-header';
+    header.innerHTML = '<i class="fas fa-lightbulb"></i> <span>You might also want to ask:</span>';
+    suggestionsContainer.appendChild(header);
+
+    const suggestionsList = document.createElement('div');
+    suggestionsList.className = 'suggestions-list';
+
+    suggestions.forEach(suggestion => {
+      const button = document.createElement('button');
+      button.className = 'suggestion-button';
+      button.dataset.query = suggestion.text;
+      button.dataset.category = suggestion.category;
+
+      const badge = document.createElement('span');
+      badge.className = `category-badge ${suggestion.category}`;
+      badge.textContent = suggestion.category;
+
+      const queryText = document.createElement('span');
+      queryText.className = 'query-text';
+      queryText.textContent = suggestion.text;
+
+      button.appendChild(badge);
+      button.appendChild(queryText);
+
+      button.addEventListener('click', () => {
+        this.handleSuggestionClick(suggestion.text);
+      });
+
+      suggestionsList.appendChild(button);
+    });
+
+    suggestionsContainer.appendChild(suggestionsList);
+    messageDiv.appendChild(suggestionsContainer);
+  }
+
+  /**
+   * Handle suggestion click
+   */
+  private handleSuggestionClick(query: string): void {
+    if (!this.chatInput) return;
+    this.chatInput.value = query;
+    this.chatInput.focus();
+    // Auto-resize
+    this.chatInput.style.height = 'auto';
+    this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 150) + 'px';
+    // Optionally auto-send
+    this.sendMessage();
+  }
+
   /**
    * Escape HTML
    */

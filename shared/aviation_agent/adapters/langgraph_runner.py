@@ -21,7 +21,7 @@ def build_agent(
     formatter_llm: Optional[Runnable] = None,
     router_llm: Optional[Runnable] = None,
     rules_llm: Optional[Runnable] = None,
-    enable_routing: bool = True,
+    enable_routing: bool = True,  # Re-enabled - ChromaDB now on local filesystem
 ):
     settings = settings or get_settings()
     if not settings.enabled:

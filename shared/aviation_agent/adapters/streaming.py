@@ -181,7 +181,86 @@ async def stream_aviation_agent(
                             "event": "message",
                             "data": {"content": chunk["content"]}
                         }
-            
+
+            elif kind == "on_chain_end" and event.get("name") == "rules_agent":
+                # Rules agent completed (rules-only path) - emit final results
+                output = event.get("data", {}).get("output")
+
+                # Handle case where output might not be a dict
+                if output is None:
+                    output = {}
+                elif not isinstance(output, dict):
+                    logger.warning(f"Rules agent output is not a dict: {type(output)}")
+                    output = {}
+
+                # Emit the complete answer with references as a message event
+                # This is critical - the LLM streams tokens during generation, but the references
+                # are appended AFTER streaming completes, so we need to emit the full answer here
+                if output.get("rules_answer"):
+                    answer_with_refs = output["rules_answer"]
+                    logger.info(f"Emitting rules answer with references ({len(answer_with_refs)} chars)")
+                    yield {
+                        "event": "message",
+                        "data": {"content": answer_with_refs}
+                    }
+
+                # Emit thinking if available
+                if output.get("thinking"):
+                    yield {
+                        "event": "thinking",
+                        "data": {"content": output["thinking"]}
+                    }
+                    yield {
+                        "event": "thinking_done",
+                        "data": {}
+                    }
+
+                # Emit error if present
+                if output.get("error"):
+                    yield {
+                        "event": "error",
+                        "data": {"message": output["error"]}
+                    }
+
+                # Emit UI payload (suggested queries)
+                if output.get("ui_payload"):
+                    yield {
+                        "event": "ui_payload",
+                        "data": output.get("ui_payload")
+                    }
+
+                # Capture complete state from input
+                input_data = event.get("data", {}).get("input")
+                if input_data:
+                    # Merge output into state to get final complete state
+                    final_state = dict(input_data) if isinstance(input_data, dict) else {}
+                    final_state.update(output)
+
+                    # Filter out non-serializable objects for JSON serialization
+                    serializable_state = {
+                        k: v for k, v in final_state.items()
+                        if k != "messages" and not hasattr(v, "model_dump")
+                    }
+
+                    # Emit final_answer event with serializable state for logging
+                    yield {
+                        "event": "final_answer",
+                        "data": {"state": serializable_state}
+                    }
+
+                # Emit done event
+                yield {
+                    "event": "done",
+                    "data": {
+                        "session_id": session_id,
+                        "tokens": {
+                            "input": total_input_tokens,
+                            "output": total_output_tokens,
+                            "total": total_input_tokens + total_output_tokens
+                        }
+                    }
+                }
+
             elif kind == "on_chain_end" and event.get("name") == "formatter":
                 # Formatter completed - emit final results
                 # Output should be a dict from the formatter node

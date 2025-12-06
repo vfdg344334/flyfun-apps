@@ -45,3 +45,6 @@ class AgentState(TypedDict, total=False):
     ui_payload: Optional[dict]  # UI-specific data (charts, maps, etc.)
     error: Optional[str]  # Error message if execution fails
 
+    # Next query prediction
+    suggested_queries: Optional[List[dict]]  # Suggested follow-up queries
+

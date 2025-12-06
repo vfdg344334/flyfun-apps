@@ -395,23 +395,51 @@ def build_vector_db(
     logger.info(f"Loading rules from {rules_json_path}")
     with open(rules_json_path, 'r', encoding='utf-8') as f:
         rules_data = json.load(f)
-    
-    questions = rules_data.get("questions", [])
-    if not questions:
-        raise ValueError(f"No questions found in {rules_json_path}")
-    
-    logger.info(f"Found {len(questions)} questions")
-    
+
+    # Handle both flat array format and nested format
+    if isinstance(rules_data, list):
+        # Flat format: [{"country_code": "GB", "question_id": "...", ...}, ...]
+        rules_list = rules_data
+        logger.info(f"Found {len(rules_list)} rule entries (flat format)")
+    elif isinstance(rules_data, dict) and "questions" in rules_data:
+        # Nested format: {"questions": [...]}
+        questions = rules_data.get("questions", [])
+        if not questions:
+            raise ValueError(f"No questions found in {rules_json_path}")
+        logger.info(f"Found {len(questions)} questions (nested format)")
+        # Convert to flat format for processing
+        rules_list = []
+        for question in questions:
+            question_id = question.get("question_id")
+            question_text = question.get("question_text", "")
+            answers_by_country = question.get("answers_by_country", {})
+            for country_code, answer in answers_by_country.items():
+                rules_list.append({
+                    "country_code": country_code,
+                    "question_id": question_id,
+                    "question_text": question_text,
+                    "answer": answer.get("answer_html", ""),
+                    "category": question.get("category", ""),
+                    "tags": question.get("tags", []),
+                    "links": answer.get("links", []),
+                    "last_reviewed": answer.get("last_reviewed", ""),
+                })
+    else:
+        raise ValueError(f"Invalid rules.json format: expected list or dict with 'questions' key")
+
+    if not rules_list:
+        raise ValueError(f"No rules found in {rules_json_path}")
+
     # Initialize embedding provider
     embedding_provider = EmbeddingProvider(embedding_model)
-    
+
     # Initialize ChromaDB
     vector_db_path.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(
         path=str(vector_db_path),
         settings=Settings(anonymized_telemetry=False)
     )
-    
+
     # Check if collection exists
     collection_name = "aviation_rules"
     try:
@@ -425,43 +453,42 @@ def build_vector_db(
         client.delete_collection(collection_name)
     except Exception:
         pass  # Collection doesn't exist, that's fine
-    
+
     # Create new collection
     collection = client.create_collection(
         name=collection_name,
         metadata={"description": "Aviation rules and regulations by country"}
     )
     logger.info(f"Created collection: {collection_name}")
-    
-    # Process each question for each country
+
+    # Process each rule entry
     documents = []
     metadatas = []
     ids = []
-    
-    for question in questions:
-        question_id = question.get("question_id")
-        question_text = question.get("question_text", "")
-        
-        if not question_id or not question_text:
-            logger.warning(f"Skipping question with missing ID or text: {question}")
+
+    for rule in rules_list:
+        question_id = rule.get("question_id")
+        question_text = rule.get("question_text", "")
+        country_code = rule.get("country_code", "")
+
+        if not question_id or not question_text or not country_code:
+            logger.warning(f"Skipping rule with missing required fields: {rule}")
             continue
-        
-        answers_by_country = question.get("answers_by_country", {})
-        
-        for country_code, answer in answers_by_country.items():
-            doc_id = f"{question_id}_{country_code}"
-            
-            documents.append(question_text)
-            metadatas.append({
-                "question_id": question_id,
-                "country_code": country_code.upper(),
-                "category": question.get("category", ""),
-                "tags": json.dumps(question.get("tags", [])),
-                "answer_html": answer.get("answer_html", ""),
-                "links": json.dumps(answer.get("links", [])),
-                "last_reviewed": answer.get("last_reviewed", ""),
-            })
-            ids.append(doc_id)
+
+        # Create unique document ID
+        doc_id = f"{question_id}_{country_code}".replace(" ", "_")
+
+        documents.append(question_text)
+        metadatas.append({
+            "question_id": question_id,
+            "country_code": country_code.upper(),
+            "category": rule.get("category", ""),
+            "tags": json.dumps(rule.get("tags", [])),
+            "answer_html": rule.get("answer", ""),
+            "links": json.dumps(rule.get("links", [])),
+            "last_reviewed": rule.get("last_reviewed", ""),
+        })
+        ids.append(doc_id)
     
     if not documents:
         raise ValueError("No valid documents to add to vector database")

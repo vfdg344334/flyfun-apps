@@ -12,7 +12,7 @@ This separation allows:
 """
 
 import os
-from security_config import ENVIRONMENT, ALLOWED_DIRS
+from security_config import ENVIRONMENT, ALLOWED_DIR
 
 
 def _is_path_allowed(path: str) -> bool:
@@ -28,11 +28,10 @@ def _is_path_allowed(path: str) -> bool:
     if ENVIRONMENT != "production":
         return True
     
-    # In production, check against allowed directories
-    for allowed_dir in ALLOWED_DIRS:
-        if path.startswith(allowed_dir):
-            return True
-    
+    # In production, check against allowed directory
+    if path.startswith(ALLOWED_DIR):
+        return True
+
     return False
 
 
@@ -52,8 +51,8 @@ def _get_default_safe_path(env_var: str, default_name: str, fallback_dir: str = 
     # In production, ensure path is in an allowed location
     if ENVIRONMENT == "production":
         if not _is_path_allowed(path):
-            # Use first allowed directory as fallback
-            fallback = ALLOWED_DIRS[0] if ALLOWED_DIRS else fallback_dir
+            # Use allowed directory as fallback
+            fallback = ALLOWED_DIR if ALLOWED_DIR else fallback_dir
             path = os.path.join(fallback, default_name)
     
     return path
@@ -91,8 +90,8 @@ def get_safe_ga_meta_db_path() -> str | None:
     # In production, ensure database is in an allowed location
     if ENVIRONMENT == "production":
         if not _is_path_allowed(db_path):
-            # Use first allowed directory as fallback
-            fallback = ALLOWED_DIRS[0] if ALLOWED_DIRS else "./"
+            # Use allowed directory as fallback
+            fallback = ALLOWED_DIR if ALLOWED_DIR else "./"
             db_path = os.path.join(fallback, "ga_meta.sqlite")
     
     # Verify file exists
