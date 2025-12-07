@@ -352,8 +352,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Build vector database for RAG retrieval (default: True)")
     p.add_argument("--no-rag", action="store_false", dest="build_rag",
                    help="Skip vector database build")
-    p.add_argument("--vector-db-path", default="cache/rules_vector_db",
-                   help="Path for vector database (default: cache/rules_vector_db)")
+    p.add_argument("--vector-db-path", default=None,
+                   help="Path for vector database (local mode). Defaults to cache/rules_vector_db or VECTOR_DB_PATH env var")
+    p.add_argument("--vector-db-url", default=None,
+                   help="URL for ChromaDB service (service mode, takes precedence over --vector-db-path). Can also use VECTOR_DB_URL env var")
     p.add_argument("--embedding-model", default="all-MiniLM-L6-v2",
                    help="Embedding model for RAG (default: all-MiniLM-L6-v2)")
     
@@ -440,17 +442,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             # Import here to avoid dependency if not needed
             import sys
+            import os
             sys.path.insert(0, str(Path(__file__).parent.parent))
             from shared.aviation_agent.rules_rag import build_vector_db
             
-            vector_db_path = Path(args.vector_db_path)
+            # Determine vector DB configuration: URL takes precedence, then path
+            vector_db_url = args.vector_db_url or os.environ.get("VECTOR_DB_URL")
+            vector_db_path = None
+            if not vector_db_url:
+                # Use path from args, env var, or default
+                vector_db_path_str = args.vector_db_path or os.environ.get("VECTOR_DB_PATH", "cache/rules_vector_db")
+                vector_db_path = Path(vector_db_path_str)
+            
             doc_count = build_vector_db(
                 rules_json_path=out_path,
                 vector_db_path=vector_db_path,
+                vector_db_url=vector_db_url,
                 embedding_model=args.embedding_model,
                 force_rebuild=True
             )
-            print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
+            if vector_db_url:
+                print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
+            else:
+                print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
         except ImportError as e:
             print(f"Warning: Could not build vector database: {e}", file=sys.stderr)
             print("Install dependencies: pip install chromadb sentence-transformers", file=sys.stderr)

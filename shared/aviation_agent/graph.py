@@ -67,13 +67,17 @@ def build_agent_graph(
             rules_manager = tool_context.rules_manager
             
             rag_system = RulesRAG(
-                vector_db_path=settings.vector_db_path,
+                vector_db_path=settings.vector_db_path if not settings.vector_db_url else None,
+                vector_db_url=settings.vector_db_url,
                 embedding_model=settings.embedding_model,
                 enable_reformulation=settings.enable_query_reformulation,
                 llm=router_llm,
                 rules_manager=rules_manager
             )
-            logger.info(f"✓ RAG system initialized: {settings.vector_db_path}")
+            if settings.vector_db_url:
+                logger.info(f"✓ RAG system initialized with service: {settings.vector_db_url}")
+            else:
+                logger.info(f"✓ RAG system initialized: {settings.vector_db_path}")
         except Exception as e:
             logger.warning(f"Could not initialize RAG system: {e}")
             logger.warning("Rules path will be disabled")

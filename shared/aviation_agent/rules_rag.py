@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import chromadb
 from chromadb.config import Settings
@@ -197,7 +198,8 @@ class RulesRAG:
     
     def __init__(
         self,
-        vector_db_path: Path | str,
+        vector_db_path: Optional[Path | str] = None,
+        vector_db_url: Optional[str] = None,
         embedding_model: str = "all-MiniLM-L6-v2",
         enable_reformulation: bool = True,
         llm: Optional[Any] = None,
@@ -207,13 +209,15 @@ class RulesRAG:
         Initialize RAG system.
         
         Args:
-            vector_db_path: Path to ChromaDB storage directory
+            vector_db_path: Path to ChromaDB storage directory (for local mode)
+            vector_db_url: URL to ChromaDB service (for service mode). If provided, takes precedence over vector_db_path.
             embedding_model: Name of embedding model to use
             enable_reformulation: Whether to reformulate queries for better matching
             llm: Optional LLM instance for reformulation
             rules_manager: Optional RulesManager instance for multi-country lookups
         """
-        self.vector_db_path = Path(vector_db_path)
+        self.vector_db_path = Path(vector_db_path) if vector_db_path else None
+        self.vector_db_url = vector_db_url
         self.embedding_model = embedding_model
         
         # Initialize embedding provider
@@ -229,14 +233,31 @@ class RulesRAG:
         # Store rules manager for multi-country lookups
         self.rules_manager = rules_manager
         
-        # Initialize ChromaDB
-        logger.info(f"Initializing ChromaDB at {self.vector_db_path}")
-        self.client = chromadb.PersistentClient(
-            path=str(self.vector_db_path),
-            settings=Settings(
-                anonymized_telemetry=False,  # Disable telemetry for privacy
+        # Initialize ChromaDB - use service mode if URL is provided, otherwise local mode
+        if self.vector_db_url:
+            logger.info(f"Initializing ChromaDB service at {self.vector_db_url}")
+            # Parse URL to extract host and port
+            parsed_url = urlparse(self.vector_db_url)
+            host = parsed_url.hostname or "localhost"
+            port = parsed_url.port or (8000 if parsed_url.scheme == "http" else 443)
+            
+            # Initialize HttpClient with basic settings
+            # Note: Auth token support can be added later if needed via headers or Settings
+            self.client = chromadb.HttpClient(
+                host=host,
+                port=port,
+                settings=Settings(anonymized_telemetry=False)
             )
-        )
+        elif self.vector_db_path:
+            logger.info(f"Initializing ChromaDB at {self.vector_db_path}")
+            self.client = chromadb.PersistentClient(
+                path=str(self.vector_db_path),
+                settings=Settings(
+                    anonymized_telemetry=False,  # Disable telemetry for privacy
+                )
+            )
+        else:
+            raise ValueError("Either vector_db_path or vector_db_url must be provided")
         
         # Load collection
         try:
@@ -508,7 +529,8 @@ class RulesRAG:
 
 def build_vector_db(
     rules_json_path: Path | str,
-    vector_db_path: Path | str,
+    vector_db_path: Optional[Path | str] = None,
+    vector_db_url: Optional[str] = None,
     embedding_model: str = "all-MiniLM-L6-v2",
     batch_size: int = 100,
     force_rebuild: bool = False,
@@ -521,7 +543,8 @@ def build_vector_db(
     
     Args:
         rules_json_path: Path to rules.json file
-        vector_db_path: Path to ChromaDB storage directory
+        vector_db_path: Path to ChromaDB storage directory (for local mode)
+        vector_db_url: URL to ChromaDB service (for service mode). If provided, takes precedence over vector_db_path.
         embedding_model: Name of embedding model to use
         batch_size: Number of documents to process per batch
         force_rebuild: If True, rebuild even if collection exists
@@ -534,7 +557,6 @@ def build_vector_db(
         ValueError: If rules.json format is invalid
     """
     rules_json_path = Path(rules_json_path)
-    vector_db_path = Path(vector_db_path)
     
     # Load rules.json
     if not rules_json_path.exists():
@@ -581,12 +603,31 @@ def build_vector_db(
     # Initialize embedding provider
     embedding_provider = EmbeddingProvider(embedding_model)
 
-    # Initialize ChromaDB
-    vector_db_path.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(
-        path=str(vector_db_path),
-        settings=Settings(anonymized_telemetry=False)
-    )
+    # Initialize ChromaDB - use service mode if URL is provided, otherwise local mode
+    if vector_db_url:
+        logger.info(f"Building vector database using ChromaDB service at {vector_db_url}")
+        # Parse URL to extract host and port
+        parsed_url = urlparse(vector_db_url)
+        host = parsed_url.hostname or "localhost"
+        port = parsed_url.port or (8000 if parsed_url.scheme == "http" else 443)
+        
+        # Initialize HttpClient with basic settings
+        # Note: Auth token support can be added later if needed
+        client = chromadb.HttpClient(
+            host=host,
+            port=port,
+            settings=Settings(anonymized_telemetry=False)
+        )
+    elif vector_db_path:
+        vector_db_path = Path(vector_db_path)
+        logger.info(f"Building vector database at {vector_db_path}")
+        vector_db_path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(
+            path=str(vector_db_path),
+            settings=Settings(anonymized_telemetry=False)
+        )
+    else:
+        raise ValueError("Either vector_db_path or vector_db_url must be provided")
 
     # Check if collection exists
     collection_name = "aviation_rules"
