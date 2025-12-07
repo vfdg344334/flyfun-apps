@@ -977,7 +977,8 @@ class Application {
       if (category.rules && Array.isArray(category.rules)) {
         category.rules.forEach((rule: any) => {
           const question = this.escapeHtml(rule.question_text || 'Untitled rule');
-          const answerText = this.escapeHtml(this.stripHtml(rule.answer_html) || 'No answer available.');
+          // Render HTML content instead of stripping and escaping
+          const answerText = this.renderHtmlContent(rule.answer_html || 'No answer available.');
           const tagsHtml = (rule.tags || [])
             .map((tag: any) => `<span class="badge bg-secondary">${this.escapeHtml(String(tag))}</span>`)
             .join(' ');
@@ -1053,6 +1054,19 @@ class Application {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = String(html);
     return tempDiv.textContent || tempDiv.innerText || '';
+  }
+
+  /**
+   * Render HTML content safely. If content contains HTML tags, render them.
+   * Otherwise, escape the content for safety.
+   */
+  private renderHtmlContent(content: any): string {
+    if (!content) {
+      return '';
+    }
+    const contentStr = String(content);
+    // Simple check: if it looks like HTML (contains tags), render it; otherwise escape
+    return /<[^>]+>/.test(contentStr) ? contentStr : this.escapeHtml(contentStr);
   }
 
   private getProcedureBadgeClass(procedureType?: string, approachType?: string): string {
