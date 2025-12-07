@@ -21,6 +21,7 @@ struct ContentView: View {
                 CompactLayout()
             }
         }
+        // Filter sheet (only for iPhone - compact size class)
         .sheet(isPresented: filterSheetBinding) {
             FilterPanelView()
                 .presentationDetents([.medium, .large])
@@ -88,8 +89,20 @@ struct ContentView: View {
     
     private var filterSheetBinding: Binding<Bool> {
         Binding(
-            get: { state?.navigation.showingFilters ?? false },
-            set: { state?.navigation.showingFilters = $0 }
+            get: { 
+                // Only show filter sheet on compact size class (iPhone)
+                !isRegularWidth && (state?.navigation.showingFilters ?? false)
+            },
+            set: { 
+                if !isRegularWidth {
+                    state?.navigation.showingFilters = $0
+                } else {
+                    // On regular size class, show filters in left overlay instead
+                    if $0 {
+                        state?.navigation.showFiltersInLeftOverlay()
+                    }
+                }
+            }
         )
     }
     
@@ -225,31 +238,33 @@ struct FloatingActionButtons: View {
     
     var body: some View {
         VStack(spacing: 12) {
-            // Search button
+            // Search button - toggles visibility
             FloatingActionButton(
                 icon: "magnifyingglass",
                 label: "Search",
-                color: .blue
+                color: (state?.navigation.showingSearchSheet ?? false) ? .blue.opacity(0.7) : .blue
             ) {
-                state?.navigation.showSearchSheet()
+                state?.navigation.toggleSearchSheet()
             }
             
-            // Chat button
+            // Chat button - toggles visibility
             FloatingActionButton(
                 icon: "bubble.left.and.bubble.right",
                 label: "Chat",
-                color: .green
+                color: (state?.navigation.showingChat ?? false) ? .green.opacity(0.7) : .green
             ) {
-                state?.navigation.showChat()
+                state?.navigation.toggleChat()
             }
             
-            // Filters button (if has active filters, show indicator)
+            // Filters button - toggles visibility
             FloatingActionButton(
                 icon: state?.airports.filters.hasActiveFilters == true 
                     ? "line.3.horizontal.decrease.circle.fill"
                     : "line.3.horizontal.decrease.circle",
                 label: "Filters",
-                color: state?.airports.filters.hasActiveFilters == true ? .orange : .gray
+                color: (state?.navigation.showingFilters ?? false)
+                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
+                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
             ) {
                 state?.navigation.toggleFilters()
             }
@@ -265,42 +280,65 @@ struct RegularFloatingActionButtons: View {
     
     var body: some View {
         VStack(spacing: 12) {
-            // Search button
+            // Search button - toggles visibility
             FloatingActionButton(
                 icon: "magnifyingglass",
                 label: "Search",
-                color: .blue
+                color: isSearchVisible ? .blue.opacity(0.7) : .blue
             ) {
-                state?.navigation.showSearchInLeftOverlay()
+                if isSearchVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showSearchInLeftOverlay()
+                }
             }
             
-            // Chat button
+            // Chat button - toggles visibility
             FloatingActionButton(
                 icon: "bubble.left.and.bubble.right",
                 label: "Chat",
-                color: .green
+                color: isChatVisible ? .green.opacity(0.7) : .green
             ) {
-                state?.navigation.showChatInLeftOverlay()
+                if isChatVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showChatInLeftOverlay()
+                }
             }
             
-            // Filters button (if has active filters, show indicator)
+            // Filters button - toggles visibility
             FloatingActionButton(
                 icon: state?.airports.filters.hasActiveFilters == true 
                     ? "line.3.horizontal.decrease.circle.fill"
                     : "line.3.horizontal.decrease.circle",
                 label: "Filters",
-                color: state?.airports.filters.hasActiveFilters == true ? .orange : .gray
+                color: isFiltersVisible 
+                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
+                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
             ) {
-                // Show search overlay (filters are accessed from search) and open filter sheet
-                state?.navigation.showSearchInLeftOverlay()
-                // Small delay to let overlay animate in, then show filter sheet
-                Task {
-                    try? await Task.sleep(for: .milliseconds(200))
-                    state?.navigation.showFilters()
+                if isFiltersVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showFiltersInLeftOverlay()
                 }
             }
         }
         .padding(.top, 8)
+    }
+    
+    private var isSearchVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .search
+    }
+    
+    private var isChatVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .chat
+    }
+    
+    private var isFiltersVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .filters
     }
 }
 

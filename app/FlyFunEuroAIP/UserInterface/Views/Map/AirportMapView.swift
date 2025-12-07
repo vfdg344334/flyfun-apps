@@ -95,18 +95,18 @@ struct AirportMapView: View {
                 state?.airports.clearProcedureLines()
             }
         }
-        // Legend overlays - position based on size class
-        .overlay(alignment: isCompact ? .bottomTrailing : .topTrailing) {
-            legendOverlay
-        }
-        .overlay(alignment: isCompact ? .bottomLeading : .topLeading) {
+        // Legend overlays - always at bottom: selector on left, key on right
+        .overlay(alignment: .bottomTrailing) {
             legendKeyOverlay
         }
+        .overlay(alignment: .bottomLeading) {
+            legendOverlay
+        }
         .overlay(alignment: .bottom) {
-            // Route info bar - position above legend on compact
+            // Route info bar - position above legend
             if state?.airports.activeRoute != nil {
                 routeInfoBar
-                    .padding(.bottom, isCompact ? (bottomPadding + 80) : 0) // Space for legend on compact
+                    .padding(.bottom, bottomPadding + 80) // Space for legend
             }
         }
     }
@@ -179,7 +179,7 @@ struct AirportMapView: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
         .padding()
-        .padding(.bottom, isCompact ? bottomPadding : 0) // Space for bottom tab bar on compact
+        .padding(.bottom, bottomPadding) // Space for bottom tab bar
     }
     
     private var bottomPadding: CGFloat {
@@ -216,7 +216,7 @@ struct AirportMapView: View {
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding()
-        .padding(.bottom, isCompact ? bottomPadding : 0) // Space for bottom tab bar on compact
+        .padding(.bottom, bottomPadding) // Space for bottom tab bar
     }
     
     // MARK: - Route Info Bar

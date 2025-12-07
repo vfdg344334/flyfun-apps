@@ -78,6 +78,7 @@ struct ChatView: View {
             )
             .focused($isInputFocused)
         }
+        // Only show navigation title/toolbar when in a NavigationStack (not in overlay)
         .navigationTitle("Assistant")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

@@ -61,6 +61,7 @@ final class NavigationDomain {
     enum LeftOverlayMode: String, Sendable {
         case search
         case chat
+        case filters
     }
     
     enum BottomTab: String, CaseIterable, Identifiable, Sendable {
@@ -158,6 +159,11 @@ final class NavigationDomain {
     
     func showChatInLeftOverlay() {
         leftOverlayMode = .chat
+        showingLeftOverlay = true
+    }
+    
+    func showFiltersInLeftOverlay() {
+        leftOverlayMode = .filters
         showingLeftOverlay = true
     }
     
