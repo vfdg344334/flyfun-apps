@@ -3,6 +3,7 @@
 Unit tests for RAG system (rules_rag.py).
 """
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -64,35 +65,59 @@ def sample_rules_json(tmp_path):
 class TestEmbeddingProvider:
     """Tests for EmbeddingProvider class."""
     
-    def test_local_model_initialization(self):
-        """Test initialization with local model."""
-        provider = EmbeddingProvider("all-MiniLM-L6-v2")
-        assert provider.model_name == "all-MiniLM-L6-v2"
-        assert provider.provider == "local"
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
+    def test_openai_model_initialization(self):
+        """Test initialization with OpenAI model."""
+        with patch('shared.aviation_agent.rules_rag.OpenAIEmbeddings') as mock_embeddings:
+            provider = EmbeddingProvider("text-embedding-3-small")
+            assert provider.model_name == "text-embedding-3-small"
+            assert provider.provider == "openai"
+            mock_embeddings.assert_called_once_with(model="text-embedding-3-small")
     
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
     def test_embed_texts(self):
         """Test embedding generation for multiple texts."""
-        provider = EmbeddingProvider("all-MiniLM-L6-v2")
-        texts = ["Hello world", "Aviation rules"]
-        embeddings = provider.embed(texts)
-        
-        assert len(embeddings) == 2
-        assert all(isinstance(e, list) for e in embeddings)
-        assert all(len(e) == 384 for e in embeddings)  # MiniLM dimension
+        with patch('shared.aviation_agent.rules_rag.OpenAIEmbeddings') as mock_embeddings_class:
+            mock_embeddings = Mock()
+            mock_embeddings.embed_documents.return_value = [[0.1] * 1536, [0.2] * 1536]
+            mock_embeddings_class.return_value = mock_embeddings
+            
+            provider = EmbeddingProvider("text-embedding-3-small")
+            texts = ["Hello world", "Aviation rules"]
+            embeddings = provider.embed(texts)
+            
+            assert len(embeddings) == 2
+            assert all(isinstance(e, list) for e in embeddings)
+            assert all(len(e) == 1536 for e in embeddings)  # OpenAI small dimension
+            mock_embeddings.embed_documents.assert_called_once_with(texts)
     
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
     def test_embed_query(self):
         """Test single query embedding."""
-        provider = EmbeddingProvider("all-MiniLM-L6-v2")
-        embedding = provider.embed_query("Test query")
-        
-        assert isinstance(embedding, list)
-        assert len(embedding) == 384
+        with patch('shared.aviation_agent.rules_rag.OpenAIEmbeddings') as mock_embeddings_class:
+            mock_embeddings = Mock()
+            mock_embeddings.embed_query.return_value = [0.1] * 1536
+            mock_embeddings_class.return_value = mock_embeddings
+            
+            provider = EmbeddingProvider("text-embedding-3-small")
+            embedding = provider.embed_query("Test query")
+            
+            assert isinstance(embedding, list)
+            assert len(embedding) == 1536
+            mock_embeddings.embed_query.assert_called_once_with("Test query")
     
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
     def test_empty_texts(self):
         """Test handling of empty text list."""
-        provider = EmbeddingProvider("all-MiniLM-L6-v2")
-        embeddings = provider.embed([])
-        assert embeddings == []
+        with patch('shared.aviation_agent.rules_rag.OpenAIEmbeddings'):
+            provider = EmbeddingProvider("text-embedding-3-small")
+            embeddings = provider.embed([])
+            assert embeddings == []
+    
+    def test_invalid_model(self):
+        """Test that invalid model names raise ValueError."""
+        with pytest.raises(ValueError, match="Unsupported embedding model"):
+            EmbeddingProvider("all-MiniLM-L6-v2")
 
 
 class TestQueryReformulator:
@@ -142,7 +167,7 @@ class TestBuildVectorDB:
         doc_count = build_vector_db(
             rules_json_path=sample_rules_json,
             vector_db_path=vector_db_path,
-            embedding_model="all-MiniLM-L6-v2",
+            embedding_model="text-embedding-3-small",
             force_rebuild=True
         )
         

@@ -22,49 +22,39 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingProvider:
     """
-    Provides text embeddings using configurable models.
+    Provides text embeddings using OpenAI models.
     
-    Supports both local models (sentence-transformers) and cloud-based models (OpenAI).
-    Defaults to local model for development, can be configured for production.
+    Uses OpenAI embeddings for semantic search. Requires OPENAI_API_KEY to be set.
     """
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "text-embedding-3-small"):
         """
         Initialize embedding provider.
         
         Args:
             model_name: Name of the embedding model. Options:
-                - "all-MiniLM-L6-v2" (local, 384 dims, fast)
-                - "all-mpnet-base-v2" (local, 768 dims, better quality)
-                - "text-embedding-3-small" (OpenAI, 1536 dims, excellent quality)
+                - "text-embedding-3-small" (OpenAI, 1536 dims, fast, excellent quality)
+                - "text-embedding-3-large" (OpenAI, 3072 dims, best quality)
         """
         self.model_name = model_name
         
-        if model_name.startswith("text-embedding-"):
-            # OpenAI embeddings
-            try:
-                from langchain_openai import OpenAIEmbeddings
-                self.model = OpenAIEmbeddings(model=model_name)
-                self.provider = "openai"
-                logger.info(f"Initialized OpenAI embeddings: {model_name}")
-            except ImportError:
-                raise ImportError(
-                    "OpenAI embeddings require langchain-openai. "
-                    "Install with: pip install langchain-openai"
-                )
-        else:
-            # Local sentence-transformers
-            try:
-                from sentence_transformers import SentenceTransformer
-                logger.info(f"Loading local embedding model: {model_name}")
-                self.model = SentenceTransformer(model_name)
-                self.provider = "local"
-                logger.info(f"✓ Loaded local model: {model_name}")
-            except ImportError:
-                raise ImportError(
-                    "Local embeddings require sentence-transformers. "
-                    "Install with: pip install sentence-transformers"
-                )
+        if not model_name.startswith("text-embedding-"):
+            raise ValueError(
+                f"Unsupported embedding model: {model_name}. "
+                "Only OpenAI models (text-embedding-3-small, text-embedding-3-large) are supported."
+            )
+        
+        # OpenAI embeddings
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            self.model = OpenAIEmbeddings(model=model_name)
+            self.provider = "openai"
+            logger.info(f"Initialized OpenAI embeddings: {model_name}")
+        except ImportError:
+            raise ImportError(
+                "OpenAI embeddings require langchain-openai. "
+                "Install with: pip install langchain-openai"
+            )
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         """
@@ -79,15 +69,8 @@ class EmbeddingProvider:
         if not texts:
             return []
         
-        if self.provider == "local":
-            embeddings = self.model.encode(
-                texts,
-                show_progress_bar=False,
-                convert_to_numpy=True
-            )
-            return embeddings.tolist()
-        else:  # openai
-            return self.model.embed_documents(texts)
+        # OpenAI embeddings
+        return self.model.embed_documents(texts)
     
     def embed_query(self, query: str) -> List[float]:
         """
@@ -99,10 +82,8 @@ class EmbeddingProvider:
         Returns:
             Embedding vector
         """
-        if self.provider == "local":
-            return self.embed([query])[0]
-        else:  # openai
-            return self.model.embed_query(query)
+        # OpenAI embeddings
+        return self.model.embed_query(query)
 
 
 class QueryReformulator:
@@ -295,9 +276,9 @@ class RulesRAG:
         self,
         vector_db_path: Optional[Path | str] = None,
         vector_db_url: Optional[str] = None,
-        embedding_model: str = "all-MiniLM-L6-v2",
+        embedding_model: str = "text-embedding-3-small",
         enable_reformulation: bool = True,
-        enable_reranking: bool = True,
+        enable_reranking: bool = False,
         llm: Optional[Any] = None,
         rules_manager: Optional[Any] = None,
     ):
@@ -307,9 +288,9 @@ class RulesRAG:
         Args:
             vector_db_path: Path to ChromaDB storage directory (for local mode)
             vector_db_url: URL to ChromaDB service (for service mode). If provided, takes precedence over vector_db_path.
-            embedding_model: Name of embedding model to use
+            embedding_model: Name of embedding model to use (OpenAI models only)
             enable_reformulation: Whether to reformulate queries for better matching
-            enable_reranking: Whether to use cross-encoder reranking
+            enable_reranking: Whether to use cross-encoder reranking (requires sentence-transformers, disabled by default)
             llm: Optional LLM instance for reformulation
             rules_manager: Optional RulesManager instance for multi-country lookups
         """
@@ -327,9 +308,13 @@ class RulesRAG:
         else:
             self.reformulator = None
         
-        # Initialize reranker (lazy loaded on first use)
+        # Initialize reranker (lazy loaded on first use, requires sentence-transformers)
         self.enable_reranking = enable_reranking
         if enable_reranking:
+            logger.warning(
+                "Reranking requires sentence-transformers. "
+                "Install with: pip install sentence-transformers"
+            )
             self.reranker = Reranker()
         else:
             self.reranker = None
@@ -653,7 +638,7 @@ def build_vector_db(
     rules_json_path: Path | str,
     vector_db_path: Optional[Path | str] = None,
     vector_db_url: Optional[str] = None,
-    embedding_model: str = "all-MiniLM-L6-v2",
+    embedding_model: str = "text-embedding-3-small",
     batch_size: int = 100,
     force_rebuild: bool = False,
 ) -> int:

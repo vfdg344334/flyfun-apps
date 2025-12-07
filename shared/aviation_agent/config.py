@@ -116,8 +116,8 @@ class AviationAgentSettings(BaseSettings):
     
     # RAG settings
     embedding_model: str = Field(
-        default="all-MiniLM-L6-v2",
-        description="Embedding model for RAG (all-MiniLM-L6-v2 or text-embedding-3-small)",
+        default="text-embedding-3-small",
+        description="Embedding model for RAG (OpenAI: text-embedding-3-small or text-embedding-3-large)",
         alias="EMBEDDING_MODEL",
     )
     enable_query_reformulation: bool = Field(

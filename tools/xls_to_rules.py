@@ -356,8 +356,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Path for vector database (local mode). Defaults to cache/rules_vector_db or VECTOR_DB_PATH env var")
     p.add_argument("--vector-db-url", default=None,
                    help="URL for ChromaDB service (service mode, takes precedence over --vector-db-path). Can also use VECTOR_DB_URL env var")
-    p.add_argument("--embedding-model", default="all-MiniLM-L6-v2",
-                   help="Embedding model for RAG (default: all-MiniLM-L6-v2)")
+    p.add_argument("--embedding-model", default="text-embedding-3-small",
+                   help="Embedding model for RAG (default: text-embedding-3-small, OpenAI model)")
     
     args = p.parse_args(argv)
 
@@ -459,7 +459,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 vector_db_path=vector_db_path,
                 vector_db_url=vector_db_url,
                 embedding_model=args.embedding_model,
-                force_rebuild=True
+                force_rebuild=True  # Always rebuild to ensure new embeddings are used
             )
             if vector_db_url:
                 print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
@@ -467,7 +467,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
         except ImportError as e:
             print(f"Warning: Could not build vector database: {e}", file=sys.stderr)
-            print("Install dependencies: pip install chromadb sentence-transformers", file=sys.stderr)
+            print("Install dependencies: pip install chromadb langchain-openai", file=sys.stderr)
         except Exception as e:
             print(f"Warning: Vector database build failed: {e}", file=sys.stderr)
             import traceback

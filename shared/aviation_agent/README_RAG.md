@@ -70,7 +70,7 @@ Main class for RAG-based rules retrieval.
 ```python
 RulesRAG(
     vector_db_path: Path | str,
-    embedding_model: str = "all-MiniLM-L6-v2",
+    embedding_model: str = "text-embedding-3-small",
     enable_reformulation: bool = True,
     llm: Optional[Any] = None
 )
@@ -78,9 +78,9 @@ RulesRAG(
 
 **Parameters:**
 - `vector_db_path`: Path to ChromaDB storage directory
-- `embedding_model`: Embedding model name (default: "all-MiniLM-L6-v2")
-  - Local models: "all-MiniLM-L6-v2", "all-mpnet-base-v2"
-  - OpenAI models: "text-embedding-3-small", "text-embedding-3-large"
+- `embedding_model`: Embedding model name (default: "text-embedding-3-small")
+  - OpenAI models: "text-embedding-3-small" (1536 dims, fast), "text-embedding-3-large" (3072 dims, best quality)
+  - Requires OPENAI_API_KEY to be set
 - `enable_reformulation`: Whether to reformulate queries (default: True)
 - `llm`: Optional LLM instance for reformulation (defaults to gpt-4o-mini)
 
@@ -125,7 +125,7 @@ Build vector database from rules.json.
 build_vector_db(
     rules_json_path: Path | str,
     vector_db_path: Path | str,
-    embedding_model: str = "all-MiniLM-L6-v2",
+    embedding_model: str = "text-embedding-3-small",
     batch_size: int = 100,
     force_rebuild: bool = False
 ) -> int
@@ -148,7 +148,7 @@ build_vector_db(
 
 ```bash
 # Embedding model (optional)
-export EMBEDDING_MODEL="all-MiniLM-L6-v2"  # or text-embedding-3-small
+export EMBEDDING_MODEL="text-embedding-3-small"  # or text-embedding-3-large
 
 # Query reformulation LLM (optional)
 export ROUTER_MODEL="gpt-4o-mini"
@@ -314,7 +314,7 @@ Based on evaluation with 100 test queries:
 **Solutions:**
 1. Enable query reformulation: `enable_reformulation=True`
 2. Lower similarity threshold: `similarity_threshold=0.2`
-3. Try OpenAI embeddings: `embedding_model="text-embedding-3-small"`
+3. Try different OpenAI models: `embedding_model="text-embedding-3-large"` for better quality
 4. Increase top_k: `top_k=10`
 
 ### Issue: No Results Found
@@ -345,7 +345,7 @@ Based on evaluation with 100 test queries:
 1. Check rules.json format is valid
 2. Ensure sufficient disk space (~50MB per 1000 docs)
 3. Try smaller batch_size: `batch_size=50`
-4. Check sentence-transformers installed: `pip install sentence-transformers`
+4. Check langchain-openai installed: `pip install langchain-openai`
 
 ---
 
@@ -380,13 +380,13 @@ python shared/aviation_agent/rules_rag.py
 
 ```
 chromadb>=0.4.22          # Vector database
-sentence-transformers>=2.2.0  # Local embeddings
+langchain-openai>=1.0.0  # OpenAI embeddings
 langchain-openai          # Optional: OpenAI embeddings & reformulation
 ```
 
 Install:
 ```bash
-pip install chromadb sentence-transformers
+pip install chromadb langchain-openai
 pip install langchain-openai  # Optional
 ```
 
