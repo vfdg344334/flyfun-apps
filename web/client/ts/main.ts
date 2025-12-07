@@ -569,15 +569,24 @@ class Application {
 
     const infoContainer = document.getElementById('airport-info');
     const rightPanel = document.getElementById('right-panel');
+    const airportContent = document.getElementById('airport-content');
+    const noSelection = document.getElementById('no-selection');
 
     if (!airport) {
       // Hide right panel
       if (rightPanel) rightPanel.classList.add('hidden');
+      // Hide airport content, show no-selection message
+      if (airportContent) airportContent.style.display = 'none';
+      if (noSelection) noSelection.style.display = 'block';
       return;
     }
 
     // Show right panel
     if (rightPanel) rightPanel.classList.remove('hidden');
+    
+    // Show airport content and hide no-selection message
+    if (airportContent) airportContent.style.display = 'flex';
+    if (noSelection) noSelection.style.display = 'none';
 
     if (!infoContainer) return;
 
