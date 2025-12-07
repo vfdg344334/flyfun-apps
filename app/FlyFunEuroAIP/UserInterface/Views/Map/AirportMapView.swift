@@ -12,7 +12,12 @@ import RZFlight
 /// Main map view showing airports with markers, routes, and highlights
 struct AirportMapView: View {
     @Environment(\.appState) private var state
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selectedAirportID: String?
+    
+    private var isCompact: Bool {
+        sizeClass == .compact
+    }
     
     var body: some View {
         let currentLegendMode = state?.airports.legendMode ?? .airportType
@@ -69,6 +74,8 @@ struct AirportMapView: View {
             #endif
         }
         .onMapCameraChange(frequency: .onEnd) { context in
+            // Update visibleRegion when map camera changes to keep it in sync
+            state?.airports.visibleRegion = context.region
             state?.airports.onRegionChange(context.region)
         }
         .onChange(of: selectedAirportID) { _, newValue in
@@ -90,23 +97,36 @@ struct AirportMapView: View {
                 state?.airports.clearProcedureLines()
             }
         }
-        .overlay(alignment: .topTrailing) {
-            legendOverlay
-        }
-        .overlay(alignment: .topLeading) {
+        // Legend overlays - always at bottom: selector on left, key on right
+        .overlay(alignment: .bottomTrailing) {
             legendKeyOverlay
         }
+        .overlay(alignment: .bottomLeading) {
+            legendOverlay
+        }
         .overlay(alignment: .bottom) {
+            // Route info bar - position above legend
             if state?.airports.activeRoute != nil {
                 routeInfoBar
+                    .padding(.bottom, bottomPadding + 80) // Space for legend
             }
         }
     }
     
     // MARK: - Computed Properties
     
+    /// Get airports to display on map
+    /// Priority: searchResults (if search active) > airports (route/region-based)
     private var airports: [RZFlight.Airport] {
-        state?.airports.airports ?? []
+        guard let state = state else { return [] }
+        
+        // If search is active and has results, show search results
+        if state.airports.isSearchActive && !state.airports.searchResults.isEmpty {
+            return state.airports.searchResults
+        }
+        
+        // Otherwise show the main airports array (route results or region-based)
+        return state.airports.airports
     }
     
     private var highlights: [String: MapHighlight] {
@@ -171,6 +191,16 @@ struct AirportMapView: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
         .padding()
+        .padding(.bottom, bottomPadding) // Space for bottom tab bar
+    }
+    
+    private var bottomPadding: CGFloat {
+        // If bottom tab bar is showing, add space for it (300px content + ~60px tab bar)
+        if state?.navigation.showingBottomTabBar == true {
+            return 360
+        }
+        // Otherwise just safe area padding
+        return 20
     }
     
     private var legendModeBinding: Binding<LegendMode> {
@@ -198,6 +228,7 @@ struct AirportMapView: View {
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding()
+        .padding(.bottom, bottomPadding) // Space for bottom tab bar
     }
     
     // MARK: - Route Info Bar

@@ -19,6 +19,8 @@ final class NavigationDomain {
     // MARK: - Left Overlay Mode
     /// Controls what's shown in the left overlay (search/filter or chat)
     var leftOverlayMode: LeftOverlayMode = .search
+    /// Whether the left overlay panel is visible (for iPad/Mac - slides in from left)
+    var showingLeftOverlay: Bool = false
     
     // MARK: - Bottom Tab State
     /// Selected bottom tab (Airport Info, AIP, Rules)
@@ -28,6 +30,7 @@ final class NavigationDomain {
     
     // MARK: - Sheet State
     var showingChat: Bool = false
+    var showingSearchSheet: Bool = false
     var showingFilters: Bool = false
     var showingSettings: Bool = false
     var showingAirportDetail: Bool = false
@@ -58,6 +61,7 @@ final class NavigationDomain {
     enum LeftOverlayMode: String, Sendable {
         case search
         case chat
+        case filters
     }
     
     enum BottomTab: String, CaseIterable, Identifiable, Sendable {
@@ -102,6 +106,18 @@ final class NavigationDomain {
         showingChat.toggle()
     }
     
+    func showSearchSheet() {
+        showingSearchSheet = true
+    }
+    
+    func hideSearchSheet() {
+        showingSearchSheet = false
+    }
+    
+    func toggleSearchSheet() {
+        showingSearchSheet.toggle()
+    }
+    
     func showFilters() {
         showingFilters = true
     }
@@ -138,10 +154,29 @@ final class NavigationDomain {
     
     func showSearchInLeftOverlay() {
         leftOverlayMode = .search
+        showingLeftOverlay = true
     }
     
     func showChatInLeftOverlay() {
         leftOverlayMode = .chat
+        showingLeftOverlay = true
+    }
+    
+    func showFiltersInLeftOverlay() {
+        leftOverlayMode = .filters
+        showingLeftOverlay = true
+    }
+    
+    func showLeftOverlay() {
+        showingLeftOverlay = true
+    }
+    
+    func hideLeftOverlay() {
+        showingLeftOverlay = false
+    }
+    
+    func toggleLeftOverlayVisibility() {
+        showingLeftOverlay.toggle()
     }
     
     // MARK: - Bottom Tab Actions

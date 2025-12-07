@@ -21,11 +21,44 @@ struct ContentView: View {
                 CompactLayout()
             }
         }
+        // Filter sheet (only for iPhone - compact size class)
         .sheet(isPresented: filterSheetBinding) {
             FilterPanelView()
                 .presentationDetents([.medium, .large])
         }
-        // Chat and detail are now in left overlay and bottom tabs - no sheets needed
+        // Search and Chat sheets (iPhone only - compact size class)
+        .sheet(isPresented: searchSheetBinding) {
+            NavigationStack {
+                SearchView()
+                    .navigationTitle("Search Airports")
+                    .navigationBarTitleDisplayMode(.large)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                state?.navigation.hideSearchSheet()
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .onChange(of: state?.airports.selectedAirport) { _, newValue in
+            // Auto-close search sheet on iPhone when airport is selected
+            if !isRegularWidth && newValue != nil {
+                state?.navigation.hideSearchSheet()
+            }
+        }
+        .sheet(isPresented: chatSheetBinding) {
+            NavigationStack {
+                ChatView()
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .overlay {
             // Error banner
             if let error = state?.system.error {
@@ -56,8 +89,58 @@ struct ContentView: View {
     
     private var filterSheetBinding: Binding<Bool> {
         Binding(
-            get: { state?.navigation.showingFilters ?? false },
-            set: { state?.navigation.showingFilters = $0 }
+            get: { 
+                // Only show filter sheet on compact size class (iPhone)
+                !isRegularWidth && (state?.navigation.showingFilters ?? false)
+            },
+            set: { 
+                if !isRegularWidth {
+                    state?.navigation.showingFilters = $0
+                } else {
+                    // On regular size class, show filters in left overlay instead
+                    if $0 {
+                        state?.navigation.showFiltersInLeftOverlay()
+                    }
+                }
+            }
+        )
+    }
+    
+    // Search sheet binding (only used on compact/iPhone)
+    private var searchSheetBinding: Binding<Bool> {
+        Binding(
+            get: { 
+                // Only show search sheet on compact size class
+                !isRegularWidth && (state?.navigation.showingSearchSheet ?? false)
+            },
+            set: { 
+                if !isRegularWidth {
+                    if $0 {
+                        state?.navigation.showSearchSheet()
+                    } else {
+                        state?.navigation.hideSearchSheet()
+                    }
+                }
+            }
+        )
+    }
+    
+    // Chat sheet binding (only used on compact/iPhone)
+    private var chatSheetBinding: Binding<Bool> {
+        Binding(
+            get: { 
+                // Only show chat sheet on compact size class
+                !isRegularWidth && (state?.navigation.showingChat ?? false)
+            },
+            set: { 
+                if !isRegularWidth {
+                    if $0 {
+                        state?.navigation.showChat()
+                    } else {
+                        state?.navigation.hideChat()
+                    }
+                }
+            }
         )
     }
     
@@ -69,21 +152,50 @@ struct RegularLayout: View {
     @Environment(\.appState) private var state
     
     var body: some View {
-        HStack(spacing: 0) {
-            // Left Overlay (Search/Chat)
-            LeftOverlayContainer()
+        ZStack {
+            // Full screen map
+            AirportMapView()
+                .ignoresSafeArea()
             
-            // Map (fills remaining space)
-            ZStack {
-                AirportMapView()
-                
-                // Bottom Tab Bar (overlay)
-                VStack {
-                    Spacer()
-                    BottomTabBar()
+            // Semi-transparent backdrop when overlay is visible (tap to dismiss)
+            if state?.navigation.showingLeftOverlay == true {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        state?.navigation.hideLeftOverlay()
+                    }
+                    .transition(.opacity)
+            }
+            
+            // Left Overlay (slides in from left when visible)
+            HStack(spacing: 0) {
+                if state?.navigation.showingLeftOverlay == true {
+                    LeftOverlayContainer()
+                        .transition(.move(edge: .leading))
+                        .zIndex(1) // Ensure overlay is above backdrop
                 }
+                Spacer()
+            }
+            
+            // Bottom Tab Bar (overlay)
+            VStack {
+                Spacer()
+                BottomTabBar()
+            }
+            
+            // Floating Action Buttons (top-right corner)
+            VStack {
+                HStack {
+                    Spacer()
+                    RegularFloatingActionButtons()
+                        .padding(.trailing, 16)
+                        .padding(.top, 8)
+                }
+                .padding(.top, 8) // Safe area padding
+                Spacer()
             }
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state?.navigation.showingLeftOverlay)
     }
 }
 
@@ -98,25 +210,156 @@ struct CompactLayout: View {
             AirportMapView()
                 .ignoresSafeArea()
             
-            // Left overlay (can be hidden/shown)
-            HStack {
-                if state?.navigation.leftOverlayMode == .search || state?.navigation.leftOverlayMode == .chat {
-                    LeftOverlayContainer()
-                        .transition(.move(edge: .leading))
-                }
-                
-                Spacer()
-            }
-            
             // Bottom Tab Bar (overlay)
             VStack {
                 Spacer()
                 BottomTabBar()
             }
             
-            // Floating toggle button (when overlay is hidden)
-            // For now, overlay is always visible - can add hide/show later
+            // Floating Action Buttons (top-right corner)
+            VStack {
+                HStack {
+                    Spacer()
+                    FloatingActionButtons()
+                        .padding(.trailing, 16)
+                        .padding(.top, 8)
+                }
+                .padding(.top, 8) // Safe area padding
+                Spacer()
+            }
         }
+    }
+}
+
+// MARK: - Floating Action Buttons (iPhone)
+
+struct FloatingActionButtons: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Search button - toggles visibility
+            FloatingActionButton(
+                icon: "magnifyingglass",
+                label: "Search",
+                color: (state?.navigation.showingSearchSheet ?? false) ? .blue.opacity(0.7) : .blue
+            ) {
+                state?.navigation.toggleSearchSheet()
+            }
+            
+            // Chat button - toggles visibility
+            FloatingActionButton(
+                icon: "bubble.left.and.bubble.right",
+                label: "Chat",
+                color: (state?.navigation.showingChat ?? false) ? .green.opacity(0.7) : .green
+            ) {
+                state?.navigation.toggleChat()
+            }
+            
+            // Filters button - toggles visibility
+            FloatingActionButton(
+                icon: state?.airports.filters.hasActiveFilters == true 
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle",
+                label: "Filters",
+                color: (state?.navigation.showingFilters ?? false)
+                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
+                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
+            ) {
+                state?.navigation.toggleFilters()
+            }
+        }
+        .padding(.top, 8)
+    }
+}
+
+// MARK: - Floating Action Buttons (iPad/Mac)
+
+struct RegularFloatingActionButtons: View {
+    @Environment(\.appState) private var state
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Search button - toggles visibility
+            FloatingActionButton(
+                icon: "magnifyingglass",
+                label: "Search",
+                color: isSearchVisible ? .blue.opacity(0.7) : .blue
+            ) {
+                if isSearchVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showSearchInLeftOverlay()
+                }
+            }
+            
+            // Chat button - toggles visibility
+            FloatingActionButton(
+                icon: "bubble.left.and.bubble.right",
+                label: "Chat",
+                color: isChatVisible ? .green.opacity(0.7) : .green
+            ) {
+                if isChatVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showChatInLeftOverlay()
+                }
+            }
+            
+            // Filters button - toggles visibility
+            FloatingActionButton(
+                icon: state?.airports.filters.hasActiveFilters == true 
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle",
+                label: "Filters",
+                color: isFiltersVisible 
+                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
+                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
+            ) {
+                if isFiltersVisible {
+                    state?.navigation.hideLeftOverlay()
+                } else {
+                    state?.navigation.showFiltersInLeftOverlay()
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+    
+    private var isSearchVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .search
+    }
+    
+    private var isChatVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .chat
+    }
+    
+    private var isFiltersVisible: Bool {
+        state?.navigation.showingLeftOverlay == true && 
+        state?.navigation.leftOverlayMode == .filters
+    }
+}
+
+// MARK: - Floating Action Button
+
+struct FloatingActionButton: View {
+    let icon: String
+    let label: String
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 50, height: 50)
+                .background(color, in: Circle())
+                .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
     }
 }
 
