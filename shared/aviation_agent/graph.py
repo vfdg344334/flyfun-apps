@@ -71,6 +71,7 @@ def build_agent_graph(
                 vector_db_url=settings.vector_db_url,
                 embedding_model=settings.embedding_model,
                 enable_reformulation=settings.enable_query_reformulation,
+                enable_reranking=True,  # Enable cross-encoder reranking for testing
                 llm=router_llm,
                 rules_manager=rules_manager
             )

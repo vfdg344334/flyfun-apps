@@ -171,47 +171,46 @@ Formal question:"""
 
 class Reranker:
     """
-    Cross-encoder reranker for improved retrieval precision.
+    Cohere-based reranker for improved retrieval precision.
     
-    Uses a cross-encoder model to rerank results after initial retrieval,
-    providing better accuracy on top results.
+    Uses Cohere's rerank API to rerank results after initial retrieval,
+    providing better accuracy than local cross-encoders.
+    
+    Uses direct HTTP API calls to avoid SDK dependency issues.
     """
     
-    # Default model - good balance of speed and quality
-    DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # Default model - Cohere's latest rerank model
+    DEFAULT_MODEL = "rerank-v3.5"
+    COHERE_API_URL = "https://api.cohere.com/v2/rerank"
     
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, api_key: str = None):
         """
-        Initialize reranker.
+        Initialize Cohere reranker.
         
         Args:
-            model_name: Cross-encoder model name. Options:
-                - "cross-encoder/ms-marco-MiniLM-L-6-v2" (fast, good quality)
-                - "cross-encoder/ms-marco-TinyBERT-L-2-v2" (fastest, lower quality)
-                - "cross-encoder/stsb-roberta-base" (slower, better for semantic similarity)
+            model_name: Cohere rerank model name. Options:
+                - "rerank-v3.5" (latest, best quality)
+                - "rerank-english-v3.0" (English only)
+                - "rerank-multilingual-v3.0" (multilingual)
+            api_key: Cohere API key. If not provided, uses COHERE_API_KEY env var.
         """
         self.model_name = model_name or self.DEFAULT_MODEL
-        self._model = None  # Lazy load
+        self._api_key = api_key or os.environ.get("COHERE_API_KEY")
+        self._initialized = False
         
-    @property
-    def model(self):
-        """Lazy load the cross-encoder model."""
-        if self._model is None:
-            try:
-                from sentence_transformers import CrossEncoder
-                logger.info(f"Loading cross-encoder model: {self.model_name}")
-                self._model = CrossEncoder(self.model_name)
-                logger.info(f"✓ Loaded cross-encoder: {self.model_name}")
-            except ImportError:
-                logger.warning(
-                    "Cross-encoder requires sentence-transformers. "
-                    "Reranking disabled."
-                )
-                return None
-            except Exception as e:
-                logger.warning(f"Failed to load cross-encoder: {e}")
-                return None
-        return self._model
+    def _ensure_initialized(self) -> bool:
+        """Check if reranker is properly configured."""
+        if self._initialized:
+            return True
+        if not self._api_key:
+            logger.warning(
+                "Cohere API key not set. Set COHERE_API_KEY environment variable. "
+                "Reranking disabled."
+            )
+            return False
+        logger.info(f"✓ Cohere reranker ready: {self.model_name}")
+        self._initialized = True
+        return True
     
     def rerank(
         self, 
@@ -221,7 +220,7 @@ class Reranker:
         top_k: int = None
     ) -> List[Dict[str, Any]]:
         """
-        Rerank documents using cross-encoder.
+        Rerank documents using Cohere rerank API.
         
         Args:
             query: The search query
@@ -235,32 +234,48 @@ class Reranker:
         if not documents:
             return documents
             
-        if self.model is None:
-            logger.debug("Reranker not available, returning original order")
+        if not self._ensure_initialized():
+            logger.debug("Cohere reranker not available, returning original order")
             return documents
         
-        # Prepare query-document pairs
-        pairs = [(query, doc.get(text_key, "")) for doc in documents]
+        # Extract texts from documents
+        texts = [doc.get(text_key, "") for doc in documents]
         
         try:
-            # Get reranking scores
-            scores = self.model.predict(pairs)
+            import httpx
             
-            # Add scores to documents and sort
-            for doc, score in zip(documents, scores):
-                doc["rerank_score"] = float(score)
+            # Call Cohere rerank API directly
+            response = httpx.post(
+                self.COHERE_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model_name,
+                    "query": query,
+                    "documents": texts,
+                    "top_n": top_k or len(documents)
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            data = response.json()
             
-            # Sort by rerank score (descending)
-            reranked = sorted(documents, key=lambda x: x.get("rerank_score", 0), reverse=True)
+            # Build reranked list based on response
+            reranked = []
+            for result in data.get("results", []):
+                idx = result.get("index", 0)
+                doc = documents[idx].copy()
+                doc["rerank_score"] = float(result.get("relevance_score", 0))
+                reranked.append(doc)
             
-            logger.debug(f"Reranked {len(documents)} documents")
+            logger.info(f"Cohere reranked {len(documents)} documents")
             
-            if top_k:
-                return reranked[:top_k]
             return reranked
             
         except Exception as e:
-            logger.warning(f"Reranking failed: {e}")
+            logger.warning(f"Cohere reranking failed: {e}")
             return documents
 
 
@@ -308,13 +323,9 @@ class RulesRAG:
         else:
             self.reformulator = None
         
-        # Initialize reranker (lazy loaded on first use, requires sentence-transformers)
+        # Initialize reranker (lazy loaded on first use, uses Cohere API)
         self.enable_reranking = enable_reranking
         if enable_reranking:
-            logger.warning(
-                "Reranking requires sentence-transformers. "
-                "Install with: pip install sentence-transformers"
-            )
             self.reranker = Reranker()
         else:
             self.reranker = None
@@ -501,7 +512,7 @@ class RulesRAG:
                     text_key="question_text",
                     top_k=top_k
                 )
-                logger.debug(f"Reranked {len(candidates)} candidates to {len(question_matches)} results")
+                logger.info(f"Reranked {len(candidates)} candidates to {len(question_matches)} results")
         else:
             question_matches = question_matches[:top_k]
         
