@@ -762,25 +762,28 @@ class Application {
 
     let html = '';
     Object.entries(entriesBySection).forEach(([section, entries]) => {
-      const sectionId = `aip - section - ${section.toLowerCase().replace(/[^a-z0-9]+/g, '-')} `;
+      const sectionId = `aip-section-${section.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
       html += `
-        < div class="aip-section" data - section="${this.escapeAttribute(section)}" >
-          <div class="aip-section-header" onclick = "window.toggleAIPSection('${sectionId}')" >
+        <div class="aip-section" data-section="${this.escapeAttribute(section)}">
+          <div class="aip-section-header" onclick="window.toggleAIPSection('${sectionId}')">
             <span>
-            <i class="fas fa-chevron-right aip-section-toggle" id = "toggle-${sectionId}" > </i>
+            <i class="fas fa-chevron-right aip-section-toggle" id="toggle-${sectionId}"></i>
               ${this.escapeHtml(section)} (${entries.length})
       </span>
         </div>
-        < div class="aip-section-content" id = "${sectionId}" >
+        <div class="aip-section-content" id="${sectionId}">
           `;
 
       entries.forEach((entry: any) => {
         const fieldName = entry.std_field || entry.field;
-        const entryId = `aip - entry - ${entry.std_field_id || entry.field || Math.random()} `;
+        const entryId = `aip-entry-${entry.std_field_id || entry.field || Math.random()}`;
+        // Render HTML content if present, otherwise escape plain text
+        const valueHtml = this.renderHtmlContent(entry.value || 'N/A');
+        const altValueHtml = entry.alt_value ? `<br><em>${this.renderHtmlContent(entry.alt_value)}</em>` : '';
         html += `
-        < div class="aip-entry" id = "${entryId}" data - field="${this.escapeAttribute(fieldName || '')}" data - value="${this.escapeAttribute(entry.value || '')}" >
-          <strong>${this.escapeHtml(fieldName || 'Unknown')}: </strong> ${this.escapeHtml(entry.value || 'N/A')}
-            ${entry.alt_value ? `<br><em>${this.escapeHtml(entry.alt_value)}</em>` : ''}
+        <div class="aip-entry" id="${entryId}" data-field="${this.escapeAttribute(fieldName || '')}" data-value="${this.escapeAttribute(entry.value || '')}">
+          <strong>${this.escapeHtml(fieldName || 'Unknown')}: </strong> ${valueHtml}
+            ${altValueHtml}
       </div>
         `;
       });
@@ -831,25 +834,26 @@ class Application {
 
     rulesData.categories.forEach((category: any) => {
       const sectionId = this.buildRuleSectionId(code, category.name);
-      const toggleId = `rules - toggle - ${sectionId} `;
+      const toggleId = `rules-toggle-${sectionId}`;
 
       html += `
-        < div class="rules-section" data - category="${this.escapeAttribute(category.name || 'General')}" >
-          <div class="rules-section-header" onclick = "window.toggleRuleSection('${sectionId}')" >
+        <div class="rules-section" data-category="${this.escapeAttribute(category.name || 'General')}">
+          <div class="rules-section-header" onclick="window.toggleRuleSection('${sectionId}')">
             <span>
-            <i class="fas fa-chevron-right rules-section-toggle" id = "${toggleId}" > </i>
+            <i class="fas fa-chevron-right rules-section-toggle" id="${toggleId}"></i>
               ${this.escapeHtml(category.name || 'General')} (${category.count || 0})
       </span>
         </div>
-        < div class="rules-section-content" id = "${sectionId}" >
+        <div class="rules-section-content" id="${sectionId}">
           `;
 
       if (category.rules && Array.isArray(category.rules)) {
         category.rules.forEach((rule: any) => {
           const question = this.escapeHtml(rule.question_text || 'Untitled rule');
-          const answerText = this.escapeHtml(this.stripHtml(rule.answer_html) || 'No answer available.');
+          // Render HTML content instead of stripping and escaping
+          const answerText = this.renderHtmlContent(rule.answer_html || 'No answer available.');
           const tagsHtml = (rule.tags || [])
-            .map((tag: any) => `< span class="badge bg-secondary" > ${this.escapeHtml(String(tag))} </span>`)
+            .map((tag: any) => `<span class="badge bg-secondary">${this.escapeHtml(String(tag))}</span>`)
             .join(' ');
           const linksHtml = (rule.links || [])
             .map((link: any) => {
@@ -923,6 +927,19 @@ class Application {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = String(html);
     return tempDiv.textContent || tempDiv.innerText || '';
+  }
+
+  /**
+   * Render HTML content safely. If content contains HTML tags, render them.
+   * Otherwise, escape the content for safety.
+   */
+  private renderHtmlContent(content: any): string {
+    if (!content) {
+      return '';
+    }
+    const contentStr = String(content);
+    // Simple check: if it looks like HTML (contains tags), render it; otherwise escape
+    return /<[^>]+>/.test(contentStr) ? contentStr : this.escapeHtml(contentStr);
   }
 
   private getProcedureBadgeClass(procedureType?: string, approachType?: string): string {
