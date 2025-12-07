@@ -16,6 +16,25 @@
     <link rel="stylesheet" href="css/chatbot.css?v=6.7">
 
     <style>
+        /* ===== FULL HEIGHT SETUP ===== */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .container-fluid {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .container-fluid > .row:first-child {
+            flex-shrink: 0;
+        }
+
         /* ===== MODE TOGGLE BAR ===== */
         .mode-toggle-bar {
             background: #f8f9fa;
@@ -74,13 +93,81 @@
         .main-content-row {
             display: flex;
             gap: 15px;
-            min-height: 630px;
             width: 100%;
             padding: 0 15px;
-            margin: 0 auto;
+            margin: 0;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
         }
 
-        .left-panel-col,
+        .left-panel-col {
+            display: flex;
+            flex-direction: column;
+            transition: none; /* Disable transition for smooth resizing */
+            overflow: hidden;
+            flex-shrink: 0;
+            flex: 0 0 33.33%;
+            max-width: 50%;
+            min-width: 250px;
+            position: relative;
+            height: 100%;
+        }
+
+        .resize-handle {
+            position: absolute;
+            right: -7.5px;
+            top: 0;
+            bottom: 0;
+            width: 15px;
+            cursor: col-resize;
+            z-index: 1000;
+            background: transparent;
+            user-select: none;
+            touch-action: none;
+        }
+
+        .resize-handle:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .resize-handle::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 3px;
+            height: 40px;
+            background: #667eea;
+            border-radius: 2px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .resize-handle:hover::before,
+        .resize-handle.resizing::before {
+            opacity: 1;
+        }
+
+        .right-content-col {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            flex: 1 1 auto;
+            min-width: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .map-data-row {
+            display: flex;
+            gap: 15px;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+        }
+
         .map-column-col,
         .right-panel-col {
             display: flex;
@@ -96,25 +183,29 @@
             overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             position: relative;
+            flex: 1 1 50%;
+            max-width: 50%;
+            min-width: 250px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .right-panel-col {
+            flex: 1 1 50%;
+            max-width: 50%;
+            min-width: 250px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
         }
 
         #map {
             flex: 1;
-            min-height: 630px;
             height: 100%;
             width: 100%;
             max-width: 100%;
-        }
-
-        /* All Modes - Equal width columns with fixed height */
-        .main-content-row .left-panel-col,
-        .main-content-row .map-column-col,
-        .main-content-row .right-panel-col {
-            flex: 1 1 33.33%;
-            max-width: 33.33%;
-            min-width: 250px;
-            height: 630px;
-            max-height: 630px;
+            min-height: 0;
         }
 
         /* Chatbot Expanded Mode - Fixed for all zoom levels */
@@ -126,12 +217,25 @@
             width: calc(50% - 7.5px) !important;
             box-sizing: border-box !important;
         }
+        
+        /* Disable resize handle when expanded */
+        .main-content-row.chatbot-mode.expanded .resize-handle {
+            display: none;
+        }
 
-        .main-content-row.chatbot-mode.expanded .map-column-col {
+        .main-content-row.chatbot-mode.expanded .right-content-col {
             flex: 0 0 calc(50% - 7.5px) !important;
             max-width: calc(50% - 7.5px) !important;
             min-width: calc(50% - 7.5px) !important;
             width: calc(50% - 7.5px) !important;
+            box-sizing: border-box !important;
+        }
+
+        .main-content-row.chatbot-mode.expanded .map-column-col {
+            flex: 0 0 100% !important;
+            max-width: 100% !important;
+            min-width: 100% !important;
+            width: 100% !important;
             box-sizing: border-box !important;
         }
 
@@ -308,9 +412,12 @@
         }
 
         .filters-section-full {
-            margin-top: 25px;
-            padding: 0 15px 30px;
+            margin-top: 0;
+            padding: 0;
             width: 100%;
+            flex: 0 0 auto;
+            max-height: 40vh;
+            overflow-y: auto;
         }
 
         .filters-panel-full {
@@ -681,8 +788,7 @@
             border-radius: 8px;
             padding: 20px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            height: 750px; /* Fixed height */
-            max-height: 750px;
+            height: 100%;
             overflow: hidden; /* Parent doesn't scroll */
         }
 
@@ -760,21 +866,12 @@
         }
 
         /* Map expands when right panel is collapsed - Fixed for all zoom levels */
-        /* Total to subtract: 30px (gaps) + 40px (collapsed panel) = 70px */
+        /* Total to subtract: 15px (gap in map-data-row) + 40px (collapsed panel) = 55px */
         .map-column-col.map-expanded {
-            flex: 0 0 calc(66.67% - 46.67px) !important;
-            max-width: calc(66.67% - 46.67px) !important;
-            min-width: calc(66.67% - 46.67px) !important;
-            width: calc(66.67% - 46.67px) !important;
-            box-sizing: border-box !important;
-        }
-
-        /* Left panel when map is expanded */
-        .left-panel-col.with-expanded-map {
-            flex: 0 0 calc(33.33% - 23.33px) !important;
-            max-width: calc(33.33% - 23.33px) !important;
-            min-width: calc(33.33% - 23.33px) !important;
-            width: calc(33.33% - 23.33px) !important;
+            flex: 0 0 calc(100% - 55px) !important;
+            max-width: calc(100% - 55px) !important;
+            min-width: calc(100% - 55px) !important;
+            width: calc(100% - 55px) !important;
             box-sizing: border-box !important;
         }
 
@@ -824,29 +921,21 @@
 
         /* ===== RESPONSIVE DESIGN: IPAD ===== */
         @media (max-width: 1024px) and (min-width: 768px) {
-            /* iPad: Reduce heights to fit in viewport */
-            .main-content-row {
-                min-height: 500px !important;
+            /* iPad: Use flex layout */
+            .main-content-row .left-panel-col {
+                flex: 0 0 33.33% !important;
+                max-width: 33.33% !important;
             }
 
-            .main-content-row .left-panel-col,
-            .main-content-row .map-column-col,
-            .main-content-row .right-panel-col {
-                flex: 1 1 33.33%;
-                max-width: 33.33%;
+            .right-content-col {
+                flex: 1 1 66.67% !important;
+            }
+
+            .map-column-col,
+            .right-panel-col {
+                flex: 1 1 50% !important;
+                max-width: 50% !important;
                 min-width: 0;
-                height: 500px !important;
-                max-height: 500px !important;
-            }
-
-            #map {
-                min-height: 500px !important;
-                height: 500px !important;
-            }
-
-            .right-panel {
-                height: 500px !important;
-                max-height: 500px !important;
             }
 
             /* Compact header and spacing on iPad */
@@ -872,6 +961,14 @@
                 gap: 10px !important;
             }
 
+            .right-content-col {
+                gap: 10px !important;
+            }
+
+            .map-data-row {
+                gap: 10px !important;
+            }
+
             /* Chatbot expanded mode MUST come last to override */
             /* Account for gap: Use calc(50% - 5px) for 10px gap on iPad */
             .main-content-row.chatbot-mode.expanded .left-panel-col {
@@ -882,11 +979,19 @@
                 box-sizing: border-box !important;
             }
 
-            .main-content-row.chatbot-mode.expanded .map-column-col {
+            .main-content-row.chatbot-mode.expanded .right-content-col {
                 flex: 0 0 calc(50% - 5px) !important;
                 max-width: calc(50% - 5px) !important;
                 min-width: calc(50% - 5px) !important;
                 width: calc(50% - 5px) !important;
+                box-sizing: border-box !important;
+            }
+
+            .main-content-row.chatbot-mode.expanded .map-column-col {
+                flex: 0 0 100% !important;
+                max-width: 100% !important;
+                min-width: 100% !important;
+                width: 100% !important;
                 box-sizing: border-box !important;
             }
 
@@ -906,18 +1011,10 @@
 
             /* iPad has 10px gap, so total: 20px (gaps) + 40px (collapsed) = 60px */
             .map-column-col.map-expanded {
-                flex: 0 0 calc(66.67% - 40px) !important;
-                max-width: calc(66.67% - 40px) !important;
-                min-width: calc(66.67% - 40px) !important;
-                width: calc(66.67% - 40px) !important;
-                box-sizing: border-box !important;
-            }
-
-            .left-panel-col.with-expanded-map {
-                flex: 0 0 calc(33.33% - 20px) !important;
-                max-width: calc(33.33% - 20px) !important;
-                min-width: calc(33.33% - 20px) !important;
-                width: calc(33.33% - 20px) !important;
+                flex: 0 0 calc(100% - 50px) !important;
+                max-width: calc(100% - 50px) !important;
+                min-width: calc(100% - 50px) !important;
+                width: calc(100% - 50px) !important;
                 box-sizing: border-box !important;
             }
         }
@@ -931,38 +1028,48 @@
             }
 
             .left-panel-col,
+            .right-content-col {
+                flex: 1 1 auto !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+
+            .resize-handle {
+                display: none;
+            }
+
+            .map-data-row {
+                flex-direction: column;
+                gap: 15px;
+            }
+
             .map-column-col,
             .right-panel-col {
                 flex: 1 1 auto !important;
                 width: 100% !important;
+                max-width: 100% !important;
+                height: auto !important;
+                max-height: none !important;
             }
 
             .main-content-row .left-panel-col {
                 order: 1;
             }
 
-            .main-content-row .map-column-col {
+            .right-content-col {
                 order: 2;
             }
 
-            .main-content-row .right-panel-col {
-                order: 3;
+            .map-data-row .map-column-col {
+                order: 1;
+            }
+
+            .map-data-row .right-panel-col {
+                order: 2;
             }
 
             #map {
-                height: 400px;
-            }
-
-            .panel-content {
-                max-height: 500px;
-            }
-
-            .chat-messages-new {
-                max-height: 300px;
-            }
-
-            .filters-content {
-                max-height: 400px;
+                min-height: 300px;
             }
 
             .mode-toggle-bar {
@@ -1051,23 +1158,26 @@
         /* ===== LANDSCAPE MODE: IPHONE ===== */
         @media (max-width: 896px) and (orientation: landscape) {
             #map {
-                height: 300px;
+                min-height: 200px;
             }
-
-            .panel-content {
-                max-height: 300px;
-            }
-
         }
 
         /* ===== IPAD PRO 12.9" ===== */
         @media (min-width: 1024px) and (max-width: 1366px) {
             /* Keep equal widths to match stats cards */
-            .main-content-row .left-panel-col,
-            .main-content-row .map-column-col,
-            .main-content-row .right-panel-col {
-                flex: 1 1 33.33% !important;
+            .main-content-row .left-panel-col {
+                flex: 0 0 33.33% !important;
                 max-width: 33.33% !important;
+            }
+
+            .right-content-col {
+                flex: 1 1 66.67% !important;
+            }
+
+            .map-column-col,
+            .right-panel-col {
+                flex: 1 1 50% !important;
+                max-width: 50% !important;
             }
         }
     </style>
@@ -1099,8 +1209,9 @@
 
         <!-- Main Content -->
         <div class="main-content-row chatbot-mode">
-            <!-- Left Panel: Chatbot / Filters -->
-            <div class="left-panel-col">
+            <!-- Left Panel: Chatbot (Full Height) -->
+            <div class="left-panel-col" id="left-panel-col">
+                <div class="resize-handle" id="resize-handle"></div>
                 <div id="left-panel" class="left-panel">
                     <!-- Chatbot Panel -->
                     <div id="chatbot-panel-new" class="panel-content">
@@ -1145,168 +1256,172 @@
                 </div>
             </div>
 
-            <!-- Map (Center) -->
-            <div class="map-column-col">
-                <div id="map"></div>
+            <!-- Right Content: Map, Data, and Filters -->
+            <div class="right-content-col">
+                <!-- Map and Data Row -->
+                <div class="map-data-row">
+                    <!-- Map (Center) -->
+                    <div class="map-column-col">
+                        <div id="map"></div>
 
-                <!-- Loading Indicator -->
-                <div class="loading" id="loading">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="mt-2">Loading airports...</p>
-                </div>
-            </div>
-
-            <!-- Right Panel: Airport Details + AIP + Legend -->
-            <div class="right-panel-col">
-                <div id="right-panel" class="right-panel">
-                    <button class="collapse-btn" id="right-panel-collapse" title="Collapse panel">
-                        <i class="fas fa-chevron-right"></i>
-                    </button>
-
-                    <!-- No Selection Message -->
-                    <div id="no-selection">
-                        <div class="text-center text-muted">
-                            <i class="fas fa-map-marker-alt fa-3x mb-3"></i>
-                            <p>Click on an airport marker to view details</p>
+                        <!-- Loading Indicator -->
+                        <div class="loading" id="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading airports...</p>
                         </div>
                     </div>
 
-                    <!-- Tabbed Content (shown when airport selected) -->
-                    <div id="airport-content" style="display: none;">
-                        <!-- Tab Navigation -->
-                        <ul class="nav nav-tabs" id="airport-tabs" role="tablist">
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link active" id="details-tab" data-bs-toggle="tab" data-bs-target="#details-panel" type="button" role="tab">
-                                    <i class="fas fa-info-circle"></i> Details
-                                </button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="aip-tab" data-bs-toggle="tab" data-bs-target="#aip-panel" type="button" role="tab">
-                                    <i class="fas fa-file-alt"></i> AIP Data
-                                </button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules-panel" type="button" role="tab">
-                                    <i class="fas fa-scale-balanced"></i> Rules
-                                </button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="relevance-tab" data-bs-toggle="tab" data-bs-target="#relevance-panel" type="button" role="tab">
-                                    <i class="fas fa-star"></i> Relevance
-                                </button>
-                            </li>
-                        </ul>
+                    <!-- Right Panel: Airport Details + AIP + Legend -->
+                    <div class="right-panel-col">
+                        <div id="right-panel" class="right-panel">
+                            <button class="collapse-btn" id="right-panel-collapse" title="Collapse panel">
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
 
-                        <!-- Tab Content -->
-                        <div class="tab-content" id="airport-tabs-content">
-                            <!-- Airport Details Tab -->
-                            <div class="tab-pane fade show active" id="details-panel" role="tabpanel">
-                                <div class="tab-pane-content">
-                                    <div id="airport-details">
-                                        <div class="airport-info" id="airport-info">
-                                            <!-- Airport details will be populated here -->
-                                        </div>
-                                    </div>
+                            <!-- No Selection Message -->
+                            <div id="no-selection">
+                                <div class="text-center text-muted">
+                                    <i class="fas fa-map-marker-alt fa-3x mb-3"></i>
+                                    <p>Click on an airport marker to view details</p>
                                 </div>
                             </div>
 
-                            <!-- AIP Data Tab -->
-                            <div class="tab-pane fade" id="aip-panel" role="tabpanel">
-                                <div class="tab-pane-content">
-                                    <div id="aip-data">
-                                        <!-- AIP Filter -->
-                                        <div class="aip-filter mb-3">
-                                            <div class="input-group input-group-sm">
-                                                <input type="text" class="form-control" id="aip-filter-input"
-                                                       placeholder="Filter AIP entries...">
-                                                <button class="btn btn-outline-secondary" type="button" id="aip-filter-clear">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                            </div>
-                                        </div>
+                            <!-- Tabbed Content (shown when airport selected) -->
+                            <div id="airport-content" style="display: none;">
+                                <!-- Tab Navigation -->
+                                <ul class="nav nav-tabs" id="airport-tabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="details-tab" data-bs-toggle="tab" data-bs-target="#details-panel" type="button" role="tab">
+                                            <i class="fas fa-info-circle"></i> Details
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="aip-tab" data-bs-toggle="tab" data-bs-target="#aip-panel" type="button" role="tab">
+                                            <i class="fas fa-file-alt"></i> AIP Data
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules-panel" type="button" role="tab">
+                                            <i class="fas fa-scale-balanced"></i> Rules
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="relevance-tab" data-bs-toggle="tab" data-bs-target="#relevance-panel" type="button" role="tab">
+                                            <i class="fas fa-star"></i> Relevance
+                                        </button>
+                                    </li>
+                                </ul>
 
-                                        <div class="aip-data-content" id="aip-data-content">
-                                            <!-- AIP data will be populated here -->
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Rules Tab -->
-                            <div class="tab-pane fade" id="rules-panel" role="tabpanel">
-                                <div class="tab-pane-content">
-                                    <div id="rules-summary" class="mb-3 text-muted small"></div>
-                                    <div class="rules-filter mb-3">
-                                        <div class="input-group input-group-sm">
-                                            <input type="text" class="form-control" id="rules-filter-input"
-                                                   placeholder="Filter rules by question, answer, tag, or category...">
-                                            <button class="btn btn-outline-secondary" type="button" id="rules-filter-clear">
-                                                <i class="fas fa-times"></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div id="rules-content">
-                                        <div class="text-center text-muted py-4">
-                                            <i class="fas fa-info-circle"></i> Select an airport to load country rules
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- GA Relevance Tab -->
-                            <div class="tab-pane fade" id="relevance-panel" role="tabpanel">
-                                <div class="tab-pane-content">
-                                    <div id="relevance-content">
-                                        <div class="text-center text-muted py-4" id="relevance-loading">
-                                            <i class="fas fa-spinner fa-spin"></i> Loading GA data...
-                                        </div>
-                                        <div id="relevance-data" style="display: none;">
-                                            <!-- GA relevance data will be populated here -->
-                                        </div>
-                                        <div id="relevance-no-data" style="display: none;">
-                                            <div class="text-center text-muted py-4">
-                                                <i class="fas fa-info-circle"></i> No GA friendliness data available for this airport
+                                <!-- Tab Content -->
+                                <div class="tab-content" id="airport-tabs-content">
+                                    <!-- Airport Details Tab -->
+                                    <div class="tab-pane fade show active" id="details-panel" role="tabpanel">
+                                        <div class="tab-pane-content">
+                                            <div id="airport-details">
+                                                <div class="airport-info" id="airport-info">
+                                                    <!-- Airport details will be populated here -->
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
+
+                                    <!-- AIP Data Tab -->
+                                    <div class="tab-pane fade" id="aip-panel" role="tabpanel">
+                                        <div class="tab-pane-content">
+                                            <div id="aip-data">
+                                                <!-- AIP Filter -->
+                                                <div class="aip-filter mb-3">
+                                                    <div class="input-group input-group-sm">
+                                                        <input type="text" class="form-control" id="aip-filter-input"
+                                                               placeholder="Filter AIP entries...">
+                                                        <button class="btn btn-outline-secondary" type="button" id="aip-filter-clear">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <div class="aip-data-content" id="aip-data-content">
+                                                    <!-- AIP data will be populated here -->
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Rules Tab -->
+                                    <div class="tab-pane fade" id="rules-panel" role="tabpanel">
+                                        <div class="tab-pane-content">
+                                            <div id="rules-summary" class="mb-3 text-muted small"></div>
+                                            <div class="rules-filter mb-3">
+                                                <div class="input-group input-group-sm">
+                                                    <input type="text" class="form-control" id="rules-filter-input"
+                                                           placeholder="Filter rules by question, answer, tag, or category...">
+                                                    <button class="btn btn-outline-secondary" type="button" id="rules-filter-clear">
+                                                        <i class="fas fa-times"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div id="rules-content">
+                                                <div class="text-center text-muted py-4">
+                                                    <i class="fas fa-info-circle"></i> Select an airport to load country rules
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- GA Relevance Tab -->
+                                    <div class="tab-pane fade" id="relevance-panel" role="tabpanel">
+                                        <div class="tab-pane-content">
+                                            <div id="relevance-content">
+                                                <div class="text-center text-muted py-4" id="relevance-loading">
+                                                    <i class="fas fa-spinner fa-spin"></i> Loading GA data...
+                                                </div>
+                                                <div id="relevance-data" style="display: none;">
+                                                    <!-- GA relevance data will be populated here -->
+                                                </div>
+                                                <div id="relevance-no-data" style="display: none;">
+                                                    <div class="text-center text-muted py-4">
+                                                        <i class="fas fa-info-circle"></i> No GA friendliness data available for this airport
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Legend (Always Visible) -->
+                            <div class="legend-panel">
+                                <div class="legend-horizontal" id="legend">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h6 class="mb-0"><i class="fas fa-info-circle"></i> Legend</h6>
+                                        <select class="form-select form-select-sm" id="legend-mode-filter" style="width: auto;">
+                                            <option value="airport-type" selected>Airport Type</option>
+                                            <option value="procedure-precision">Procedure Precision</option>
+                                            <option value="runway-length">Runway Length</option>
+                                            <option value="country">Country</option>
+                                            <option value="relevance">GA Relevance</option>
+                                        </select>
+                                    </div>
+                                    <!-- Persona selector moved to global header -->
+                                    <div id="legend-content">
+                                        <!-- Legend content will be dynamically updated -->
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Legend (Always Visible) -->
-                    <div class="legend-panel">
-                        <div class="legend-horizontal" id="legend">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <h6 class="mb-0"><i class="fas fa-info-circle"></i> Legend</h6>
-                                <select class="form-select form-select-sm" id="legend-mode-filter" style="width: auto;">
-                                    <option value="airport-type" selected>Airport Type</option>
-                                    <option value="procedure-precision">Procedure Precision</option>
-                                    <option value="runway-length">Runway Length</option>
-                                    <option value="country">Country</option>
-                                    <option value="relevance">GA Relevance</option>
-                                </select>
-                            </div>
-                            <!-- Persona selector moved to global header -->
-                            <div id="legend-content">
-                                <!-- Legend content will be dynamically updated -->
-                            </div>
+                <!-- Filters Section (Below Map and Data) -->
+                <div class="filters-section-full">
+                    <div id="filters-panel-new" class="filters-panel-full">
+                        <div class="panel-header">
+                            <h5><i class="fas fa-filter"></i> Classic Filters</h5>
                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- Full-width Filters Section -->
-        <div class="filters-section-full">
-            <div id="filters-panel-new" class="filters-panel-full">
-                <div class="panel-header">
-                    <h5><i class="fas fa-filter"></i> Classic Filters</h5>
-                </div>
-
-                <div class="filters-content">
+                        <div class="filters-content">
                     <!-- Quick Filters Row -->
                     <div class="filters-row quick-filters-row">
                         <div class="form-check form-check-inline">
@@ -1454,6 +1569,98 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Resize Handle Script -->
+    <script>
+      (function() {
+        const resizeHandle = document.getElementById('resize-handle');
+        const leftPanelCol = document.getElementById('left-panel-col');
+        const mainContentRow = document.querySelector('.main-content-row');
+        
+        if (!resizeHandle || !leftPanelCol || !mainContentRow) return;
+        
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+        
+        resizeHandle.addEventListener('mousedown', (e) => {
+          isResizing = true;
+          startX = e.clientX;
+          startWidth = leftPanelCol.offsetWidth;
+          resizeHandle.classList.add('resizing');
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+          if (!isResizing) return;
+          
+          const deltaX = e.clientX - startX;
+          const containerWidth = mainContentRow.offsetWidth;
+          const gap = 15; // Gap between columns
+          
+          // Calculate new width as percentage
+          const newWidthPx = startWidth + deltaX;
+          const newWidthPercent = (newWidthPx / containerWidth) * 100;
+          
+          // Clamp between min and max
+          const minPercent = (250 / containerWidth) * 100; // 250px minimum
+          const maxPercent = 50; // 50% maximum
+          
+          const clampedPercent = Math.max(minPercent, Math.min(maxPercent, newWidthPercent));
+          
+          // Apply new width
+          leftPanelCol.style.flex = `0 0 ${clampedPercent}%`;
+          leftPanelCol.style.maxWidth = `${clampedPercent}%`;
+        });
+        
+        document.addEventListener('mouseup', () => {
+          if (isResizing) {
+            isResizing = false;
+            resizeHandle.classList.remove('resizing');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+          }
+        });
+        
+        // Touch support for mobile/tablet
+        resizeHandle.addEventListener('touchstart', (e) => {
+          isResizing = true;
+          startX = e.touches[0].clientX;
+          startWidth = leftPanelCol.offsetWidth;
+          resizeHandle.classList.add('resizing');
+          e.preventDefault();
+        });
+        
+        document.addEventListener('touchmove', (e) => {
+          if (!isResizing) return;
+          
+          const deltaX = e.touches[0].clientX - startX;
+          const containerWidth = mainContentRow.offsetWidth;
+          
+          const newWidthPx = startWidth + deltaX;
+          const newWidthPercent = (newWidthPx / containerWidth) * 100;
+          
+          const minPercent = (250 / containerWidth) * 100;
+          const maxPercent = 50;
+          
+          const clampedPercent = Math.max(minPercent, Math.min(maxPercent, newWidthPercent));
+          
+          leftPanelCol.style.flex = `0 0 ${clampedPercent}%`;
+          leftPanelCol.style.maxWidth = `${clampedPercent}%`;
+          
+          e.preventDefault();
+        });
+        
+        document.addEventListener('touchend', () => {
+          if (isResizing) {
+            isResizing = false;
+            resizeHandle.classList.remove('resizing');
+          }
+        });
+      })();
+    </script>
 
     <!-- TypeScript Application -->
     <!-- In development: Vite will handle /ts/main.ts automatically -->
