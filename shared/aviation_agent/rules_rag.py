@@ -201,6 +201,7 @@ class RulesRAG:
         embedding_model: str = "all-MiniLM-L6-v2",
         enable_reformulation: bool = True,
         llm: Optional[Any] = None,
+        rules_manager: Optional[Any] = None,
     ):
         """
         Initialize RAG system.
@@ -210,6 +211,7 @@ class RulesRAG:
             embedding_model: Name of embedding model to use
             enable_reformulation: Whether to reformulate queries for better matching
             llm: Optional LLM instance for reformulation
+            rules_manager: Optional RulesManager instance for multi-country lookups
         """
         self.vector_db_path = Path(vector_db_path)
         self.embedding_model = embedding_model
@@ -223,6 +225,9 @@ class RulesRAG:
             self.reformulator = QueryReformulator(llm)
         else:
             self.reformulator = None
+        
+        # Store rules manager for multi-country lookups
+        self.rules_manager = rules_manager
         
         # Initialize ChromaDB
         logger.info(f"Initializing ChromaDB at {self.vector_db_path}")
@@ -246,6 +251,20 @@ class RulesRAG:
             logger.error("Run build_vector_db() to create the vector database")
             self.collection = None
     
+    @staticmethod
+    def _parse_json_field(value: Any, default: Any = []) -> Any:
+        """Parse a JSON field from metadata, handling both string and list formats."""
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        if isinstance(value, list):
+            return value
+        return default
+    
     def retrieve_rules(
         self,
         query: str,
@@ -253,23 +272,36 @@ class RulesRAG:
         top_k: int = 5,
         similarity_threshold: float = 0.3,
         reformulate: Optional[bool] = None,
+        rules_manager: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant rules using semantic search.
         
+        For multiple countries: queries the first country to get top questions,
+        then uses RulesManager to get answers for those questions across all countries.
+        For single country: returns results directly from vector DB metadata.
+        
         Args:
             query: User query text
             countries: List of ISO-2 country codes to filter by (e.g., ["FR", "GB"])
-            top_k: Number of results to return per country
+            top_k: Number of question IDs to retrieve (will return answers for all countries)
             similarity_threshold: Minimum similarity score (0-1)
             reformulate: Override default reformulation setting
+            rules_manager: Optional RulesManager instance (uses self.rules_manager if not provided)
         
         Returns:
-            List of matching rules with metadata, sorted by similarity score
+            List of matching rules with metadata, sorted by similarity score.
+            For multiple countries, returns the same questions for all countries.
         """
         if self.collection is None:
             logger.error("Collection not initialized")
             return []
+        
+        # Use provided rules_manager or fall back to instance variable
+        rules_mgr = rules_manager or self.rules_manager
+        
+        # Determine if we have multiple countries
+        has_multiple_countries = countries and len(countries) > 1
         
         # Query reformulation
         original_query = query
@@ -286,14 +318,20 @@ class RulesRAG:
             logger.error(f"Failed to generate query embedding: {e}")
             return []
         
-        # Build filters
-        where_filter = None
-        if countries:
-            countries_upper = [c.upper() for c in countries]
-            where_filter = {"country_code": {"$in": countries_upper}}
-        
-        # Calculate n_results
-        n_results = top_k * len(countries) if countries else top_k
+        # For multiple countries: query first country only to get top question IDs
+        # For single country: query that country and return results directly
+        if has_multiple_countries:
+            # Query first country only
+            first_country = countries[0].upper()
+            where_filter = {"country_code": first_country}
+            n_results = top_k
+        else:
+            # Single country or no country filter
+            where_filter = None
+            if countries:
+                countries_upper = [c.upper() for c in countries]
+                where_filter = {"country_code": {"$in": countries_upper}}
+            n_results = top_k
         
         # Search collection
         try:
@@ -307,13 +345,111 @@ class RulesRAG:
             logger.error(f"ChromaDB query failed: {e}")
             return []
         
-        # Format results
+        # Extract top question IDs and their similarity scores
+        question_matches = []
+        if results and results['ids'] and results['ids'][0]:
+            seen_question_ids = set()
+            for i, doc_id in enumerate(results['ids'][0]):
+                distance = results['distances'][0][i] if results['distances'] else 1.0
+                similarity = max(0, 1 - (distance / 2))
+                
+                if similarity < similarity_threshold:
+                    continue
+                
+                metadata = results['metadatas'][0][i]
+                question_id = metadata.get("question_id")
+                
+                if not question_id:
+                    continue
+                
+                # Track unique question IDs with their best similarity score
+                if question_id not in seen_question_ids:
+                    seen_question_ids.add(question_id)
+                    question_matches.append({
+                        "question_id": question_id,
+                        "question_text": results['documents'][0][i],
+                        "similarity": similarity,
+                        "category": metadata.get("category"),
+                        "tags": self._parse_json_field(metadata.get("tags"), []),
+                    })
+        
+        # Sort by similarity and take top_k
+        question_matches.sort(key=lambda x: x['similarity'], reverse=True)
+        question_matches = question_matches[:top_k]
+        
+        if not question_matches:
+            logger.info(f"No matching rules found for query: '{query}'")
+            return []
+        
+        # For multiple countries: use RulesManager to get answers for all countries
+        if has_multiple_countries:
+            if not rules_mgr:
+                logger.warning(
+                    "Multiple countries requested but RulesManager not available. "
+                    "Falling back to single-country query behavior."
+                )
+                # Fall through to single-country logic below
+            else:
+                # Ensure rules manager is loaded
+                if not rules_mgr.loaded:
+                    rules_mgr.load_rules()
+                
+                matches = []
+                countries_upper = [c.upper() for c in countries] if countries else []
+                
+                for q_match in question_matches:
+                    question_id = q_match["question_id"]
+                    question_info = rules_mgr.question_map.get(question_id)
+                    
+                    if not question_info:
+                        logger.warning(f"Question ID {question_id} not found in RulesManager")
+                        continue
+                    
+                    answers_by_country = question_info.get("answers_by_country", {})
+                    
+                    # Get answers for all requested countries
+                    for country_code in countries_upper:
+                        answer_data = answers_by_country.get(country_code)
+                        
+                        if not answer_data:
+                            # Skip if no answer for this country
+                            continue
+                        
+                        # Parse links
+                        links = answer_data.get("links", [])
+                        if isinstance(links, str):
+                            try:
+                                links = json.loads(links)
+                            except (json.JSONDecodeError, TypeError):
+                                links = []
+                        elif not isinstance(links, list):
+                            links = []
+                        
+                        matches.append({
+                            "id": f"{question_id}_{country_code}",
+                            "question_id": question_id,
+                            "question_text": q_match["question_text"],
+                            "similarity": round(q_match["similarity"], 3),
+                            "country_code": country_code,
+                            "category": q_match["category"],
+                            "tags": q_match["tags"],
+                            "answer_html": answer_data.get("answer_html", ""),
+                            "links": links,
+                            "last_reviewed": answer_data.get("last_reviewed"),
+                        })
+                
+                log_msg = f"Retrieved {len(question_matches)} questions for {len(countries_upper)} countries"
+                if query != original_query:
+                    log_msg += f" (reformulated: '{original_query}' → '{query}')"
+                logger.info(log_msg)
+                
+                return matches
+        
+        # For single country: return results directly from metadata
         matches = []
         if results and results['ids'] and results['ids'][0]:
             for i, doc_id in enumerate(results['ids'][0]):
                 distance = results['distances'][0][i] if results['distances'] else 1.0
-                # Convert distance to similarity score (cosine distance → similarity)
-                # ChromaDB uses L2 distance, normalize to 0-1 range
                 similarity = max(0, 1 - (distance / 2))
                 
                 if similarity < similarity_threshold:
@@ -322,14 +458,26 @@ class RulesRAG:
                 metadata = results['metadatas'][0][i]
                 
                 # Parse JSON fields
-                try:
-                    links = json.loads(metadata.get("links", "[]"))
-                except (json.JSONDecodeError, TypeError):
+                links_raw = metadata.get("links", "[]")
+                if isinstance(links_raw, str):
+                    try:
+                        links = json.loads(links_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        links = []
+                elif isinstance(links_raw, list):
+                    links = links_raw
+                else:
                     links = []
                 
-                try:
-                    tags = json.loads(metadata.get("tags", "[]"))
-                except (json.JSONDecodeError, TypeError):
+                tags_raw = metadata.get("tags", "[]")
+                if isinstance(tags_raw, str):
+                    try:
+                        tags = json.loads(tags_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
+                elif isinstance(tags_raw, list):
+                    tags = tags_raw
+                else:
                     tags = []
                 
                 matches.append({

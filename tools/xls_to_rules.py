@@ -191,14 +191,33 @@ def load_rules_for_country(country_code: str, xlsx_path: Path, definitions: Dict
             links = extract_links(a, explicit_links)
             qid = qid_for(q_raw, q_prefix)
             if qid not in defs:
-                inconsistent_qids.add(qid)
-                continue
+                if qid == "":
+                    # Empty question ID might be a continuation of the previous answer
+                    if out and a:
+                        previous_q = out[-1]
+                        # Append answer text (with separator if previous answer exists)
+                        if previous_q.get("answer_html"):
+                            previous_q["answer_html"] += "<br>" + a
+                        else:
+                            previous_q["answer_html"] = a
+                        # Merge links, avoiding duplicates
+                        if "links" not in previous_q:
+                            previous_q["links"] = []
+                        existing_links = set(previous_q["links"])
+                        new_links = [link for link in links if link not in existing_links]
+                        previous_q["links"].extend(new_links)
+                    else:
+                        print("Warning: Empty question but no previous answer found", file=sys.stderr)
+                        continue
+                else:
+                    inconsistent_qids.add(qid)
+                    continue
             out.append({
                 "question_id": qid,
-                "question_raw": q_raw,
-                "question_prefix": q_prefix,
-                "answer_html": a,
-                "links": links,
+                "question_raw": q_raw if qid != "" else previous_q["question_raw"],
+                "question_prefix": q_prefix if qid != "" else previous_q["question_prefix"],
+                "answer_html": a if qid != "" else previous_q["answer_html"],
+                "links": links if qid != "" else previous_q["links"],
                 "country_code": country_code,
             })
     if len(inconsistent_qids) > 0:

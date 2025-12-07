@@ -62,11 +62,16 @@ def build_agent_graph(
         # NOTE: ChromaDB requires local filesystem (not CIFS/NFS)
         # Vector DB is stored at /root/Projects/flyfun/rules_vector_db
         try:
+            # Get RulesManager from ToolContext for multi-country lookups
+            tool_context = settings.build_tool_context(load_rules=True)
+            rules_manager = tool_context.rules_manager
+            
             rag_system = RulesRAG(
                 vector_db_path=settings.vector_db_path,
                 embedding_model=settings.embedding_model,
                 enable_reformulation=settings.enable_query_reformulation,
-                llm=router_llm
+                llm=router_llm,
+                rules_manager=rules_manager
             )
             logger.info(f"✓ RAG system initialized: {settings.vector_db_path}")
         except Exception as e:
