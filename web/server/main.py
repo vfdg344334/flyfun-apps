@@ -40,8 +40,7 @@ from security_config import (
 
 # Import configuration helper functions (logic only)
 from config_helpers import (
-    get_safe_db_path, get_safe_rules_path, get_safe_ga_meta_db_path,
-    get_ga_friendliness_readonly
+    get_safe_db_path, get_safe_rules_path, get_safe_ga_meta_db_path
 )
 
 # Import API routes
@@ -141,12 +140,12 @@ async def lifespan(app: FastAPI):
         rules.set_rules_manager(rules_manager)
 
         # Initialize GA friendliness service (optional)
+        # Web server only reads, so always use readonly=True
         ga_meta_db_path = get_safe_ga_meta_db_path()
-        ga_readonly = get_ga_friendliness_readonly()
-        ga_service = ga_friendliness.GAFriendlinessService(ga_meta_db_path, readonly=ga_readonly)
+        ga_service = ga_friendliness.GAFriendlinessService(ga_meta_db_path, readonly=True)
         ga_friendliness.set_service(ga_service)
         if ga_service.enabled:
-            logger.info(f"GA Friendliness service enabled (readonly={ga_readonly}): {ga_meta_db_path}")
+            logger.info(f"GA Friendliness service enabled (readonly): {ga_meta_db_path}")
         else:
             logger.info("GA Friendliness service disabled (no database configured)")
 
