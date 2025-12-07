@@ -216,6 +216,8 @@ app.add_middleware(
 )
 
 # Force HTTPS in production
+# Note: In Docker deployments, HTTPS termination happens at reverse proxy level
+# Container should accept HTTP, so FORCE_HTTPS is typically False in Docker
 if FORCE_HTTPS:
     app.add_middleware(HTTPSRedirectMiddleware)
 

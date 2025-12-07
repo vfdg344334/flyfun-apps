@@ -31,6 +31,8 @@ services:
       - ${OUTPUT_DIR:-./out}:/app/out:rw
       # Logs (writable)
       - ${LOGS_DIR:-./logs}:/app/logs:rw
+      # Tools directory (for building vector DB and other utilities)
+      - ${TOOLS_DIR:-./tools}:/app/tools:ro
       # Security config (optional override)
       - ${SECURITY_CONFIG_PATH:-./web/server/security_config.py}:/app/web/server/security_config.py:ro
     restart: unless-stopped
