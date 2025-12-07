@@ -25,10 +25,6 @@ services:
       # Local path fallback (used if VECTOR_DB_URL is not set)
       - VECTOR_DB_PATH=/app/out/rules_vector_db
     volumes:
-      # Source code (mounted for development - changes reflect immediately after restart)
-      - ${WEB_SERVER_DIR:-./web/server}:/app/web/server:ro
-      - ${WEB_CLIENT_DIR:-./web/client}:/app/web/client:rw
-      - ${SHARED_DIR:-./shared}:/app/shared:ro
       # Data files (read-only)
       - ${DATA_DIR:-./data}:/app/data:ro
       # Output files (writable) - includes ga_meta.sqlite and rules_vector_db
