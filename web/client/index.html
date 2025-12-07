@@ -191,6 +191,13 @@
             flex-direction: column;
         }
 
+        /* Ensure map buttons are always on top */
+        .map-column-col .map-collapse-btn,
+        .map-column-col .map-expand-btn {
+            position: absolute;
+            pointer-events: auto;
+        }
+
         .right-panel-col {
             flex: 1 1 50%;
             max-width: 50%;
@@ -264,19 +271,21 @@
         }
 
         .panel-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px 20px;
+            background: #f8f9fa;
+            color: #495057;
+            padding: 8px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-shrink: 0;
+            border-bottom: 1px solid #dee2e6;
         }
 
         .panel-header h5 {
             margin: 0;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: 600;
+            color: #495057;
         }
 
         .panel-actions {
@@ -285,21 +294,23 @@
         }
 
         .btn-panel-action {
-            background: rgba(255, 255, 255, 0.2);
-            border: none;
-            color: white;
-            width: 32px;
-            height: 32px;
-            border-radius: 6px;
+            background: transparent;
+            border: 1px solid #dee2e6;
+            color: #6c757d;
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.2s;
+            transition: all 0.2s;
         }
 
         .btn-panel-action:hover {
-            background: rgba(255, 255, 255, 0.3);
+            background: #e9ecef;
+            border-color: #adb5bd;
+            color: #495057;
         }
 
         /* ===== CHATBOT PANEL ===== */
@@ -418,6 +429,66 @@
             flex: 0 0 auto;
             max-height: 40vh;
             overflow-y: auto;
+        }
+
+        .filters-panel-full .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .filters-panel-full .panel-header h5 {
+            margin: 0;
+        }
+
+        .filter-mode-toggle {
+            background: transparent;
+            border: 1px solid #dee2e6;
+            color: #6c757d;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .filter-mode-toggle:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+            color: #495057;
+        }
+
+        .filter-mode-toggle i {
+            font-size: 11px;
+        }
+
+        /* Filter sections that are hidden in minimum mode */
+        .filters-panel-full.minimum-mode .filter-section-advanced {
+            display: none;
+        }
+
+        .filters-panel-full.minimum-mode .filters-row.filter-section-advanced {
+            display: none;
+        }
+
+        .filters-panel-full.minimum-mode .search-hint {
+            display: none;
+        }
+
+        /* Compact padding in minimum mode */
+        .filters-panel-full.minimum-mode .filters-content {
+            padding: 15px 25px;
+        }
+
+        .filters-panel-full.minimum-mode .filters-row {
+            margin-bottom: 12px;
+        }
+
+        .filters-panel-full.minimum-mode .quick-filters-row {
+            margin-bottom: 12px;
         }
 
         .filters-panel-full {
@@ -875,14 +946,68 @@
             box-sizing: border-box !important;
         }
 
+        /* Map collapses when map-collapsed class is added */
+        .map-column-col.map-collapsed {
+            flex: 0 0 40px !important;
+            max-width: 40px !important;
+            min-width: 40px !important;
+            width: 40px !important;
+            box-sizing: border-box !important;
+        }
+
+        .map-column-col.map-collapsed > *:not(.map-collapse-btn):not(.map-expand-btn) {
+            display: none !important;
+        }
+
+        /* Hide legend when map is collapsed */
+        .map-data-row.map-collapsed .legend-panel {
+            display: none !important;
+        }
+
+        /* Expand airport content to fill space when legend is hidden (map collapsed) */
+        .map-data-row.map-collapsed .right-panel {
+            gap: 0;
+        }
+
+        /* Make airport content expand to fill all available space when legend is hidden */
+        .map-data-row.map-collapsed .right-panel #airport-content {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: 100%;
+        }
+
+        /* Ensure tab content expands fully */
+        .map-data-row.map-collapsed .right-panel .tab-content {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        /* Ensure no-selection message also expands when legend is hidden */
+        .map-data-row.map-collapsed .right-panel #no-selection {
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 0;
+        }
+
+        /* Right panel expands when map is collapsed */
+        .map-data-row.map-collapsed .right-panel-col {
+            flex: 0 0 calc(100% - 55px) !important;
+            max-width: calc(100% - 55px) !important;
+            min-width: calc(100% - 55px) !important;
+            width: calc(100% - 55px) !important;
+            box-sizing: border-box !important;
+        }
+
         .right-panel.collapsed > *:not(.collapse-btn) {
             display: none !important;
         }
 
-        .collapse-btn {
+        .collapse-btn,
+        .map-collapse-btn,
+        .map-expand-btn {
             position: absolute;
-            top: 10px;
-            left: 5px;
             width: 30px;
             height: 30px;
             border: none;
@@ -890,14 +1015,33 @@
             border-radius: 50%;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
             cursor: pointer;
-            z-index: 10;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.3s ease;
         }
 
-        .collapse-btn:hover {
+        .collapse-btn {
+            top: 10px;
+            left: 5px;
+            z-index: 10;
+        }
+
+        .map-collapse-btn {
+            top: 10px;
+            right: 5px;
+            z-index: 10000 !important; /* Very high z-index to be above Leaflet map controls (typically 400-1000) */
+        }
+
+        .map-expand-btn {
+            top: 10px;
+            left: 5px;
+            z-index: 10000 !important; /* Very high z-index to be above Leaflet map controls */
+        }
+
+        .collapse-btn:hover,
+        .map-collapse-btn:hover,
+        .map-expand-btn:hover {
             background: #f8f9fa;
             transform: scale(1.1);
         }
@@ -908,6 +1052,36 @@
 
         .right-panel.collapsed .collapse-btn i {
             transform: rotate(180deg);
+        }
+
+        /* Hide map collapse button when map is collapsed */
+        .map-column-col.map-collapsed .map-collapse-btn {
+            display: none !important;
+        }
+
+        /* Show map expand button when map is collapsed */
+        .map-column-col.map-collapsed .map-expand-btn {
+            display: flex !important;
+        }
+
+        /* Hide map expand button when map is not collapsed */
+        .map-column-col:not(.map-collapsed) .map-expand-btn {
+            display: none !important;
+        }
+
+        /* Always show map collapse button when map is not collapsed */
+        .map-column-col:not(.map-collapsed) .map-collapse-btn {
+            display: flex !important;
+        }
+
+        /* Hide collapse data button when map is collapsed */
+        .map-data-row.map-collapsed .right-panel-col .collapse-btn {
+            display: none !important;
+        }
+
+        /* Hide collapse map button when data panel is collapsed */
+        .right-panel-col.collapsed ~ .map-column-col .map-collapse-btn {
+            display: none !important;
         }
 
         .legend-panel {
@@ -1011,6 +1185,24 @@
 
             /* iPad has 10px gap, so total: 20px (gaps) + 40px (collapsed) = 60px */
             .map-column-col.map-expanded {
+                flex: 0 0 calc(100% - 50px) !important;
+                max-width: calc(100% - 50px) !important;
+                min-width: calc(100% - 50px) !important;
+                width: calc(100% - 50px) !important;
+                box-sizing: border-box !important;
+            }
+
+            /* Map collapses on iPad */
+            .map-column-col.map-collapsed {
+                flex: 0 0 40px !important;
+                max-width: 40px !important;
+                min-width: 40px !important;
+                width: 40px !important;
+                box-sizing: border-box !important;
+            }
+
+            /* Right panel expands when map is collapsed on iPad */
+            .map-data-row.map-collapsed .right-panel-col {
                 flex: 0 0 calc(100% - 50px) !important;
                 max-width: calc(100% - 50px) !important;
                 min-width: calc(100% - 50px) !important;
@@ -1259,9 +1451,15 @@
             <!-- Right Content: Map, Data, and Filters -->
             <div class="right-content-col">
                 <!-- Map and Data Row -->
-                <div class="map-data-row">
+                <div class="map-data-row" id="map-data-row">
                     <!-- Map (Center) -->
-                    <div class="map-column-col">
+                    <div class="map-column-col" id="map-column-col">
+                        <button class="map-collapse-btn" id="map-collapse-btn" title="Collapse map">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <button class="map-expand-btn" id="map-expand-btn" title="Expand map">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
                         <div id="map"></div>
 
                         <!-- Loading Indicator -->
@@ -1419,6 +1617,10 @@
                     <div id="filters-panel-new" class="filters-panel-full">
                         <div class="panel-header">
                             <h5><i class="fas fa-filter"></i> Classic Filters</h5>
+                            <button class="filter-mode-toggle" id="filter-mode-toggle" title="Toggle filter mode">
+                                <i class="fas fa-compress-alt"></i>
+                                <span>Minimum</span>
+                            </button>
                         </div>
 
                         <div class="filters-content">
@@ -1452,7 +1654,7 @@
                     <small class="form-text text-muted search-hint">For routes: space-separated ICAO codes</small>
 
                     <!-- Route / Country / Max Airports Row -->
-                    <div class="filters-row">
+                    <div class="filters-row filter-section-advanced">
                         <div class="filter-field">
                             <label for="route-distance">Route Distance (nm)</label>
                             <input type="number" class="form-control" id="route-distance" value="50" min="1" max="500" step="5">
@@ -1480,7 +1682,7 @@
                     </div>
 
                     <!-- Action Buttons -->
-                    <div class="filters-row actions-row">
+                    <div class="filters-row actions-row filter-section-advanced">
                         <button class="btn btn-success" id="locate-button">
                             <i class="fas fa-location-crosshairs"></i> Locate
                         </button>
@@ -1496,7 +1698,7 @@
                     </div>
 
                     <!-- Advanced AIP Filters Section -->
-                    <div class="filter-section mt-3">
+                    <div class="filter-section mt-3 filter-section-advanced">
                         <div class="filter-section-header" data-bs-toggle="collapse" data-bs-target="#advanced-aip-filters" aria-expanded="false">
                             <h6 class="mb-0">
                                 <i class="fas fa-cog"></i> Advanced AIP Filters
@@ -1569,6 +1771,77 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Filter Mode Toggle Script -->
+    <script>
+      (function() {
+        const filterModeToggle = document.getElementById('filter-mode-toggle');
+        const filtersPanel = document.getElementById('filters-panel-new');
+        
+        if (!filterModeToggle || !filtersPanel) return;
+        
+        // Check localStorage for saved preference
+        const savedMode = localStorage.getItem('filterMode') || 'minimum';
+        if (savedMode === 'minimum') {
+          filtersPanel.classList.add('minimum-mode');
+          updateToggleButton('minimum');
+        } else {
+          filtersPanel.classList.remove('minimum-mode');
+          updateToggleButton('all');
+        }
+        
+        function updateToggleButton(mode) {
+          const icon = filterModeToggle.querySelector('i');
+          const text = filterModeToggle.querySelector('span');
+          
+          if (mode === 'minimum') {
+            icon.className = 'fas fa-expand-alt';
+            text.textContent = 'All';
+            filterModeToggle.title = 'Show all filters';
+          } else {
+            icon.className = 'fas fa-compress-alt';
+            text.textContent = 'Minimum';
+            filterModeToggle.title = 'Show minimum filters';
+          }
+        }
+        
+        filterModeToggle.addEventListener('click', () => {
+          const isMinimum = filtersPanel.classList.contains('minimum-mode');
+          
+          if (isMinimum) {
+            filtersPanel.classList.remove('minimum-mode');
+            updateToggleButton('all');
+            localStorage.setItem('filterMode', 'all');
+          } else {
+            filtersPanel.classList.add('minimum-mode');
+            updateToggleButton('minimum');
+            localStorage.setItem('filterMode', 'minimum');
+          }
+        });
+      })();
+    </script>
+
+    <!-- Map Collapse/Expand Script -->
+    <script>
+      (function() {
+        const mapCollapseBtn = document.getElementById('map-collapse-btn');
+        const mapExpandBtn = document.getElementById('map-expand-btn');
+        const mapColumnCol = document.getElementById('map-column-col');
+        const mapDataRow = document.getElementById('map-data-row');
+        
+        if (!mapCollapseBtn || !mapExpandBtn || !mapColumnCol || !mapDataRow) return;
+        
+        mapCollapseBtn.addEventListener('click', () => {
+          mapColumnCol.classList.add('map-collapsed');
+          mapDataRow.classList.add('map-collapsed');
+        });
+        
+        mapExpandBtn.addEventListener('click', () => {
+          mapColumnCol.classList.remove('map-collapsed');
+          mapDataRow.classList.remove('map-collapsed');
+        });
+      })();
+    </script>
 
     <!-- Resize Handle Script -->
     <script>
