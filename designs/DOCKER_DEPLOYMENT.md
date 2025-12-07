@@ -217,6 +217,7 @@ docker-compose start web-server
 # Rebuild vector database from rules.json
 docker exec -it flyfun-web-server python /app/tools/xls_to_rules.py \
     --out /app/data/rules.json \
+    --vector-db-url http://chromadb:8000 \
     --build-rag
 ```
 
