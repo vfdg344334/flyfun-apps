@@ -411,22 +411,18 @@ class QueryRouter:
                     content = msg.content if hasattr(msg, 'content') else str(msg)
                     context_str += f"{role}: {content}\n"
             
-            # LLM prompt
-            prompt = f"""Classify this aviation query into one of two categories:
-
-**RULES**: Questions about regulations, requirements, procedures, laws, or what's allowed/required
-Examples: "Do I need to file a flight plan?", "What are customs rules?", "Can I fly VFR at night?"
-
-**DATABASE**: Questions about finding airports, locations, facilities, or navigation
-Examples: "Find airports near Paris", "Show me airports with AVGAS", "Route from LFPG to LOWI"
-
-Conversation context:
-{context_str}
-
-Current query: "{query}"
-
-Respond with ONLY one word: "rules" or "database"
-"""
+            # Load prompt template from config
+            if not hasattr(self, '_router_prompt_template'):
+                from .config import get_settings, get_behavior_config
+                settings = get_settings()
+                behavior_config = get_behavior_config(settings.agent_config_name)
+                self._router_prompt_template = behavior_config.load_prompt("router")
+            
+            # Format prompt with context and query
+            prompt = self._router_prompt_template.format(
+                context_str=context_str,
+                query=query
+            )
             
             response = self.llm.invoke(prompt)
             answer = response.content.strip().lower()

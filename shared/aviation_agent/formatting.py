@@ -12,24 +12,25 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from .planning import AviationPlan
 
 
-def build_formatter_chain(llm: Runnable) -> Runnable:
+def build_formatter_chain(llm: Runnable, system_prompt: Optional[str] = None) -> Runnable:
     """
     Return the LLM chain for formatting answers.
     
     This chain will be used directly in the formatter node so LangGraph can capture streaming.
     The node will handle state transformation and UI payload building.
     """
+    # Load system prompt from config if not provided
+    if system_prompt is None:
+        from .config import get_settings, get_behavior_config
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+        system_prompt = behavior_config.load_prompt("formatter")
+    
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                (
-                    "You are an aviation assistant. Use the tool findings to answer the pilot's question.\n"
-                    "Always cite operational caveats when data may be outdated. Prefer concise Markdown.\n"
-                    "IMPORTANT: Do NOT generate any URLs, links, or image markdown. The map visualization is handled "
-                    "automatically by the UI - just describe the airports/results in your text response.\n"
-                    "Simply mention 'The results are shown on the map' if relevant, but never create fake URLs."
-                ),
+                system_prompt,
             ),
             MessagesPlaceholder(variable_name="messages"),
             (
