@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 
-from .config import get_settings
+from .config import get_settings, get_behavior_config
 from .execution import ToolRunner
 from .formatting import build_formatter_chain
 from .planning import AviationPlan
@@ -27,7 +27,8 @@ def build_agent_graph(
     router_llm=None,
     rules_llm=None,
     enable_routing: bool = True,
-    enable_next_query_prediction: bool = True
+    enable_next_query_prediction: bool = True,
+    behavior_config=None,
 ):
     """
     Assemble the LangGraph workflow with routing support.
@@ -49,13 +50,15 @@ def build_agent_graph(
     """
     
     settings = get_settings()
+    if behavior_config is None:
+        behavior_config = get_behavior_config(settings.agent_config_name)
     
     # Initialize routing components (if enabled)
     router = None
     rag_system = None
     rules_agent = None
     
-    if enable_routing:
+    if enable_routing and behavior_config.routing.enabled:
         router = QueryRouter(llm=router_llm)
 
         # Initialize RAG system
@@ -69,9 +72,12 @@ def build_agent_graph(
             rag_system = RulesRAG(
                 vector_db_path=settings.vector_db_path if not settings.vector_db_url else None,
                 vector_db_url=settings.vector_db_url,
-                embedding_model=settings.embedding_model,
-                enable_reformulation=settings.enable_query_reformulation,
-                enable_reranking=True,  # Enable cross-encoder reranking for testing
+                embedding_model=behavior_config.rag.embedding_model,
+                enable_reformulation=behavior_config.query_reformulation.enabled,
+                enable_reranking=behavior_config.reranking.enabled,
+                reranking_provider=behavior_config.reranking.provider,
+                reranking_config=behavior_config.reranking,
+                retrieval_config=behavior_config.rag.retrieval,
                 llm=router_llm,
                 rules_manager=rules_manager
             )
@@ -84,12 +90,13 @@ def build_agent_graph(
             logger.warning("Rules path will be disabled")
             rag_system = None
 
-        # Initialize rules agent
-        rules_agent = RulesAgent(llm=rules_llm or formatter_llm)
+        # Initialize rules agent with prompt from config
+        rules_prompt = behavior_config.load_prompt("rules_agent")
+        rules_agent = RulesAgent(llm=rules_llm or formatter_llm, system_prompt=rules_prompt)
 
     # Initialize next query predictor (if enabled)
     predictor = None
-    if enable_next_query_prediction:
+    if enable_next_query_prediction and behavior_config.next_query_prediction.enabled:
         predictor = NextQueryPredictor(rules_json_path=settings.rules_json)
         logger.info("✓ Next query predictor enabled")
 
@@ -141,7 +148,8 @@ def build_agent_graph(
             retrieved_rules = rag_system.retrieve_rules(
                 query=query,
                 countries=decision.countries if decision.countries else None,
-                top_k=5
+                top_k=behavior_config.rag.retrieval.top_k,
+                similarity_threshold=behavior_config.rag.retrieval.similarity_threshold
             )
             
             logger.info(f"RAG: Retrieved {len(retrieved_rules)} rules for countries: {decision.countries}")
@@ -251,7 +259,9 @@ def build_agent_graph(
             context = extract_context_from_plan(user_query, plan)
 
             # Generate suggestions (rule-based, fast)
-            suggestions = predictor.predict_next_queries(context, max_suggestions=4)
+            suggestions = predictor.predict_next_queries(
+                context, max_suggestions=behavior_config.next_query_prediction.max_suggestions
+            )
 
             # Format for UI
             suggested_queries = [
@@ -306,7 +316,9 @@ def build_agent_graph(
             )
 
             # Generate suggestions
-            suggestions = predictor.predict_next_queries(context, max_suggestions=4)
+            suggestions = predictor.predict_next_queries(
+                context, max_suggestions=behavior_config.next_query_prediction.max_suggestions
+            )
 
             # Format for UI
             suggested_queries = [
@@ -340,7 +352,9 @@ def build_agent_graph(
             return {"error": str(e)}
 
     # Build formatter chain directly - this allows LangGraph to capture streaming
-    formatter_chain = build_formatter_chain(formatter_llm)
+    # Load prompt from config
+    formatter_prompt = behavior_config.load_prompt("formatter")
+    formatter_chain = build_formatter_chain(formatter_llm, system_prompt=formatter_prompt)
     
     def formatter_node(state: AgentState) -> Dict[str, Any]:
         # Handle errors gracefully
@@ -421,11 +435,15 @@ def build_agent_graph(
             
             # Build UI payload with suggested queries
             suggested_queries = state.get("suggested_queries")
-            ui_payload = build_ui_payload(plan, tool_result, suggested_queries) if plan else None
+            try:
+                ui_payload = build_ui_payload(plan, tool_result, suggested_queries) if plan else None
+            except Exception as e:
+                logger.error(f"Failed to build UI payload: {e}", exc_info=True)
+                ui_payload = None
 
             # Optional: Enhance visualization with ICAOs from answer
             mentioned_icaos = []
-            logger.info(f"📍 FORMATTER: ui_payload kind={ui_payload.get('kind') if ui_payload else None}, answer length={len(answer) if answer else 0}")
+            logger.info(f"📍 FORMATTER: ui_payload kind={ui_payload.get('kind') if ui_payload else None}, answer length={len(answer) if answer else 0}, plan tool={plan.selected_tool if plan else None}")
             if ui_payload and ui_payload.get("kind") in ["route", "airport"]:
                 mentioned_icaos = _extract_icao_codes(answer)
                 logger.info(f"📍 FORMATTER: Extracted {len(mentioned_icaos)} ICAO codes from answer: {mentioned_icaos[:10]}...")

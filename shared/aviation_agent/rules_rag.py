@@ -169,6 +169,90 @@ Formal question:"""
             return query
 
 
+class OpenAIReranker:
+    """
+    OpenAI-based reranker using embeddings.
+    
+    Uses OpenAI embeddings to compute similarity between query and documents,
+    then reranks based on cosine similarity.
+    """
+    
+    def __init__(self, model_name: str, embedding_provider: "EmbeddingProvider"):
+        """
+        Initialize OpenAI reranker.
+        
+        Args:
+            model_name: OpenAI embedding model name
+            embedding_provider: EmbeddingProvider instance to reuse
+        """
+        self.model_name = model_name
+        self.embedding_provider = embedding_provider
+        self._initialized = True
+        
+    def rerank(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+        text_key: str = "question_text",
+        top_k: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Rerank documents using OpenAI embeddings.
+        
+        Args:
+            query: The search query
+            documents: List of document dicts to rerank
+            text_key: Key in document dict containing text to compare
+            top_k: Number of top results to return (None = all)
+            
+        Returns:
+            Reranked list of documents with added 'rerank_score' field
+        """
+        if not documents:
+            return documents
+        
+        try:
+            import numpy as np
+            from numpy.linalg import norm
+            
+            # Embed query
+            query_embedding = np.array(self.embedding_provider.embed_query(query))
+            
+            # Embed all documents
+            texts = [doc.get(text_key, "") for doc in documents]
+            doc_embeddings = [np.array(self.embedding_provider.embed_query(text)) for text in texts]
+            
+            # Compute cosine similarities
+            similarities = []
+            for doc_emb in doc_embeddings:
+                # Cosine similarity
+                dot_product = np.dot(query_embedding, doc_emb)
+                norms = norm(query_embedding) * norm(doc_emb)
+                similarity = dot_product / norms if norms > 0 else 0.0
+                similarities.append(float(similarity))
+            
+            # Create list with scores
+            scored_docs = []
+            for doc, score in zip(documents, similarities):
+                doc_copy = doc.copy()
+                doc_copy["rerank_score"] = score
+                scored_docs.append(doc_copy)
+            
+            # Sort by score (descending)
+            scored_docs.sort(key=lambda x: x["rerank_score"], reverse=True)
+            
+            # Return top_k if specified
+            if top_k:
+                scored_docs = scored_docs[:top_k]
+            
+            logger.info(f"OpenAI reranked {len(documents)} documents to {len(scored_docs)} results")
+            return scored_docs
+            
+        except Exception as e:
+            logger.warning(f"OpenAI reranking failed: {e}")
+            return documents
+
+
 class Reranker:
     """
     Cohere-based reranker for improved retrieval precision.
@@ -183,7 +267,7 @@ class Reranker:
     DEFAULT_MODEL = "rerank-v3.5"
     COHERE_API_URL = "https://api.cohere.com/v2/rerank"
     
-    def __init__(self, model_name: str = None, api_key: str = None):
+    def __init__(self, model_name: Optional[str] = None, api_key: Optional[str] = None):
         """
         Initialize Cohere reranker.
         
@@ -294,6 +378,9 @@ class RulesRAG:
         embedding_model: str = "text-embedding-3-small",
         enable_reformulation: bool = True,
         enable_reranking: bool = False,
+        reranking_provider: str = "cohere",
+        reranking_config: Optional[Any] = None,
+        retrieval_config: Optional[Any] = None,
         llm: Optional[Any] = None,
         rules_manager: Optional[Any] = None,
     ):
@@ -305,7 +392,10 @@ class RulesRAG:
             vector_db_url: URL to ChromaDB service (for service mode). If provided, takes precedence over vector_db_path.
             embedding_model: Name of embedding model to use (OpenAI models only)
             enable_reformulation: Whether to reformulate queries for better matching
-            enable_reranking: Whether to use cross-encoder reranking (requires sentence-transformers, disabled by default)
+            enable_reranking: Whether to use reranking
+            reranking_provider: Reranking provider ("cohere", "openai", or "none")
+            reranking_config: RerankingConfig object with provider-specific settings
+            retrieval_config: RetrievalConfig object with retrieval parameters (top_k, similarity_threshold, rerank_candidates_multiplier)
             llm: Optional LLM instance for reformulation
             rules_manager: Optional RulesManager instance for multi-country lookups
         """
@@ -323,10 +413,27 @@ class RulesRAG:
         else:
             self.reformulator = None
         
-        # Initialize reranker (lazy loaded on first use, uses Cohere API)
+        # Initialize reranker based on provider
         self.enable_reranking = enable_reranking
-        if enable_reranking:
-            self.reranker = Reranker()
+        self.reranking_provider = reranking_provider if enable_reranking else "none"
+        self.reranking_config = reranking_config
+        self.retrieval_config = retrieval_config
+        
+        if enable_reranking and reranking_provider == "cohere":
+            from .behavior_config import RerankingConfig
+            if reranking_config and hasattr(reranking_config, 'cohere') and reranking_config.cohere:
+                model = reranking_config.cohere.model
+            else:
+                model = "rerank-v3.5"
+            self.reranker = Reranker(model_name=model)
+        elif enable_reranking and reranking_provider == "openai":
+            # OpenAI reranker implementation
+            from .behavior_config import RerankingConfig
+            if reranking_config and hasattr(reranking_config, 'openai') and reranking_config.openai:
+                model = reranking_config.openai.model
+            else:
+                model = "text-embedding-3-large"
+            self.reranker = OpenAIReranker(model_name=model, embedding_provider=self.embedding_provider)
         else:
             self.reranker = None
         
@@ -503,8 +610,12 @@ class RulesRAG:
         
         # If reranking enabled, get more candidates and rerank
         if self.enable_reranking and self.reranker:
-            # Take top_k * 2 candidates for reranking to give reranker more options
-            candidates = question_matches[:top_k * 2]
+            # Take top_k * multiplier candidates for reranking to give reranker more options
+            from .behavior_config import RetrievalConfig
+            multiplier = 2  # Default
+            if self.retrieval_config and hasattr(self.retrieval_config, 'rerank_candidates_multiplier'):
+                multiplier = self.retrieval_config.rerank_candidates_multiplier
+            candidates = question_matches[:top_k * multiplier]
             if candidates:
                 question_matches = self.reranker.rerank(
                     query=original_query,  # Use original query, not reformulated
@@ -512,7 +623,7 @@ class RulesRAG:
                     text_key="question_text",
                     top_k=top_k
                 )
-                logger.info(f"Reranked {len(candidates)} candidates to {len(question_matches)} results")
+                logger.info(f"Reranked {len(candidates)} candidates to {len(question_matches)} results using {self.reranking_provider}")
         else:
             question_matches = question_matches[:top_k]
         

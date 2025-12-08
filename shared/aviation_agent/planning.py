@@ -34,6 +34,7 @@ class AviationPlan(BaseModel):
 def build_planner_runnable(
     llm: Runnable,
     tools: Sequence[AviationTool],
+    system_prompt: Optional[str] = None,
 ) -> Runnable:
     """
     Create a runnable that turns conversation history into an AviationPlan.
@@ -43,6 +44,13 @@ def build_planner_runnable(
     """
 
     tool_catalog = render_tool_catalog(tools)
+    
+    # Load system prompt from config if not provided
+    if system_prompt is None:
+        from .config import get_settings, get_behavior_config
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+        system_prompt = behavior_config.load_prompt("planner")
 
     # Use native structured output when available (more reliable with conversation history)
     # This is especially important for multi-turn conversations where PydanticOutputParser can fail
@@ -56,28 +64,7 @@ def build_planner_runnable(
                 [
                     (
                         "system",
-                        (
-                            "You are AviationPlan, a planning agent that selects exactly one aviation tool.\n"
-                            "Tools:\n{tool_catalog}\n\n"
-                            "**CRITICAL - Argument Extraction:**\n"
-                            "You MUST extract ALL required arguments for the selected tool:\n"
-                            "- find_airports_near_route: ALWAYS set 'from_location' and 'to_location' (pass location names exactly as user provides them, including country context)\n"
-                            "- find_airports_near_location: ALWAYS set 'location_query' (include country if user mentions it, e.g., 'Vik, Iceland')\n"
-                            "- get_airport_details: ALWAYS set 'icao_code'\n"
-                            "- search_airports: ALWAYS set 'query'\n"
-                            "- get_border_crossing_airports: optionally set 'country'\n"
-                            "- list_rules_for_country: ALWAYS set 'country_code'\n"
-                            "- compare_rules_between_countries: ALWAYS set 'country1' and 'country2'\n\n"
-                            "**Filter Extraction:**\n"
-                            "If the user mentions specific requirements (AVGAS, customs, runway length, country, etc.),\n"
-                            "extract them as a 'filters' object in the 'arguments' field. Only include filters the user explicitly requests.\n"
-                            "Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,\n"
-                            "country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee.\n\n"
-                            "Example: 'airports between Paris and LOWI' → {{'from_location': 'Paris', 'to_location': 'LOWI'}}\n"
-                            "Example: 'airports near Vik, Iceland' → {{'location_query': 'Vik, Iceland'}}\n"
-                            "Example: 'route from LFPG to LEMD with AVGAS' → {{'from_location': 'LFPG', 'to_location': 'LEMD', 'filters': {{'has_avgas': true}}}}\n\n"
-                            "Pick the tool that can produce the most authoritative answer for the pilot."
-                        ),
+                        system_prompt,  # ChatPromptTemplate will handle {tool_catalog} variable
                     ),
                     MessagesPlaceholder(variable_name="messages"),
                     (
@@ -112,28 +99,7 @@ def build_planner_runnable(
         [
             (
                 "system",
-                (
-                    "You are AviationPlan, a planning agent that selects exactly one aviation tool.\n"
-                    "Tools:\n{tool_catalog}\n\n"
-                    "**CRITICAL - Argument Extraction:**\n"
-                    "You MUST extract ALL required arguments for the selected tool:\n"
-                    "- find_airports_near_route: ALWAYS set 'from_location' and 'to_location' (pass location names exactly as user provides them, including country context)\n"
-                    "- find_airports_near_location: ALWAYS set 'location_query' (include country if user mentions it, e.g., 'Vik, Iceland')\n"
-                    "- get_airport_details: ALWAYS set 'icao_code'\n"
-                    "- search_airports: ALWAYS set 'query'\n"
-                    "- get_border_crossing_airports: optionally set 'country'\n"
-                    "- list_rules_for_country: ALWAYS set 'country_code'\n"
-                    "- compare_rules_between_countries: ALWAYS set 'country1' and 'country2'\n\n"
-                    "**Filter Extraction:**\n"
-                    "If the user mentions specific requirements (AVGAS, customs, runway length, country, etc.),\n"
-                    "extract them as a 'filters' object in the 'arguments' field. Only include filters the user explicitly requests.\n"
-                    "Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,\n"
-                    "country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee.\n\n"
-                    "Example: 'airports between Paris and LOWI' → {{'from_location': 'Paris', 'to_location': 'LOWI'}}\n"
-                    "Example: 'airports near Vik, Iceland' → {{'location_query': 'Vik, Iceland'}}\n"
-                    "Example: 'route from LFPG to LEMD with AVGAS' → {{'from_location': 'LFPG', 'to_location': 'LEMD', 'filters': {{'has_avgas': true}}}}\n\n"
-                    "Pick the tool that can produce the most authoritative answer for the pilot."
-                ),
+                system_prompt,  # ChatPromptTemplate will handle {tool_catalog} variable
             ),
             MessagesPlaceholder(variable_name="messages"),
             (

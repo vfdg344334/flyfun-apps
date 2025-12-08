@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+class LLMConfig(BaseModel):
+    model: Optional[str] = None
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    streaming: bool = False
+
+
+class LLMsConfig(BaseModel):
+    planner: LLMConfig
+    formatter: LLMConfig
+    router: LLMConfig
+    rules: Optional[LLMConfig] = None  # None = use formatter
+
+
+class RoutingConfig(BaseModel):
+    enabled: bool = True
+
+
+class QueryReformulationConfig(BaseModel):
+    enabled: bool = True
+
+
+class RetrievalConfig(BaseModel):
+    top_k: int = Field(default=5, gt=0, le=100)
+    similarity_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    rerank_candidates_multiplier: int = Field(default=2, gt=0)
+
+
+class RAGConfig(BaseModel):
+    embedding_model: str = "text-embedding-3-small"
+    retrieval: RetrievalConfig = RetrievalConfig()
+
+
+class CohereRerankingConfig(BaseModel):
+    model: Literal["rerank-v3.5", "rerank-english-v3.0", "rerank-multilingual-v3.0"] = "rerank-v3.5"
+
+
+class OpenAIRerankingConfig(BaseModel):
+    model: str = "text-embedding-3-large"  # Uses embedding model for reranking
+
+
+class RerankingConfig(BaseModel):
+    enabled: bool = True
+    provider: Literal["cohere", "openai", "none"] = "cohere"
+    cohere: Optional[CohereRerankingConfig] = CohereRerankingConfig()
+    openai: Optional[OpenAIRerankingConfig] = OpenAIRerankingConfig()
+
+
+class NextQueryPredictionConfig(BaseModel):
+    enabled: bool = True
+    max_suggestions: int = Field(default=4, gt=0, le=20)
+
+
+class PromptsConfig(BaseModel):
+    planner: str  # Path to prompt file, e.g., "prompts/planner_v1.md"
+    formatter: str
+    rules_agent: str
+    router: str
+
+
+class AgentBehaviorConfig(BaseModel):
+    version: str = "1.0"
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    llms: LLMsConfig
+    routing: RoutingConfig
+    query_reformulation: QueryReformulationConfig
+    rag: RAGConfig
+    reranking: RerankingConfig
+    next_query_prediction: NextQueryPredictionConfig
+    prompts: PromptsConfig
+
+    _config_dir: Optional[Path] = None  # Internal: set by from_file()
+
+    def load_prompt(self, prompt_key: str) -> str:
+        """Load prompt text from file."""
+        prompt_path = getattr(self.prompts, prompt_key, None)
+        if not prompt_path:
+            raise ValueError(f"Prompt '{prompt_key}' not found in config")
+
+        # Resolve relative to config directory
+        if not hasattr(self, "_config_dir") or self._config_dir is None:
+            raise ValueError("Config directory not set. Use from_file() to load config.")
+
+        full_path = self._config_dir / prompt_path
+        if not full_path.exists():
+            raise FileNotFoundError(f"Prompt file not found: {full_path}")
+
+        return full_path.read_text(encoding="utf-8")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "AgentBehaviorConfig":
+        """Load config from JSON file."""
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        config = cls(**data)
+        # Store config directory for prompt loading
+        config._config_dir = path.parent
+        return config
+
+    @classmethod
+    def default(cls) -> "AgentBehaviorConfig":
+        """Create default config matching current hardcoded values."""
+        return cls(
+            version="1.0",
+            name="default",
+            description="Default aviation agent configuration",
+            llms=LLMsConfig(
+                planner=LLMConfig(model=None, temperature=0.0, streaming=False),
+                formatter=LLMConfig(model=None, temperature=0.0, streaming=True),
+                router=LLMConfig(model="gpt-4o-mini", temperature=0.0, streaming=False),
+                rules=None,  # Uses formatter
+            ),
+            routing=RoutingConfig(enabled=True),
+            query_reformulation=QueryReformulationConfig(enabled=True),
+            rag=RAGConfig(
+                embedding_model="text-embedding-3-small",
+                retrieval=RetrievalConfig(top_k=5, similarity_threshold=0.3, rerank_candidates_multiplier=2),
+            ),
+            reranking=RerankingConfig(
+                enabled=True,
+                provider="cohere",
+                cohere=CohereRerankingConfig(model="rerank-v3.5"),
+                openai=OpenAIRerankingConfig(model="text-embedding-3-large"),
+            ),
+            next_query_prediction=NextQueryPredictionConfig(enabled=True, max_suggestions=4),
+            prompts=PromptsConfig(
+                planner="prompts/planner_v1.md",
+                formatter="prompts/formatter_v1.md",
+                rules_agent="prompts/rules_agent_v1.md",
+                router="prompts/router_v1.md",
+            ),
+        )
+
