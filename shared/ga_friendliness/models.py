@@ -336,6 +336,15 @@ class NotificationRule(BaseModel):
         default=None, description='e.g., -1 for "last business day"'
     )
     is_obligatory: bool = Field(default=True, description="Whether mandatory")
+    includes_holidays: bool = Field(
+        default=False, description="Whether rule applies during holidays"
+    )
+    schengen_only: bool = Field(
+        default=False, description="Whether rule applies only to Schengen flights"
+    )
+    non_schengen_only: bool = Field(
+        default=False, description="Whether rule applies only to non-Schengen flights"
+    )
     conditions: Optional[Dict[str, Any]] = Field(
         default=None, description="Additional conditions (holidays, seasons, etc.)"
     )

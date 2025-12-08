@@ -94,11 +94,13 @@ def run_aviation_agent(
     settings: Optional[AviationAgentSettings] = None,
     planner_llm: Optional[Runnable] = None,
     formatter_llm: Optional[Runnable] = None,
+    enable_routing: bool = True,
 ) -> AgentState:
     graph = build_agent(
         settings=settings,
         planner_llm=planner_llm,
         formatter_llm=formatter_llm,
+        enable_routing=enable_routing,
     )
     result = graph.invoke({"messages": messages})
     return result
