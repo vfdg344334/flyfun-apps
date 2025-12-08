@@ -48,6 +48,15 @@ Review code changes in `shared/aviation_agent/` and `web/server/api/aviation_age
    - `graph.py` - LangGraph node definitions only
    - No mixing of concerns
 
+9. **Configuration Management** - All behavioral settings must use behavior_config:
+   - LLM models, temperatures, streaming settings from `behavior_config.llms.*`
+   - Feature flags (routing, reranking, etc.) from `behavior_config.*.enabled`
+   - RAG settings (embedding model, top_k, thresholds) from `behavior_config.rag.*`
+   - Reranking provider and models from `behavior_config.reranking.*`
+   - System prompts loaded via `behavior_config.load_prompt(key)`
+   - No hardcoded config values in code (except defaults in `AgentBehaviorConfig.default()`)
+   - Use `get_behavior_config(settings.agent_config_name)` to load config
+
 ## Review Checklist
 
 ### 1. UI Payload Structure
@@ -99,6 +108,16 @@ Review code changes in `shared/aviation_agent/` and `web/server/api/aviation_age
 - [ ] Nodes return state dictionaries?
 - [ ] Graph edges defined correctly?
 
+### 9. Configuration Management
+- [ ] LLM settings (model, temperature, streaming) come from `behavior_config.llms.*`?
+- [ ] Feature flags (routing, reranking, etc.) come from `behavior_config.*.enabled`?
+- [ ] RAG settings (embedding model, top_k, thresholds) come from `behavior_config.rag.*`?
+- [ ] Reranking provider and models come from `behavior_config.reranking.*`?
+- [ ] System prompts loaded via `behavior_config.load_prompt(key)`?
+- [ ] No hardcoded config values (models, temperatures, thresholds, etc.)?
+- [ ] Uses `get_behavior_config()` to load config instead of hardcoding?
+- [ ] Config passed through function parameters (not re-loaded in each function)?
+
 ## Red Flags to Flag
 
 Flag these violations immediately:
@@ -113,6 +132,10 @@ Flag these violations immediately:
 - 🔴 **Filters in wrong place**: Filters extracted in formatter instead of planner
 - 🔴 **Breaking kind mapping**: Tools not mapped to correct UI `kind` buckets
 - 🔴 **Missing mcp_raw**: UI payload without `mcp_raw` field
+- 🔴 **Hardcoded config values**: LLM models, temperatures, thresholds, or feature flags hardcoded in code
+- 🔴 **Config logic in code**: Feature flags or settings determined by code logic instead of behavior_config
+- 🔴 **Prompt hardcoding**: System prompts embedded in code instead of loaded from config
+- 🔴 **Re-loading config**: Calling `get_behavior_config()` multiple times instead of passing config through
 
 ## Review Process
 
@@ -204,6 +227,64 @@ if plan.selected_tool == "my_custom_tool":  # Tool doesn't exist!
     ...
 ```
 
+**Configuration Management:**
+```python
+# ✅ GOOD: Load config once and pass through
+def build_agent_graph(..., behavior_config=None):
+    if behavior_config is None:
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+    
+    # Use config for all settings
+    if behavior_config.routing.enabled:
+        router = QueryRouter(...)
+    
+    rag_system = RulesRAG(
+        embedding_model=behavior_config.rag.embedding_model,
+        enable_reranking=behavior_config.reranking.enabled,
+        reranking_provider=behavior_config.reranking.provider,
+        ...
+    )
+    
+    # Load prompts from config
+    formatter_prompt = behavior_config.load_prompt("formatter")
+    formatter_chain = build_formatter_chain(formatter_llm, system_prompt=formatter_prompt)
+
+# ✅ GOOD: Load prompt from config in component
+def build_planner_runnable(llm, tools, system_prompt=None):
+    if system_prompt is None:
+        from .config import get_settings, get_behavior_config
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+        system_prompt = behavior_config.load_prompt("planner")
+
+# ❌ BAD: Hardcoded config values
+def build_agent_graph(...):
+    if True:  # Hardcoded feature flag!
+        router = QueryRouter(...)
+    
+    rag_system = RulesRAG(
+        embedding_model="text-embedding-3-small",  # Hardcoded!
+        top_k=5,  # Hardcoded!
+        similarity_threshold=0.3,  # Hardcoded!
+    )
+    
+    # Hardcoded prompt
+    system_prompt = "You are a helpful assistant..."  # Should be in config file!
+
+# ❌ BAD: Re-loading config in every function
+def some_function():
+    config = get_behavior_config("default")  # Re-loads every time!
+    # Should receive config as parameter instead
+
+# ❌ BAD: Config logic in code
+def build_agent_graph(...):
+    # Determining feature flags by code logic
+    enable_routing = os.getenv("ENABLE_ROUTING", "true") == "true"  # Should be in config!
+    if enable_routing:
+        ...
+```
+
 ## Key Considerations
 
 ### UI Payload Stability
@@ -228,6 +309,15 @@ if plan.selected_tool == "my_custom_tool":  # Tool doesn't exist!
 - **Don't generate** visualization types (use tool results)
 - **Update both** `visualization` and `mcp_raw.visualization` when enhancing
 
+### Configuration Management
+- **All behavioral settings** must come from `behavior_config` JSON files
+- **No hardcoded values** for models, temperatures, thresholds, feature flags
+- **Load config once** at graph construction, pass through as parameter
+- **Prompts in markdown files** referenced by config, not embedded in code
+- **Environment variables** only for deployment-specific settings (paths, API keys)
+- **Feature flags** in config files, not determined by code logic
+- **Test with different configs** to ensure no hardcoded assumptions
+
 ## Things to Ensure
 
 ✅ **DO:**
@@ -238,6 +328,10 @@ if plan.selected_tool == "my_custom_tool":  # Tool doesn't exist!
 - Preserve route endpoints in filtered markers
 - Return state dictionaries from nodes
 - Test UI integration after changes
+- Use `behavior_config` for all behavioral settings
+- Load config once and pass through as parameter
+- Load prompts via `behavior_config.load_prompt(key)`
+- Put new settings in config schema, not code
 
 ## Things to Avoid
 
@@ -250,13 +344,61 @@ if plan.selected_tool == "my_custom_tool":  # Tool doesn't exist!
 - Mix concerns between planner/executor/formatter
 - Generate visualization types (use tool results)
 - Break tool-to-kind mapping
+- Hardcode config values (models, temperatures, thresholds, feature flags)
+- Embed prompts in code (use config files)
+- Re-load config in every function (pass as parameter)
+- Determine feature flags by code logic (use config)
+- Put behavioral settings in environment variables (use config files)
 
 ## Notes
 
 - Focus on architecture compliance, not code style
 - Flag even minor violations to prevent pattern drift
 - Reference `designs/LLM_AGENT_DESIGN.md` for design details
+- Reference `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for configuration system
 - Check `shared/airport_tools.py` for tool manifest
+- Check `data/aviation_agent_configs/default.json` for config schema
 - Verify UI integration in `web/client/ts/adapters/llm-integration.ts`
 - Be constructive - suggest fixes, don't just point out problems
+
+## Configuration System Reference
+
+### What Goes in Config (Behavioral Settings)
+- LLM models, temperatures, streaming per component
+- Feature flags: routing, query reformulation, reranking, next query prediction
+- RAG settings: embedding model, top_k, similarity_threshold, rerank_candidates_multiplier
+- Reranking: provider (cohere/openai/none), model selection
+- System prompts: file paths to markdown files
+
+### What Goes in Environment Variables (Deployment-Specific)
+- `AVIATION_AGENT_CONFIG` - Which config file to use
+- `VECTOR_DB_PATH` / `VECTOR_DB_URL` - ChromaDB location
+- `AIRPORTS_DB` - Path to airports database
+- `RULES_JSON` - Path to rules JSON file
+- `COHERE_API_KEY` / `OPENAI_API_KEY` - API keys (secrets)
+
+### Config Loading Pattern
+```python
+# ✅ GOOD: Load once, pass through
+def build_agent_graph(..., behavior_config=None):
+    if behavior_config is None:
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+    # Use behavior_config throughout
+
+# ✅ GOOD: Load prompt from config
+def build_planner_runnable(..., system_prompt=None):
+    if system_prompt is None:
+        settings = get_settings()
+        behavior_config = get_behavior_config(settings.agent_config_name)
+        system_prompt = behavior_config.load_prompt("planner")
+```
+
+### Common Violations to Flag
+- Hardcoded model names: `model="gpt-4o"` → Use `behavior_config.llms.planner.model`
+- Hardcoded temperatures: `temperature=0.3` → Use `behavior_config.llms.formatter.temperature`
+- Hardcoded feature flags: `if True:` → Use `behavior_config.routing.enabled`
+- Hardcoded thresholds: `similarity_threshold=0.3` → Use `behavior_config.rag.retrieval.similarity_threshold`
+- Embedded prompts: `system_prompt = "You are..."` → Use `behavior_config.load_prompt("planner")`
+- Code-based feature flags: `if os.getenv("FEATURE")` → Use `behavior_config.feature.enabled`
 
