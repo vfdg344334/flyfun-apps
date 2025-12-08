@@ -21,27 +21,10 @@ class HasAvgasFilter(Filter):
         value: Any,
         context: Optional["ToolContext"] = None,
     ) -> bool:
-        if value is None or not value:
-            return True  # Not filtering for AVGAS
-
-        enrichment_storage = getattr(context, "enrichment_storage", None)
-        if not enrichment_storage:
-            return True  # No enrichment data - don't filter (graceful degradation)
-
-        try:
-            fuels = enrichment_storage.get_fuel_availability(airport.ident)
-            if not fuels:
-                return True  # No fuel data for this airport - don't filter
-
-            has_avgas = any(
-                'avgas' in fuel.get('fuel_type', '').lower() and fuel.get('available', False)
-                for fuel in fuels
-            )
-
-            return has_avgas
-        except Exception:
-            # Fuel data table doesn't exist or other error - don't filter
+        if value is None:
             return True
+        has_avgas = bool(getattr(airport, "avgas", False))
+        return has_avgas == bool(value)
 
 
 class HasJetAFilter(Filter):
@@ -55,27 +38,7 @@ class HasJetAFilter(Filter):
         value: Any,
         context: Optional["ToolContext"] = None,
     ) -> bool:
-        if value is None or not value:
-            return True  # Not filtering for Jet-A
-
-        enrichment_storage = getattr(context, "enrichment_storage", None)
-        if not enrichment_storage:
-            return True  # No enrichment data - don't filter (graceful degradation)
-
-        try:
-            fuels = enrichment_storage.get_fuel_availability(airport.ident)
-            if not fuels:
-                return True  # No fuel data for this airport - don't filter
-
-            has_jet_a = any(
-                ('jeta1' in fuel.get('fuel_type', '').lower() or
-                 'jet a1' in fuel.get('fuel_type', '').lower() or
-                 'jet a' in fuel.get('fuel_type', '').lower())
-                and fuel.get('available', False)
-                for fuel in fuels
-            )
-
-            return has_jet_a
-        except Exception:
-            # Fuel data table doesn't exist or other error - don't filter
+        if value is None:
             return True
+        has_jet_a = bool(getattr(airport, "jet_a", False))
+        return has_jet_a == bool(value)
