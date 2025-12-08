@@ -1,45 +1,37 @@
-# Dockerfile for Euro AIP Web Server
-FROM python:3.13-slim
+# Multi-stage build for Euro AIP Web Server
+# Stage 1: Build client with Node.js
+FROM node:20-slim AS client-builder
+
+WORKDIR /build
+
+# Copy client source and dependencies
+COPY web/client/package*.json ./
+RUN npm ci
+
+# Copy client source code
+COPY web/client/ ./
+
+# Build the client
+RUN npm run build
+
+# Stage 2: Final image with web server (uses base image from Dockerfile.base)
+FROM flyfun-base:latest AS final
 
 # Create non-root user with UID 2000
 RUN groupadd -r -g 2000 flyfun && \
     useradd -r -u 2000 -g flyfun -d /app -s /bin/bash flyfun
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better caching
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY shared/ /app/shared/
+# Copy application-specific code
 COPY web/server/ /app/web/server/
-COPY web/client/ /app/web/client/
 
-# Build client (TypeScript to JavaScript)
-WORKDIR /app/web/client
-RUN npm ci && npm run build
+# Copy built client dist from builder stage
+COPY --from=client-builder /build/dist /app/web/client/dist
+# Also copy other client files needed at runtime (CSS, HTML)
+COPY web/client/css/ /app/web/client/css/
+COPY web/client/index.html /app/web/client/index.html
 
-# Install euro_aip from GitHub (latest version)
-WORKDIR /app
-RUN pip install "git+https://github.com/roznet/rzflight@main#egg=euro_aip&subdirectory=euro_aip"
-
-# Create directories for logs and data with correct ownership
-RUN mkdir -p /app/data /app/out /app/logs && \
-    chown -R flyfun:flyfun /app
-
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# Set correct ownership
+RUN chown -R flyfun:flyfun /app
 
 # Switch to non-root user
 USER flyfun

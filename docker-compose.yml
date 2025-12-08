@@ -1,8 +1,19 @@
 services:
+  # Base image shared by web-server and mcp-server
+  # This service builds the base image that other services depend on
+  base:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: flyfun-base:latest
+    # No profiles restriction - base will be built automatically when needed
+    # Base image doesn't run as a service, just builds the image
+
   web-server:
     build:
       context: .
       dockerfile: web/Dockerfile
+    image: flyfun-web-server:latest
     container_name: flyfun-web-server
     ports:
       - "${WEB_PORT:-8000}:8000"
@@ -52,6 +63,7 @@ services:
     build:
       context: .
       dockerfile: mcp_server/Dockerfile
+    image: flyfun-mcp-server:latest
     container_name: flyfun-mcp-server
     # Load environment variables from .env file
     env_file:

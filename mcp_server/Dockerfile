@@ -1,36 +1,16 @@
 # Dockerfile for Euro AIP MCP Server
-FROM python:3.13-slim
+# Uses base image from Dockerfile.base
+FROM flyfun-base:latest AS final
 
 # Create non-root user with UID 2001
 RUN groupadd -r -g 2001 flyfun-mcp && \
     useradd -r -u 2001 -g flyfun-mcp -d /app -s /bin/bash flyfun-mcp
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better caching
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY shared/ /app/shared/
+# Copy application-specific code
 COPY mcp_server/ /app/mcp_server/
 
-# Install euro_aip from GitHub (latest version)
-RUN pip install "git+https://github.com/roznet/rzflight@main#egg=euro_aip&subdirectory=euro_aip"
-
-# Create directories for logs and data with correct ownership
-RUN mkdir -p /app/data /app/out /app/logs && \
-    chown -R flyfun-mcp:flyfun-mcp /app
-
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# Set correct ownership
+RUN chown -R flyfun-mcp:flyfun-mcp /app
 
 # Switch to non-root user
 USER flyfun-mcp
