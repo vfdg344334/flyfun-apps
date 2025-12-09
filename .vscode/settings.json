@@ -17,5 +17,10 @@
         "${workspaceFolder}",
         "${workspaceFolder}/web/server"
     ],
-    "cursorpyright.analysis.typeCheckingMode": "basic"
+    "cursorpyright.analysis.typeCheckingMode": "basic",
+    "files.associations": {
+        "env.sample": "dotenv",
+        "*.env.sample": "dotenv",
+        ".env.sample": "dotenv"
+    }
 }
