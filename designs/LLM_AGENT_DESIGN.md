@@ -27,35 +27,77 @@ This design strongly isolates UI from internal LLM schema changes while still en
 
 ### Core Design
 
-The agent operates in **three steps via LangGraph**:
+The agent uses a **routing-based architecture** that intelligently directs queries to the appropriate path:
 
-1. **Planner Node**
-   - LLM with structured output (`AviationPlan`).
-   - Selects one aviation tool.
-   - Extracts the best possible arguments (including filters).
-   - Specifies answer style.
+1. **Router Node** (optional, configurable)
+   - LLM-based query classification
+   - Routes to: `"rules"`, `"database"`, or `"both"` paths
+   - Extracts relevant countries from query
 
-2. **Tool Runner Node**
-   - Executes the chosen MCP-backed LangChain tool.
-   - Returns raw JSON (`tool_result`).
+2. **Rules Path** (for regulations questions)
+   - **RAG Node**: Retrieves relevant rules using vector search
+   - **Next Query Predictor** (optional): Generates follow-up suggestions
+   - **Rules Agent Node**: Synthesizes natural language answer from retrieved rules
+   - Returns answer with `show_rules` UI payload
 
-3. **Formatter Node**
-   - Produces:
-     - The final answer text.
-     - A **UI payload** (`ui_payload`) with hybrid structure:
-       ```json
-       {
-         "kind": "...",
-         ... stable high-level fields ...,
-         "filters": {...},  // Flattened from mcp_raw.filter_profile
-         "visualization": {...},  // Flattened from mcp_raw.visualization
-         "airports": [...],  // Flattened from mcp_raw.airports
-         "mcp_raw": { ... full MCP response ... }
-       }
-       ```
+3. **Database Path** (for airport/route queries)
+   - **Planner Node**: LLM with structured output (`AviationPlan`)
+     - Selects one aviation tool
+     - Extracts arguments (including filters)
+     - Specifies answer style
+   - **Next Query Predictor** (optional): Generates follow-up suggestions based on plan
+   - **Tool Runner Node**: Executes the chosen MCP-backed LangChain tool
+   - **Formatter Node**: Produces final answer and UI payload
+
+4. **Both Path** (combines database + rules)
+   - Executes database path first
+   - Then adds rules via RAG + Rules Agent
+   - Formatter combines both results
 
 ### Agent State Flow
 
+**With Routing Enabled:**
+```
+┌────────┐     ┌─────────────┐
+│ User   │ --> │ Router Node │
+└────────┘     └─────────────┘
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+     "rules"      "database"     "both"
+        │             │             │
+        ▼             ▼             ▼
+   ┌────────┐   ┌──────────┐   ┌──────────┐
+   │ RAG     │   │ Planner  │   │ Planner  │
+   └────────┘   └──────────┘   └──────────┘
+        │             │             │
+        ▼             ▼             ▼
+   ┌─────────────┐ ┌──────────┐ ┌──────────┐
+   │ Rules Agent │ │ Tool     │ │ Tool     │
+   └─────────────┘ └──────────┘ └──────────┘
+        │             │             │
+        │             ▼             ▼
+        │         ┌──────────┐ ┌──────────┐
+        │         │Formatter │ │ RAG      │
+        │         └──────────┘ └──────────┘
+        │             │             │
+        │             │             ▼
+        │             │         ┌──────────┐
+        │             │         │Rules Agent│
+        │             │         └──────────┘
+        │             │             │
+        └─────────────┴─────────────┘
+                      │
+                      ▼
+                   ┌──────────┐
+                   │ Formatter│ (for "both" path)
+                   └──────────┘
+                      │
+                      ▼
+                     UI
+```
+
+**Without Routing (Backward Compatible):**
 ```
 ┌────────┐     ┌─────────────┐     ┌───────────────┐
 │ User   │ --> │ Planner Node │ --> │ Tool Runner   │ --> Formatter Node --> UI
@@ -79,12 +121,17 @@ The agent follows FlyFun's pattern of separating shared Python libraries (`share
 ```
 shared/aviation_agent/
   __init__.py
-  config.py
+  config.py                # Settings + behavior config loading
+  behavior_config.py        # JSON config schema (Pydantic)
   state.py
   planning.py
   execution.py
   formatting.py
-  graph.py
+  graph.py                  # Graph construction with routing
+  routing.py                # Query router (rules vs database)
+  rules_rag.py              # RAG system for rules retrieval
+  rules_agent.py            # Rules synthesis agent
+  next_query_predictor.py   # Follow-up query suggestions
   adapters/
     __init__.py
     streaming.py          # SSE streaming adapter
@@ -144,9 +191,28 @@ if aviation_agent_chat.feature_enabled():
 
 ### Configuration
 
-- `shared/aviation_agent/config.py` reads environment variables from `web/server/dev.env` / `prod.env`.
-- `AVIATION_AGENT_ENABLED` feature flag controls router inclusion.
-- LLM model configuration via `AVIATION_AGENT_PLANNER_MODEL` and `AVIATION_AGENT_FORMATTER_MODEL`.
+The agent uses a **two-tier configuration system**:
+
+1. **Environment Variables** (`shared/aviation_agent/config.py`):
+   - `AVIATION_AGENT_ENABLED` - Feature flag for router inclusion
+   - `AVIATION_AGENT_CONFIG` - Name of behavior config file (default: `"default"`)
+   - `AVIATION_AGENT_PLANNER_MODEL` - Planner model override (legacy, prefer config file)
+   - `AVIATION_AGENT_FORMATTER_MODEL` - Formatter model override (legacy, prefer config file)
+   - `ROUTER_MODEL` - Router model override (legacy, prefer config file)
+   - `VECTOR_DB_PATH` / `VECTOR_DB_URL` - ChromaDB location
+   - `AIRPORTS_DB` - Path to airports database
+   - `RULES_JSON` - Path to rules JSON file
+   - `COHERE_API_KEY` - For reranking (if using Cohere)
+   - `OPENAI_API_KEY` - For LLMs and embeddings
+
+2. **Behavior Configuration** (JSON files in `configs/aviation_agent/`):
+   - **LLM Settings**: Models, temperatures, streaming per component (planner, formatter, router, rules)
+   - **Feature Flags**: Routing, query reformulation, reranking, next query prediction
+   - **RAG Settings**: Embedding model, retrieval parameters (top_k, similarity_threshold)
+   - **Reranking Settings**: Provider (cohere/openai/none), model selection
+   - **Prompts**: File paths to system prompts (planner, formatter, rules_agent, router)
+
+See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuration documentation.
 
 ---
 
@@ -194,11 +260,26 @@ if aviation_agent_chat.feature_enabled():
 ```python
 class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], operator.add]
+    
+    # Routing
+    router_decision: Optional[RouterDecision]  # Routing decision (rules/database/both)
+    
+    # Rules path
+    retrieved_rules: Optional[List[Dict[str, Any]]]  # RAG-retrieved rules
+    rules_answer: Optional[str]  # Rules agent synthesized answer
+    rules_sources: Optional[Dict[str, List[str]]]  # Categories by country
+    
+    # Database path
     plan: Optional[AviationPlan]
     planning_reasoning: Optional[str]  # Planner's reasoning
     tool_result: Optional[Any]
+    
+    # Next query prediction
+    suggested_queries: Optional[List[dict]]  # Follow-up query suggestions
+    
+    # Output
     formatting_reasoning: Optional[str]  # Formatter's reasoning
-    final_answer: Optional[str]
+    final_answer: Optional[str]  # User-facing response text
     thinking: Optional[str]  # Combined reasoning for UI
     ui_payload: Optional[dict]  # Stable UI structure (hybrid approach)
     error: Optional[str]  # Error message if execution fails
@@ -207,9 +288,14 @@ class AgentState(TypedDict, total=False):
 ### State Fields
 
 - **`messages`**: Conversation history (uses `operator.add` reducer for automatic accumulation)
-- **`plan`**: Structured plan from planner node
+- **`router_decision`**: Routing decision with path (`rules`/`database`/`both`), confidence, countries
+- **`retrieved_rules`**: Rules retrieved via RAG (rules path)
+- **`rules_answer`**: Synthesized answer from rules agent (rules path)
+- **`rules_sources`**: Categories grouped by country for UI display
+- **`plan`**: Structured plan from planner node (database path)
 - **`planning_reasoning`**: Why the planner selected this tool/approach
-- **`tool_result`**: Raw result from tool execution
+- **`tool_result`**: Raw result from tool execution (database path)
+- **`suggested_queries`**: Follow-up query suggestions (optional, configurable)
 - **`formatting_reasoning`**: How the formatter presents results
 - **`final_answer`**: User-facing response text
 - **`thinking`**: Combined reasoning (planning + formatting) for UI display
@@ -230,65 +316,31 @@ The UI payload uses a **hybrid design**:
 ### Implementation
 
 ```python
-def build_ui_payload(plan: AviationPlan, tool_result: dict | None) -> dict | None:
-    if tool_result is None:
-        return None
-
-    # Determine kind based on tool
-    kind = _determine_kind(plan.selected_tool)
-    if not kind:
-        return None
-
-    # Base payload with kind and mcp_raw (authoritative source)
-    base_payload = {
-        "kind": kind,
-        "mcp_raw": tool_result,
-    }
-
-    # Add kind-specific metadata
-    if plan.selected_tool in {"search_airports", "find_airports_near_route", "find_airports_near_location"}:
-        base_payload["departure"] = (
-            plan.arguments.get("from_location") or
-            plan.arguments.get("from_icao") or
-            plan.arguments.get("departure")
-        )
-        base_payload["destination"] = (
-            plan.arguments.get("to_location") or
-            plan.arguments.get("to_icao") or
-            plan.arguments.get("destination")
-        )
-        if plan.arguments.get("ifr") is not None:
-            base_payload["ifr"] = plan.arguments.get("ifr")
-
-    elif plan.selected_tool in {
-        "get_airport_details",
-        "get_border_crossing_airports",
-        "get_airport_statistics",
-        "get_airport_pricing",
-        "get_pilot_reviews",
-        "get_fuel_prices",
-    }:
-        base_payload["icao"] = plan.arguments.get("icao") or plan.arguments.get("icao_code")
-
-    elif plan.selected_tool in {
-        "list_rules_for_country",
-        "compare_rules_between_countries",
-        "get_answers_for_questions",
-        "list_rule_categories_and_tags",
-        "list_rule_countries",
-    }:
-        base_payload["region"] = plan.arguments.get("region") or plan.arguments.get("country_code")
-        base_payload["topic"] = plan.arguments.get("topic") or plan.arguments.get("category")
-
-    # Flatten commonly-used fields for convenience (hybrid approach)
-    if "filter_profile" in tool_result:
-        base_payload["filters"] = tool_result["filter_profile"]
-    if "visualization" in tool_result:
-        base_payload["visualization"] = tool_result["visualization"]
-    if "airports" in tool_result:
-        base_payload["airports"] = tool_result["airports"]
-
-    return base_payload
+def build_ui_payload(
+    plan: AviationPlan,
+    tool_result: dict | None,
+    suggested_queries: List[dict] | None = None
+) -> dict | None:
+    """
+    Builds UI payload with hybrid structure:
+    - Determines kind (route/airport/rules) from tool name
+    - Adds kind-specific metadata (departure, icao, region, etc.)
+    - Flattens commonly-used fields (filters, visualization, airports)
+    - Includes full mcp_raw as authoritative source
+    - Adds suggested_queries if provided
+    """
+    # ... implementation ...
+    
+    # Returns:
+    # {
+    #     "kind": "route" | "airport" | "rules",
+    #     "mcp_raw": {...},  # Full tool result
+    #     "filters": {...},  # Flattened from mcp_raw.filter_profile
+    #     "visualization": {...},  # Flattened from mcp_raw.visualization
+    #     "airports": [...],  # Flattened from mcp_raw.airports
+    #     "suggested_queries": [...],  # Optional
+    #     # Plus kind-specific fields: departure, destination, icao, region, topic, etc.
+    # }
 ```
 
 ### Why This Design?
@@ -301,48 +353,119 @@ def build_ui_payload(plan: AviationPlan, tool_result: dict | None) -> dict | Non
 
 ---
 
-## 8. Formatter Node
+## 8. Routing System
 
-The formatter node produces both the final answer and the UI payload:
+### Router Node
 
-```python
-def formatter_node(state: AgentState) -> Dict[str, Any]:
-    # Format answer using LLM
-    answer = formatter_llm.invoke({
-        "messages": state.get("messages") or [],
-        "answer_style": plan.answer_style,
-        "tool_result_json": json.dumps(tool_result, indent=2),
-        "pretty_text": tool_result.get("pretty", ""),
-    })
-    
-    # Build UI payload
-    ui_payload = build_ui_payload(plan, tool_result)
-    
-    # Optional: Enhance visualization with ICAOs from answer
-    if ui_payload and ui_payload.get("kind") in ["route", "airport"]:
-        mentioned_icaos = _extract_icao_codes(answer)
-        if mentioned_icaos:
-            ui_payload = _enhance_visualization(ui_payload, mentioned_icaos, tool_result)
-    
-    # Generate formatting reasoning
-    formatting_reasoning = f"Formatted answer using {plan.answer_style} style."
-    
-    # Combine planning and formatting reasoning
-    thinking_parts = []
-    if state.get("planning_reasoning"):
-        thinking_parts.append(state["planning_reasoning"])
-    thinking_parts.append(formatting_reasoning)
-    
-    return {
-        "final_answer": answer.strip(),
-        "thinking": "\n\n".join(thinking_parts) if thinking_parts else None,
-        "ui_payload": ui_payload,
-    }
-```
+The router classifies queries into three paths:
+
+- **`"rules"`**: Questions about regulations, procedures, requirements
+- **`"database"`**: Questions about airports, routes, locations
+- **`"both"`**: Questions that need both database results and relevant regulations
+
+The router uses an LLM with structured output (`RouterDecision`) and extracts relevant countries from the query using:
+- ICAO code prefixes (e.g., `LF` → France)
+- Country name matching
+- Airport ICAO codes mentioned in query
+
+### Rules Path Flow
+
+1. **RAG Node**: Retrieves relevant rules using vector search
+   - Uses query reformulation (if enabled) for better matching
+   - Applies reranking (Cohere or OpenAI) if enabled
+   - Filters by countries from router decision
+   
+2. **Next Query Predictor** (optional): Generates follow-up suggestions
+   - Rule-based suggestions based on query context
+   - Considers countries mentioned
+   
+3. **Rules Agent Node**: Synthesizes answer from retrieved rules
+   - Uses LLM to generate natural language explanation
+   - Includes proper citations and source links
+   - Returns `show_rules` UI payload for frontend display
+
+### Database Path Flow
+
+1. **Planner Node**: Selects tool and extracts arguments
+2. **Next Query Predictor** (optional): Generates suggestions based on plan
+3. **Tool Runner Node**: Executes MCP tool
+4. **Formatter Node**: Formats answer and builds UI payload
+
+### Both Path Flow
+
+1. Executes database path (Planner → Tool → Formatter)
+2. Then executes rules path (RAG → Rules Agent)
+3. Formatter combines both results into final answer
 
 ---
 
-## 9. FastAPI Endpoint
+## 9. Formatter Node
+
+The formatter node produces both the final answer and the UI payload. It handles three scenarios:
+
+1. **Database-only path**: Formats tool results
+2. **Rules-only path**: Returns answer from rules agent (no formatting needed)
+3. **Both path**: Combines database and rules answers
+
+```python
+def formatter_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Formats final answer and builds UI payload. Handles three scenarios:
+    1. Database-only: Formats tool results using LLM, builds UI payload, enhances visualization
+    2. Rules-only: Returns empty dict (answer already in state from rules_agent_node)
+    3. Both: Combines database and rules answers, builds UI payload
+    """
+    # ... implementation ...
+    
+    # Returns:
+    # {
+    #     "final_answer": str,  # Formatted markdown answer
+    #     "thinking": str,  # Combined planning + formatting reasoning
+    #     "ui_payload": dict | None,  # UI structure with kind, mcp_raw, etc.
+    # }
+```
+
+**Note**: The formatter uses prompts loaded from the behavior config (`prompts/formatter_v1.md` by default).
+
+---
+
+## 10. Configuration System
+
+### Behavior Configuration
+
+All behavioral settings are controlled via JSON configuration files in `configs/aviation_agent/`:
+
+- **LLM Configuration**: Models, temperatures, streaming per component
+- **Feature Flags**: Routing, query reformulation, reranking, next query prediction
+- **RAG Settings**: Embedding model, retrieval parameters
+- **Reranking Settings**: Provider (cohere/openai/none), model selection
+- **System Prompts**: File paths to prompt markdown files
+
+### Prompt Loading
+
+System prompts are stored as markdown files in `configs/aviation_agent/prompts/`:
+- `planner_v1.md` - Planner system prompt
+- `formatter_v1.md` - Formatter system prompt
+- `rules_agent_v1.md` - Rules agent system prompt
+- `router_v1.md` - Router system prompt
+
+Prompts are loaded via `behavior_config.load_prompt(key)` which resolves paths relative to the config directory.
+
+### LLM Resolution
+
+LLMs are resolved in `langgraph_runner.py` with the following priority:
+1. Explicitly passed LLM instance (for testing)
+2. Model from behavior config (`behavior_config.llms.{component}.model`)
+3. Environment variable override (`AVIATION_AGENT_{COMPONENT}_MODEL`)
+4. Runtime error if none provided
+
+Temperature and streaming settings come from the behavior config.
+
+See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuration documentation.
+
+---
+
+## 11. FastAPI Endpoint
 
 ### Streaming Endpoint
 
@@ -353,29 +476,14 @@ async def aviation_agent_chat_stream(
     settings: AviationAgentSettings = Depends(get_settings),
     session_id: Optional[str] = None,
 ) -> StreamingResponse:
-    graph = build_agent(settings=settings)
+    """
+    SSE streaming endpoint for chat requests.
+    Builds agent graph, streams events (plan, thinking, message, ui_payload, done),
+    and logs conversation after completion.
+    """
+    # ... implementation ...
     
-    async def event_generator():
-        async for event in stream_aviation_agent(
-            request.to_langchain(),
-            graph,
-            session_id=session_id
-        ):
-            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
-        
-        # After streaming, log conversation
-        final_state = graph.invoke({"messages": request.to_langchain()})
-        log_conversation_from_state(...)
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    # Returns: StreamingResponse with SSE events
 ```
 
 ### Response Schema
@@ -402,7 +510,7 @@ The UI uses `ui_payload` to determine visualization:
 
 ---
 
-## 10. MCP Tool & Payload Catalog
+## 12. MCP Tool & Payload Catalog
 
 The shared code centralizes every MCP tool signature in `shared/airport_tools.py`. The agent treats that file as the single source of truth and uses `get_shared_tool_specs()` for planner validation.
 
@@ -436,7 +544,7 @@ See `designs/UI_FILTER_STATE_DESIGN.md` for complete tool-to-visualization mappi
 
 ---
 
-## 11. Design Benefits
+## 13. Design Benefits
 
 ### ✔ Stable for the UI
 Only `kind`, `departure`, `icao`, etc. matter at the top level. UI structure rarely changes.
@@ -467,7 +575,7 @@ switch(ui_payload.kind) {
 
 ---
 
-## 12. Key Design Principles
+## 14. Key Design Principles
 
 ### State-Based Thinking
 - Reasoning stored in state fields (`planning_reasoning`, `formatting_reasoning`)
@@ -491,7 +599,34 @@ switch(ui_payload.kind) {
 
 ---
 
+## 15. Additional Features
+
+### Next Query Prediction
+
+The agent can generate follow-up query suggestions based on the current query and plan:
+- **Database path**: Suggestions based on tool selected, filters applied, locations mentioned
+- **Rules path**: Suggestions for related rule questions
+- **Configuration**: Enabled via `next_query_prediction.enabled`, max suggestions via `max_suggestions`
+- **UI Integration**: Suggestions included in `ui_payload.suggested_queries`
+
+### Query Reformulation
+
+For better RAG matching, queries can be reformulated before vector search:
+- **Configuration**: Enabled via `query_reformulation.enabled`
+- **Implementation**: Uses LLM to rewrite query for better semantic matching
+- **Use Case**: "What are the customs requirements?" → "border crossing procedures customs clearance"
+
+### Reranking
+
+Retrieved rules can be reranked for better relevance:
+- **Providers**: Cohere (specialized rerank models) or OpenAI (embedding similarity)
+- **Configuration**: `reranking.provider` (`cohere`/`openai`/`none`)
+- **Benefits**: Improves relevance of top results, especially for ambiguous queries
+
+---
+
 ## Related Documents
 
+- `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` - Complete configuration system documentation
 - `designs/CHATBOT_WEBUI_DESIGN.md` - WebUI integration and streaming details
-- `designs/TOOL_VISUALIZATION_MAPPING.md` - Complete tool-to-visualization mapping
+- `designs/UI_FILTER_STATE_DESIGN.md` - Complete tool-to-visualization mapping

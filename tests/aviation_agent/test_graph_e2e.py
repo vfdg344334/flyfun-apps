@@ -9,14 +9,20 @@ def test_agent_runner_produces_ui_payload(
     planner_llm_stub,
     formatter_llm_stub,
 ):
+    # Disable routing for this test since we're testing the database path specifically
     state = run_aviation_agent(
         sample_messages,
         settings=agent_settings,
         planner_llm=planner_llm_stub,
         formatter_llm=formatter_llm_stub,
+        enable_routing=False,
     )
 
-    assert state["plan"].selected_tool == "search_airports"
-    assert state["final_answer"]
-    assert state["ui_payload"]["kind"] == "route"
+    plan = state.get("plan")
+    assert plan is not None, "Plan should be present in state"
+    assert plan.selected_tool == "search_airports"
+    assert state.get("final_answer") is not None, "Final answer should be present"
+    ui_payload = state.get("ui_payload")
+    assert ui_payload is not None, "UI payload should be present"
+    assert ui_payload["kind"] == "route"
 

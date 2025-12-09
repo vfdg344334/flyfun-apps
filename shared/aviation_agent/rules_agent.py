@@ -25,37 +25,29 @@ class RulesAgent:
     with proper citations, multi-country comparisons, and source links.
     """
     
-    def __init__(self, llm: Runnable):
+    def __init__(self, llm: Runnable, system_prompt: Optional[str] = None):
         """
         Initialize rules agent.
         
         Args:
             llm: LLM instance for answer synthesis
+            system_prompt: Optional system prompt. If None, loads from config.
         """
         self.llm = llm
+        self.system_prompt = system_prompt
         self.prompt_template = self._build_prompt_template()
     
     def _build_prompt_template(self) -> ChatPromptTemplate:
         """Build the synthesis prompt template."""
+        # Load system prompt from config if not provided
+        if self.system_prompt is None:
+            from .config import get_settings, get_behavior_config
+            settings = get_settings()
+            behavior_config = get_behavior_config(settings.agent_config_name)
+            self.system_prompt = behavior_config.load_prompt("rules_agent")
+        
         return ChatPromptTemplate.from_messages([
-            ("system", """You are an aviation regulations expert assistant. Your role is to answer the pilot's question using ONLY the provided rules and regulations.
-
-Guidelines:
-1. **Answer the specific question** - Focus on what the pilot asked
-2. **Cite countries** - Clearly indicate which rule applies to which country
-3. **Compare when multiple countries** - If rules differ, highlight the differences
-4. **Be concise** - Pilots need clear, actionable information
-5. **Don't make up information** - Only use the provided rules
-6. **Format clearly** - Use markdown with headers, bullets, and bold text
-
-If the retrieved rules don't answer the question, say: "I don't have specific information about that in the regulations I have access to."
-
-Format your answer in markdown:
-- Use **bold** for country names and key terms
-- Use bullet points for lists
-- Use `code` for airport codes (ICAO)
-
-CRITICAL: Do NOT add any "References", "Sources", or links section. Do NOT include any markdown links like [text](url) or [text](#). The system will automatically add references after your answer. Your answer should end immediately after answering the question."""),
+            ("system", self.system_prompt),
             
             ("human", """Question: {query}
 

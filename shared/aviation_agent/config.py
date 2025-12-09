@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -9,6 +10,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.airport_tools import ToolContext
+
+logger = logging.getLogger(__name__)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +133,11 @@ class AviationAgentSettings(BaseSettings):
         description="LLM model for query routing",
         alias="ROUTER_MODEL",
     )
+    agent_config_name: Optional[str] = Field(
+        default="default",
+        description="Name of agent behavior config file (without .json). Loads from configs/aviation_agent/",
+        alias="AVIATION_AGENT_CONFIG",
+    )
 
     def build_tool_context(self, *, load_rules: bool = True) -> ToolContext:
         """
@@ -178,4 +186,42 @@ def get_settings() -> AviationAgentSettings:
     """
 
     return AviationAgentSettings()
+
+
+@lru_cache(maxsize=10)  # Cache multiple configs by config name
+def get_behavior_config(config_name: str = "default") -> "AgentBehaviorConfig":
+    """
+    Load agent behavior configuration from config directory.
+    
+    Args:
+        config_name: Name of config file (without .json extension)
+        
+    Returns:
+        AgentBehaviorConfig instance with _config_dir set for prompt loading
+    """
+    from .behavior_config import AgentBehaviorConfig
+    
+    config_dir = PROJECT_ROOT / "configs" / "aviation_agent"
+    config_file = config_dir / f"{config_name}.json"
+
+    if config_file.exists():
+        config = AgentBehaviorConfig.from_file(config_file)
+        config._config_dir = config_dir  # Store for prompt loading
+        logger.info(f"Loaded agent behavior config: {config_name}")
+        return config
+
+    # Fall back to default if specified config doesn't exist
+    if config_name != "default":
+        default_file = config_dir / "default.json"
+        if default_file.exists():
+            logger.warning(f"Config '{config_name}' not found, using 'default'")
+            config = AgentBehaviorConfig.from_file(default_file)
+            config._config_dir = config_dir
+            return config
+
+    # Final fallback to hardcoded defaults
+    logger.info(f"Using default hardcoded behavior config (config '{config_name}' not found)")
+    config = AgentBehaviorConfig.default()
+    config._config_dir = config_dir
+    return config
 
