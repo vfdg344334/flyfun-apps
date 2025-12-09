@@ -697,7 +697,7 @@ class Application {
 
     // Show right panel and its content
     if (rightPanel) rightPanel.classList.remove('hidden');
-    
+
     // Show airport content and hide no-selection message
     if (airportContent) airportContent.style.display = 'flex';
     if (noSelection) noSelection.style.display = 'none';
@@ -907,12 +907,29 @@ class Application {
       entries.forEach((entry: any) => {
         const fieldName = entry.std_field || entry.field;
         const entryId = `aip-entry-${entry.std_field_id || entry.field || Math.random()}`;
-        html += `
+
+        // For parsed notifications, convert newlines to <br> tags for proper display
+        let displayValue = this.escapeHtml(entry.value || 'N/A');
+        if (entry.parsed_notification) {
+          displayValue = displayValue.replace(/\n/g, '<br>');
+        }
+
+        // For parsed notifications, put value on new line after the field name
+        if (entry.parsed_notification) {
+          html += `
+            <div class="aip-entry parsed-notification" id="${entryId}" data-field="${this.escapeAttribute(fieldName || '')}" data-value="${this.escapeAttribute(entry.value || '')}">
+              <strong>${this.escapeHtml(fieldName || 'Unknown')}:</strong><br>
+              <span class="notification-summary">${displayValue}</span>
+            </div>
+          `;
+        } else {
+          html += `
             <div class="aip-entry" id="${entryId}" data-field="${this.escapeAttribute(fieldName || '')}" data-value="${this.escapeAttribute(entry.value || '')}">
-              <strong>${this.escapeHtml(fieldName || 'Unknown')}:</strong> ${this.escapeHtml(entry.value || 'N/A')}
+              <strong>${this.escapeHtml(fieldName || 'Unknown')}:</strong> ${displayValue}
               ${entry.alt_value ? `<br><em>${this.escapeHtml(entry.alt_value)}</em>` : ''}
             </div>
-        `;
+          `;
+        }
       });
 
       html += `

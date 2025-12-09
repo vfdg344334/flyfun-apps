@@ -521,7 +521,7 @@ async def get_airport_detail(
     
     return AirportDetail.from_airport(airport)
 
-@router.get("/{icao}/aip-entries", response_model=List[AIPEntryResponse])
+@router.get("/{icao}/aip-entries")
 async def get_airport_aip_entries(
     request: Request,
     icao: str = Path(..., description="ICAO airport code", max_length=4, min_length=4),
@@ -545,7 +545,46 @@ async def get_airport_aip_entries(
     if std_field:
         entries = [e for e in entries if e.std_field == std_field]
     
-    return [AIPEntryResponse.from_aip_entry(e) for e in entries]
+    # Get parsed notification summary if available
+    from notification_service import get_notification_service
+    notification_service = get_notification_service()
+    parsed_notification = notification_service.get_notification_summary(icao.upper())
+    
+    # Convert entries to dicts, injecting parsed notifications for field 302
+    result = []
+    for e in entries:
+        entry_dict = e.to_dict()
+        
+        # If this is customs/immigration and we have a parsed summary
+        if e.std_field_id == 302 and parsed_notification and parsed_notification.get("summary"):
+            # Clean up summary - remove empty lines
+            summary = parsed_notification["summary"]
+            cleaned_lines = []
+            for line in summary.split("\n"):
+                line = line.strip()
+                # Skip empty lines or lines that are just "Hours:" with nothing after
+                if not line:
+                    continue
+                # Skip lines with empty hours or contact info
+                if line in ("Hours:", "📞", "📧", "| Hours:", "Schengen |", "Non-Schengen only |"):
+                    continue
+                # Skip lines ending with "| Hours:" or "Hours:" (empty hours)
+                if line.endswith("| Hours:") or line.endswith("Hours:"):
+                    continue
+                # Skip lines that are just "something | Hours:" pattern
+                if "| Hours:" in line and line.split("| Hours:")[-1].strip() == "":
+                    continue
+                if line.endswith(" |") and "|" not in line[:-2]:
+                    continue
+                cleaned_lines.append(line)
+            
+            entry_dict["value"] = "\n".join(cleaned_lines)
+            entry_dict["parsed_notification"] = True
+            entry_dict["notification_confidence"] = parsed_notification.get("confidence")
+        
+        result.append(entry_dict)
+    
+    return result
 
 @router.get("/{icao}/procedures")
 async def get_airport_procedures(

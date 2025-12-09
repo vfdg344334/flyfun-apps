@@ -32,7 +32,7 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    allowedHosts: ['ovh.zhaoqian.me', 'localhost', '127.0.0.1'],
+    allowedHosts: ['ovh.zhaoqian.me', 'localhost', '127.0.0.1', 'flyfun.downle.eu.org'],
     hmr: {
       // Disable full page reload - only update modules
       overlay: true,

@@ -14,6 +14,9 @@ from euro_aip.models.procedure import Procedure
 from euro_aip.models.aip_entry import AIPEntry
 from euro_aip.models.runway import Runway
 
+# Import notification service for parsed customs/immigration
+from notification_service import get_notification_service
+
 
 class GAFriendlySummary(BaseModel):
     """
@@ -166,10 +169,36 @@ class AirportDetail(BaseModel):
             sources=list(airport.sources),
             runways=[r.to_dict() for r in airport.runways],
             procedures=[p.to_dict() for p in airport.procedures],
-            aip_entries=[e.to_dict() for e in airport.aip_entries],
+            aip_entries=cls._get_aip_entries_with_parsed_notifications(airport),
             created_at=airport.created_at.isoformat(),
             updated_at=airport.updated_at.isoformat()
         )
+    
+    @classmethod
+    def _get_aip_entries_with_parsed_notifications(cls, airport: Airport) -> List[Dict[str, Any]]:
+        """
+        Get aip_entries with parsed notification summaries injected.
+        
+        For std_field_id=302 (Customs and immigration), replace the value
+        with the parsed summary from ga_notifications.db if available.
+        """
+        notification_service = get_notification_service()
+        parsed_notification = notification_service.get_notification_summary(airport.ident)
+        
+        entries = []
+        for e in airport.aip_entries:
+            entry_dict = e.to_dict()
+            
+            # If this is the customs/immigration field and we have a parsed summary
+            if e.std_field_id == 302 and parsed_notification and parsed_notification.get("summary"):
+                # Replace value with parsed summary
+                entry_dict["value"] = parsed_notification["summary"]
+                entry_dict["parsed_notification"] = True
+                entry_dict["notification_confidence"] = parsed_notification.get("confidence")
+            
+            entries.append(entry_dict)
+        
+        return entries
 
 
 class AIPEntryResponse(BaseModel):
