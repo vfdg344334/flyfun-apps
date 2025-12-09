@@ -18,9 +18,5 @@ extract them as a 'filters' object in the 'arguments' field. Only include filter
 Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,
 country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee.
 
-Example: 'airports between Paris and LOWI' → {{'from_location': 'Paris', 'to_location': 'LOWI'}}
-Example: 'airports near Vik, Iceland' → {{'location_query': 'Vik, Iceland'}}
-Example: 'route from LFPG to LEMD with AVGAS' → {{'from_location': 'LFPG', 'to_location': 'LEMD', 'filters': {{'has_avgas': true}}}}
-
 Pick the tool that can produce the most authoritative answer for the pilot.
 
