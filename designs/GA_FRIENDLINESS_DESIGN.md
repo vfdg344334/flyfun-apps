@@ -231,7 +231,7 @@ CREATE TABLE ga_airfield_stats (
 
 - **Separation of Sources**: Review-derived and AIP-derived scores are stored separately, allowing personas to prefer one source over another
 - **Transparency**: Raw AIP data is preserved alongside computed scores for debugging and transparency
-- **Persona Flexibility**: Personas can specify source preferences (prefer AIP, prefer review, prefer combined, or require both)
+- **Persona Flexibility**: Personas define weight vectors over all feature scores, allowing fine-grained control over which sources matter most
 - **Normalized Scores**: All feature scores are normalized [0, 1] to allow weighted combination in persona scoring
 
 #### 3.2.2 `ga_landing_fees`
@@ -304,28 +304,7 @@ Intended usage:
 - Tag-based filtering (optional future extension):
   - e.g. filter airports that have tags like “good restaurant” or “no handling”.
 
-#### 3.2.5 `ga_aip_rule_summary` (Optional)
-
-High-level summary of AIP notification requirements for scoring.
-
-**Note:** Detailed notification requirements are stored in a separate database/design. This table only contains the normalized score used for GA friendliness scoring.
-
-```sql
-CREATE TABLE ga_aip_rule_summary (
-    icao                TEXT PRIMARY KEY,
-    notification_summary TEXT,     -- Human-readable: "24h weekdays, 48h weekends"
-    hassle_level        TEXT,      -- 'low', 'moderate', 'high', 'very_high'
-    notification_score  REAL,      -- Normalized score [0, 1] for scoring
-    last_updated_utc    TEXT
-);
-```
-
-**Purpose:**
-- High-level summary for UI display.
-- Normalized score feeds into `ga_hassle_score` feature.
-- See separate notification requirements design document for detailed rule storage.
-
-#### 3.2.6 `ga_meta_info`
+#### 3.2.5 `ga_meta_info`
 
 General metadata and build info.
 
@@ -351,7 +330,6 @@ Example keys:
 - Primary keys:
   - `ga_airfield_stats(icao)`
   - `ga_review_summary(icao)`
-  - `ga_aip_rule_summary(icao)`
   - `ga_meta_info(key)`
 - Secondary indexes:
   - `ga_landing_fees(icao)` - for per-airport lookups
@@ -490,16 +468,17 @@ For each `icao`:
    - `aip_hospitality_score` computed from `aip_hotel_info`, `aip_restaurant_info`
    - AIP raw data stored separately: `aip_ifr_available`, `aip_hotel_info`, `aip_restaurant_info`, etc.
 
-**Note:** Review-derived and AIP-derived scores are computed and stored separately. Personas determine how to combine them at scoring time based on source preferences.
+**Note:** Review-derived and AIP-derived scores are computed and stored separately. Personas combine them at scoring time using a simple weighted sum over all available feature scores.
 
 **AIP-Derived Score Computation:**
 
 AIP-derived scores are computed from raw AIP data fields:
 
-- **`aip_ops_ifr_score`**: 
+- **`aip_ops_ifr_score`**:
   - Computed from `aip_ifr_available` (0-4 scale)
   - Formula: `if aip_ifr_available == 0 then 0.1 else (aip_ifr_available / 4.0 * 0.8 + 0.2)`
   - Maps: 0→0.1, 1→0.4, 2→0.6, 3→0.8, 4→1.0
+  - **Note:** VFR-only airports (aip_ifr_available=0) receive a score of 0.1 rather than 0.0 because they still provide utility as diversion options in VMC for VFR operations. A score of 0.0 would imply "completely unusable" which is too harsh for VFR-capable fields.
 
 - **`aip_hospitality_score`**:
   - Computed from `aip_hotel_info` and `aip_restaurant_info` integer fields
@@ -522,6 +501,348 @@ AIP-derived scores are computed from raw AIP data fields:
 
 Scores are written to `ga_airfield_stats`.
 
+### 4.5.1 Feature Mapping Configuration (Config-Driven Feature Computation)
+
+**Design Goal:** Make feature computation fully configurable without code changes. This allows easily:
+- Changing which aspects contribute to which features
+- Updating label-to-score mappings
+- Adding aspects to existing features
+- Tuning feature calculation formulas
+
+All without modifying Python code or rebuilding the application.
+
+**Configuration File:** `feature_mappings.json`
+
+```json
+{
+  "version": "2.0",
+  "description": "Feature mapping configuration for GA friendliness scoring",
+
+  "review_feature_definitions": {
+    "review_cost_score": {
+      "description": "Cost/fee friendliness from pilot reviews",
+      "aspects": [
+        {
+          "name": "cost",
+          "weight": 1.0
+        }
+      ],
+      "aggregation": "weighted_label_mapping",
+      "label_scores": {
+        "cheap": 0.9,
+        "reasonable": 0.6,
+        "expensive": 0.3,
+        "very_expensive": 0.1,
+        "unclear": null
+      }
+    },
+
+    "review_hassle_score": {
+      "description": "Bureaucracy/paperwork burden from reviews",
+      "aspects": [
+        {
+          "name": "bureaucracy",
+          "weight": 0.7
+        },
+        {
+          "name": "staff",
+          "weight": 0.3
+        }
+      ],
+      "aggregation": "weighted_label_mapping",
+      "label_scores": {
+        "bureaucracy": {
+          "simple": 0.9,
+          "moderate": 0.6,
+          "complex": 0.3,
+          "very_complex": 0.1
+        },
+        "staff": {
+          "very_positive": 0.9,
+          "positive": 0.7,
+          "neutral": 0.5,
+          "negative": 0.3,
+          "very_negative": 0.1
+        }
+      }
+    },
+
+    "review_fun_score": {
+      "description": "Fun factor from food/vibe reviews",
+      "aspects": [
+        {
+          "name": "food",
+          "weight": 0.6
+        },
+        {
+          "name": "overall_experience",
+          "weight": 0.4
+        }
+      ],
+      "aggregation": "weighted_label_mapping"
+    },
+
+    "review_hospitality_score": {
+      "description": "Restaurant/hotel availability from reviews",
+      "aspects": [
+        {
+          "name": "restaurant",
+          "weight": 0.6
+        },
+        {
+          "name": "accommodation",
+          "weight": 0.4
+        }
+      ],
+      "aggregation": "weighted_label_mapping",
+      "label_scores": {
+        "restaurant": {
+          "on_site": 1.0,
+          "walking": 0.9,
+          "nearby": 0.7,
+          "available": 0.5,
+          "none": 0.0
+        },
+        "accommodation": {
+          "on_site": 1.0,
+          "walking": 0.9,
+          "nearby": 0.7,
+          "available": 0.5,
+          "none": 0.0
+        }
+      }
+    }
+  },
+
+  "aip_feature_definitions": {
+    "aip_ops_ifr_score": {
+      "description": "IFR capability from official AIP data",
+      "raw_fields": ["aip_ifr_available"],
+      "computation": "lookup_table",
+      "value_mapping": {
+        "0": 0.1,
+        "1": 0.4,
+        "2": 0.6,
+        "3": 0.8,
+        "4": 1.0
+      },
+      "notes": "0.1 for VFR-only preserves utility as diversion option"
+    },
+
+    "aip_hospitality_score": {
+      "description": "Hotel/restaurant from official AIP data",
+      "raw_fields": ["aip_hotel_info", "aip_restaurant_info"],
+      "computation": "weighted_component_sum",
+      "component_mappings": {
+        "aip_hotel_info": {
+          "0": 0.0,
+          "1": 0.6,
+          "2": 1.0
+        },
+        "aip_restaurant_info": {
+          "0": 0.0,
+          "1": 0.6,
+          "2": 1.0
+        }
+      },
+      "component_weights": {
+        "aip_hotel_info": 0.4,
+        "aip_restaurant_info": 0.6
+      }
+    }
+  }
+}
+```
+
+**Configuration Structure:**
+
+**Review Feature Definitions:**
+- `aspects`: List of ontology aspects that contribute to this feature
+  - Each aspect has a `name` (must exist in ontology) and `weight`
+  - Multiple aspects are combined via weighted average
+- `aggregation`: Method for combining aspect data
+  - `"weighted_label_mapping"`: Map aspect labels to scores, then weighted average
+- `label_scores`: Mapping of aspect labels to numeric scores [0, 1]
+  - Can be flat (single aspect) or nested by aspect name (multiple aspects)
+  - `null` values are treated as missing data
+
+**AIP Feature Definitions:**
+- `raw_fields`: List of raw AIP database fields used in computation
+- `computation`: Method for computing score
+  - `"lookup_table"`: Direct mapping from field value to score
+  - `"weighted_component_sum"`: Weighted combination of multiple fields
+- `value_mapping`: For lookup_table, maps raw values to scores
+- `component_mappings` + `component_weights`: For weighted_component_sum, maps each field and combines
+
+**Implementation in `features.py`:**
+
+```python
+class FeatureMapper:
+    def __init__(self, config: FeatureMappingConfig):
+        """Load feature definitions from config file."""
+        self.config = config
+        self.review_feature_defs = config.review_feature_definitions
+        self.aip_feature_defs = config.aip_feature_definitions
+
+    def compute_review_feature_scores(
+        self,
+        icao: str,
+        distributions: Dict[str, Dict[str, float]]
+    ) -> Dict[str, float]:
+        """
+        Compute ALL review-derived features from config definitions.
+        No hard-coded logic - everything driven by config.
+        """
+        scores = {}
+        for feature_name, definition in self.review_feature_defs.items():
+            scores[feature_name] = self._compute_review_feature(
+                definition, distributions
+            )
+        return scores
+
+    def _compute_review_feature(
+        self,
+        definition: ReviewFeatureDefinition,
+        distributions: Dict[str, Dict[str, float]]
+    ) -> Optional[float]:
+        """
+        Compute a single review feature from its definition.
+
+        Generic computation based on config - supports multiple aspects
+        with different weights combined via weighted average.
+        """
+        if definition.aggregation == "weighted_label_mapping":
+            total_score = 0.0
+            total_weight = 0.0
+
+            for aspect_config in definition.aspects:
+                aspect_name = aspect_config["name"]
+                aspect_weight = aspect_config["weight"]
+
+                # Get label distribution for this aspect
+                label_dist = distributions.get(aspect_name, {})
+                if not label_dist:
+                    continue
+
+                # Get label scores for this aspect
+                if isinstance(definition.label_scores, dict):
+                    # Check if nested by aspect or flat
+                    if aspect_name in definition.label_scores:
+                        label_scores = definition.label_scores[aspect_name]
+                    else:
+                        label_scores = definition.label_scores
+                else:
+                    continue
+
+                # Map labels to score using config
+                aspect_score = self._map_labels_to_score(
+                    label_dist,
+                    label_scores
+                )
+
+                if aspect_score is not None:
+                    total_score += aspect_weight * aspect_score
+                    total_weight += aspect_weight
+
+            return total_score / total_weight if total_weight > 0 else None
+
+        return None
+
+    def compute_aip_feature_scores(
+        self,
+        icao: str,
+        aip_data: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        Compute ALL AIP-derived features from config definitions.
+        No hard-coded logic - everything driven by config.
+        """
+        scores = {}
+        for feature_name, definition in self.aip_feature_defs.items():
+            scores[feature_name] = self._compute_aip_feature(
+                definition, aip_data
+            )
+        return scores
+
+    def _compute_aip_feature(
+        self,
+        definition: AIPFeatureDefinition,
+        aip_data: Dict[str, Any]
+    ) -> Optional[float]:
+        """
+        Compute a single AIP feature from its definition.
+
+        Supports multiple computation methods based on config.
+        """
+        if definition.computation == "lookup_table":
+            # Simple value lookup
+            field_name = definition.raw_fields[0]
+            value = aip_data.get(field_name)
+            if value is None:
+                return None
+
+            return definition.value_mapping.get(str(value))
+
+        elif definition.computation == "weighted_component_sum":
+            # Weighted combination of multiple fields
+            total_score = 0.0
+            total_weight = 0.0
+
+            for field_name in definition.raw_fields:
+                value = aip_data.get(field_name)
+                if value is None:
+                    continue
+
+                # Map value to score
+                component_score = definition.component_mappings[field_name].get(str(value))
+                if component_score is None:
+                    continue
+
+                # Get weight
+                weight = definition.component_weights[field_name]
+
+                total_score += weight * component_score
+                total_weight += weight
+
+            return total_score / total_weight if total_weight > 0 else None
+
+        return None
+```
+
+**Benefits of This Approach:**
+
+1. **Change aspect contributions without code:**
+   - Want hassle to include staff feedback more heavily? Edit JSON, change weight from 0.3 to 0.5
+   - Want to add "fuel" aspect to hassle score? Add to aspects array
+
+2. **Update label mappings without code:**
+   - Think "expensive" should be 0.2 instead of 0.3? Edit JSON
+   - Add new labels from ontology? Add to label_scores
+
+3. **Tune AIP formulas without code:**
+   - Want different IFR score mapping? Edit value_mapping
+   - Change hospitality weights (60/40 vs 50/50)? Edit component_weights
+
+4. **Easy to experiment:**
+   - Test different scoring approaches by swapping config files
+   - A/B test different feature definitions
+   - Roll back by reverting config file
+
+5. **Single source of truth:**
+   - All feature logic documented in JSON
+   - Easy to see what contributes to each feature
+   - No need to read Python code to understand scoring
+
+**What Still Requires Code Changes:**
+
+- Adding completely new feature scores (new schema column needed)
+- New aggregation methods beyond weighted_label_mapping and weighted_component_sum
+- Complex custom formulas that don't fit declarative patterns
+
+**Fallback Behavior:**
+
+If `feature_mappings.json` is not provided, the system falls back to hard-coded defaults in `features.py` that match the config structure above. This ensures backward compatibility and provides working defaults out of the box.
+
 ### 4.6 Summary Generation Step (Per Airport)
 
 For each airport (`icao`):
@@ -539,23 +860,25 @@ For each airport (`icao`):
 
 3. **Store** in `ga_review_summary`.
 
-### 4.7 AIP Notification Score Integration (Optional)
+### 4.7 AIP Notification Score Integration (Future Work)
 
-**Goal:** Integrate AIP notification requirement scores into GA friendliness scoring.
+**Status:** The notification parsing system is being developed separately and is **not part of this migration**.
 
-**Integration Approach:**
+**What's included in this migration:**
+- ✅ Ensure persona scoring can handle missing notification data
+- ✅ Don't break if notification features are added later
 
-- AIP notification requirements are parsed and stored separately (see separate notification requirements design document).
-- The notification parsing system generates a normalized `notification_score` [0, 1] that represents the hassle level of notification requirements.
-- This score is stored in `ga_aip_rule_summary.notification_score` and feeds into the `ga_hassle_score` feature.
-- The `ga_hassle_score` combines:
-  - Review-based bureaucracy scores (from review tags)
-  - AIP notification scores (weighted combination, typically 70% reviews, 30% AIP rules)
+**What's NOT included:**
+- ❌ Creating `ga_aip_rule_summary` table (will be added in future migration)
+- ❌ Populating notification data
+- ❌ Using `--parse-notifications` flag
+- ❌ Integrating notification scores into hassle scoring
 
-**Integration:**
-- Optional feature (works with or without notification data)
-- Notification scores are read from `ga_aip_rule_summary` table
-- If notification data is not available, `ga_hassle_score` uses only review-based scores
+**Future integration (after this migration):**
+- A separate notification parsing system will create its own table structure
+- Notification scores may be added as a new feature (e.g., `aip_notification_score`)
+- Personas can then weight notification scores independently
+- For now, personas should only weight `review_hassle_score` for bureaucracy assessment
 
 ### 4.8 Incremental Updates
 
@@ -606,25 +929,47 @@ Scores stored in `ga_airfield_stats` are organized by source:
 - `aip_ops_ifr_score`        (0–1) - Computed from `aip_ifr_available`
 - `aip_hospitality_score`    (0–1) - Computed from `aip_hotel_info`, `aip_restaurant_info`
 
-**Source Preference Strategy:**
+**Persona Scoring Approach:**
 
-Personas can specify how to combine review-derived and AIP-derived scores for each feature:
-- **`prefer_review`** - Use review score if available, fall back to AIP score
-- **`prefer_aip`** - Use AIP score if available, fall back to review score
-- **`prefer_combined`** - Weighted average of both (e.g., 70% review, 30% AIP)
-- **`require_both`** - Only compute score if both sources are available
-- **`review_only`** - Only use review score (ignore AIP)
-- **`aip_only`** - Only use AIP score (ignore review)
+Personas compute scores using a **simple weighted sum** of all available feature scores. Each persona defines a weight vector over all feature scores (both review-derived and AIP-derived). If a persona doesn't care about a particular source or feature, they simply set its weight to 0.
+
+**Available Feature Scores:**
+- All review-derived scores: `review_cost_score`, `review_hassle_score`, `review_review_score`, `review_ops_ifr_score`, `review_ops_vfr_score`, `review_access_score`, `review_fun_score`, `review_hospitality_score`
+- All AIP-derived scores: `aip_ops_ifr_score`, `aip_hospitality_score`
 
 **Note:** Some features are only available from one source:
 - `review_cost_score` - Only from reviews (fees are separate)
 - `review_review_score` - Only from reviews (overall experience)
 - `review_fun_score` - Only from reviews (subjective "fun" factor)
 - `review_access_score` - Only from reviews (transport/accessibility)
+- `aip_ops_ifr_score` - Only from AIP data (IFR capability)
+- `aip_hospitality_score` - Only from AIP data (hotel/restaurant info)
+
+### 5.1.1 Complete List of Weightable Features
+
+Personas can assign weights to any of the following feature scores. This is the **canonical list** of all available features:
+
+**Review-derived (8 features):**
+1. `review_cost_score` - Cost/fee friendliness from pilot reviews
+2. `review_hassle_score` - Bureaucracy/paperwork burden from reviews
+3. `review_review_score` - Overall experience from reviews
+4. `review_ops_ifr_score` - IFR operations quality from reviews
+5. `review_ops_vfr_score` - VFR/runway quality from reviews
+6. `review_access_score` - Transportation/accessibility from reviews
+7. `review_fun_score` - "Fun factor" from food/vibe reviews
+8. `review_hospitality_score` - Restaurant/hotel from reviews
+
+**AIP-derived (2 features):**
+9. `aip_ops_ifr_score` - IFR capability from official AIP data (0-4 scale)
+10. `aip_hospitality_score` - Hotel/restaurant from official AIP data
+
+**Total: 10 weightable features** (8 review + 2 AIP)
+
+Personas omit features they don't care about (implicit weight = 0.0).
 
 ### 5.2 Persona Definitions
 
-Personas are defined in `personas.json` (JSON format):
+Personas are defined in `personas.json` (JSON format). Each persona is a **weight vector** over all available feature scores.
 
 ```json
 {
@@ -634,79 +979,65 @@ Personas are defined in `personas.json` (JSON format):
       "label": "IFR touring (SR22)",
       "description": "Typical SR22T IFR touring mission: prefers solid IFR capability, reasonable fees, low bureaucracy. Some weight on hospitality for overnight stops.",
       "weights": {
-        "ops_ifr_score": 0.25,
-        "hassle_score": 0.20,
-        "cost_score": 0.20,
-        "review_score": 0.15,
-        "access_score": 0.10,
-        "hospitality_score": 0.10
-      },
-      "source_preferences": {
-        "ops_ifr_score": "prefer_aip",
-        "hassle_score": "prefer_review",
-        "hospitality_score": "prefer_review",
-        "ops_vfr_score": "prefer_review"
+        "aip_ops_ifr_score": 0.25,
+        "review_hassle_score": 0.20,
+        "review_cost_score": 0.20,
+        "review_review_score": 0.15,
+        "review_access_score": 0.10,
+        "review_hospitality_score": 0.05,
+        "aip_hospitality_score": 0.05
       },
       "missing_behaviors": {
-        "ops_ifr_score": "negative",
-        "hospitality_score": "exclude"
+        "aip_ops_ifr_score": "negative",
+        "review_hospitality_score": "exclude",
+        "aip_hospitality_score": "exclude"
       }
     },
     "vfr_budget": {
       "label": "VFR fun / budget",
       "description": "VFR sightseeing / burger runs: emphasis on cost, fun/vibe, hospitality (good lunch spot), and general GA friendliness.",
       "weights": {
-        "cost_score": 0.30,
-        "fun_score": 0.20,
-        "hospitality_score": 0.20,
-        "review_score": 0.15,
-        "access_score": 0.10,
-        "ops_vfr_score": 0.05
-      },
-      "source_preferences": {
-        "hospitality_score": "prefer_review",
-        "ops_vfr_score": "prefer_review"
+        "review_cost_score": 0.30,
+        "review_fun_score": 0.20,
+        "review_hospitality_score": 0.20,
+        "review_review_score": 0.15,
+        "review_access_score": 0.10,
+        "review_ops_vfr_score": 0.05
       },
       "missing_behaviors": {
-        "hospitality_score": "neutral"
+        "review_hospitality_score": "neutral"
       }
     },
     "training": {
       "label": "Training field",
       "description": "Regular training/circuit work: solid runway, availability, low hassle, reasonable cost.",
       "weights": {
-        "ops_vfr_score": 0.30,
-        "hassle_score": 0.25,
-        "cost_score": 0.20,
-        "review_score": 0.15,
-        "fun_score": 0.10
-      },
-      "source_preferences": {
-        "ops_vfr_score": "prefer_combined",
-        "hassle_score": "prefer_review"
+        "review_ops_vfr_score": 0.30,
+        "review_hassle_score": 0.25,
+        "review_cost_score": 0.20,
+        "review_review_score": 0.15,
+        "review_fun_score": 0.10
       },
       "missing_behaviors": {
-        "hospitality_score": "exclude",
-        "ops_ifr_score": "exclude"
+        "review_hospitality_score": "exclude",
+        "aip_hospitality_score": "exclude",
+        "aip_ops_ifr_score": "exclude"
       }
     },
     "lunch_stop": {
       "label": "Lunch stop / day trip",
       "description": "Day trip destination: emphasis on great restaurant/café, good vibe, easy access, reasonable cost.",
       "weights": {
-        "hospitality_score": 0.35,
-        "fun_score": 0.25,
-        "cost_score": 0.15,
-        "hassle_score": 0.15,
-        "access_score": 0.10
-      },
-      "source_preferences": {
-        "hospitality_score": "prefer_combined",
-        "hassle_score": "prefer_review"
+        "review_hospitality_score": 0.25,
+        "aip_hospitality_score": 0.10,
+        "review_fun_score": 0.25,
+        "review_cost_score": 0.15,
+        "review_hassle_score": 0.15,
+        "review_access_score": 0.10
       },
       "missing_behaviors": {
-        "hospitality_score": "negative",
-        "ops_ifr_score": "exclude"
+        "review_hospitality_score": "negative",
+        "aip_ops_ifr_score": "exclude"
       }
     }
   }
@@ -714,21 +1045,32 @@ Personas are defined in `personas.json` (JSON format):
 ```
 
 **Rules:**
-- Weights should ideally sum to 1.0 (not strictly required)
-- Feature names in weights are **logical names** (e.g., `ops_ifr_score`, `hassle_score`) without source prefix
-- Features not mentioned have weight 0.0
+- Weights should ideally sum to 1.0 (not strictly required, but recommended for interpretability)
+- Feature names in weights are **actual database field names** with source prefix (e.g., `review_cost_score`, `aip_ops_ifr_score`)
+- Features not mentioned have weight 0.0 (implicitly excluded)
+- If a persona doesn't care about reviews, set all `review_*_score` weights to 0
+- If a persona doesn't care about AIP data, set all `aip_*_score` weights to 0
 - Versioned via `personas_version` in `ga_meta_info`
 
-**Source Preferences:**
-- `source_preferences` (optional) - Dict mapping logical feature name to source preference strategy
-- If not specified for a feature, uses default strategy (typically `prefer_combined` with 70% review, 30% AIP)
-- Available strategies:
-  - `prefer_review` - Use review score if available, fall back to AIP score
-  - `prefer_aip` - Use AIP score if available, fall back to review score
-  - `prefer_combined` - Weighted average (default: 70% review, 30% AIP)
-  - `require_both` - Only compute score if both sources are available
-  - `review_only` - Only use review score (ignore AIP)
-  - `aip_only` - Only use AIP score (ignore review)
+**Weight Validation:**
+- **Normalization:** The scoring function normalizes by the sum of active weights: `score = Σ(w×v) / Σ(w)`
+- Therefore, weights don't strictly need to sum to 1.0 (weights {0.3, 0.2, 0.5} produce the same result as {3, 2, 5})
+- **Best Practice:** Weights should sum to 1.0 for readability and interpretability
+- **Validation:** Persona loading should WARN (not error) if weights don't sum to 1.0 ± 0.01
+
+Example validation:
+```python
+def validate_persona_weights(weights: Dict[str, float]) -> None:
+    total = sum(weights.values())
+    if abs(total - 1.0) > 0.01:
+        logger.warning(f"Persona weights sum to {total:.2f}, expected ~1.0")
+```
+
+**Feature Validation:**
+- All weighted features must exist in `ga_airfield_stats` schema
+- Unknown features raise a validation error at persona load time
+- This prevents typos and ensures personas stay in sync with schema changes
+- Available features are defined in: `shared/ga_friendliness/models.py::AirportFeatureScores`
 
 **Missing Behaviors:**
 - `neutral` (default): Treat missing value as 0.5 (average)
@@ -738,47 +1080,51 @@ Personas are defined in `personas.json` (JSON format):
 
 When a feature has weight 0.0, missing_behavior is irrelevant. Only specify missing_behaviors for features where the default (neutral) isn't appropriate.
 
-### 5.3 Scoring Function (Conceptual)
+### 5.3 Scoring Function
 
 For airport `icao`, persona `P`:
 
 ```text
-// Step 1: Resolve source preference for each feature
-for each feature f:
-    source_strategy = get_source_preference(P, f) or "prefer_combined"
-    resolved_score[f] = combine_sources(
-        review_score[f],
-        aip_score[f],
-        source_strategy
-    )
+// Step 1: Apply missing value behavior for each feature
+for each feature f in all_features:
+    weight = weight_P[f]  // from persona config (0.0 if not specified)
+    if weight == 0.0:
+        continue  // Feature not used by this persona
+    
+    value = feature_value[f]  // read from ga_airfield_stats
+    behavior = missing_behavior_P[f] or "neutral"
+    effective_value[f] = resolve_missing(value, behavior)
+    
+    if behavior == "exclude" and value is NULL:
+        continue  // Skip this feature entirely
+    
+    total_score += weight * effective_value[f]
+    total_weight += weight
 
-// Step 2: Apply missing value behavior
-for each feature f:
-    effective_value[f] = resolve_missing(resolved_score[f], missing_behavior_P[f])
-
-// Step 3: Compute weighted sum
-score_P(icao) = Σ_f ( weight_P[f] * effective_value[f] ) / Σ(active_weights)
+// Step 2: Normalize by total active weight
+score_P(icao) = total_score / total_weight  (if total_weight > 0, else 0.5)
 ```
 
 Where:
 
-- `review_score[f]` and `aip_score[f]` are read from `ga_airfield_stats`:
-  - `review_cost_score`, `review_hassle_score`, `review_ops_ifr_score`, etc.
-  - `aip_ops_ifr_score`, `aip_hospitality_score`, etc.
-- `combine_sources()` applies the source preference strategy:
-  - `prefer_review`: `review_score` if not NULL, else `aip_score`
-  - `prefer_aip`: `aip_score` if not NULL, else `review_score`
-  - `prefer_combined`: `0.7 * review_score + 0.3 * aip_score` (if both available)
-  - `require_both`: NULL if either is missing
-  - `review_only`: `review_score` (ignore AIP)
-  - `aip_only`: `aip_score` (ignore review)
-- `weight_P[f]` is read from persona config (logical feature names).
+- `all_features` = all feature scores in `ga_airfield_stats`:
+  - `review_cost_score`, `review_hassle_score`, `review_review_score`, `review_ops_ifr_score`, `review_ops_vfr_score`, `review_access_score`, `review_fun_score`, `review_hospitality_score`
+  - `aip_ops_ifr_score`, `aip_hospitality_score`
+- `weight_P[f]` is read from persona config (actual field names with source prefix)
+- `feature_value[f]` is the raw value from `ga_airfield_stats` (may be NULL)
 - `missing_behavior_P[f]` determines how to handle NULL feature values:
-  - `neutral`: use 0.5
-  - `negative`: use 0.0 (required feature)
-  - `positive`: use 1.0
-  - `exclude`: skip feature, don't include in `active_weights`
-- `active_weights` = sum of weights for features that weren't excluded
+  - `neutral` (default): use 0.5 (average)
+  - `negative`: use 0.0 (required feature, missing = worst case)
+  - `positive`: use 1.0 (rare, assume best case)
+  - `exclude`: skip feature entirely, don't include in `total_weight`
+- `total_weight` = sum of weights for features that weren't excluded
+- If `total_weight == 0` (all features excluded or missing), return default score of 0.5
+
+**Example:**
+- Persona has weights: `{"review_cost_score": 0.3, "aip_ops_ifr_score": 0.2, "review_hassle_score": 0.5}`
+- Airport has: `review_cost_score = 0.8`, `aip_ops_ifr_score = NULL`, `review_hassle_score = 0.6`
+- Missing behavior for `aip_ops_ifr_score` is `"negative"` → use 0.0
+- Score = `(0.3 * 0.8 + 0.2 * 0.0 + 0.5 * 0.6) / (0.3 + 0.2 + 0.5)` = `0.54 / 1.0` = `0.54`
 
 ### 5.4 Where Scores Are Stored
 
@@ -786,7 +1132,7 @@ Where:
 
 - Base feature scores (review-derived and AIP-derived) are stored in `ga_airfield_stats`
 - Persona-specific composite scores are computed dynamically at runtime
-- Runtime layer reads base features and computes persona scores using `personas.json` weights and source preferences
+- Runtime layer reads base features and computes persona scores using `personas.json` weight vectors (simple weighted sum)
 - No schema changes needed for new personas or persona weight adjustments
 
 **Benefits:**

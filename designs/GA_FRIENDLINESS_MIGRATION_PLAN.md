@@ -20,11 +20,9 @@ The schema has been restructured to:
 
 - `mandatory_handling` (INTEGER)
 - `ifr_procedure_available` (INTEGER) - merged into `aip_ifr_available`
-- `notification_hassle_score` (REAL) - **Note:** Notification integration handled separately
 - `score_ifr_touring` (REAL)
 - `score_vfr_budget` (REAL)
 - `score_training` (REAL)
-- `ga_ops_vfr_score` (REAL) - AIP-derived version removed (review version kept)
 
 ### Fields to Rename/Change
 
@@ -101,6 +99,15 @@ aip_hospitality_score REAL,
 - **Note:** Notification scores are handled separately and not part of this migration
 
 ### 3. `shared/ga_friendliness/features.py`
+
+**Goal:** Implement config-driven feature computation (Option 1) to enable changing feature calculations without code changes.
+
+**Major Changes:**
+
+1. **Make feature computation fully configurable**
+2. **Load feature definitions from `feature_mappings.json`**
+3. **Generic computation methods driven by config**
+4. **Maintain hard-coded defaults as fallback**
 
 **Hospitality Text Classification:**
 
@@ -186,20 +193,204 @@ def parse_hospitality_text_to_int(text: Optional[str]) -> int:
 **New functions needed:**
 - `parse_hospitality_text_to_int(text: Optional[str]) -> int`:
   - Parse AIP text to integer encoding (0=unknown/none, 1=vicinity, 2=at_airport)
-  - Implementation provided below
+  - Implementation provided above
 
-**`FeatureMapper` class changes:**
-- Split `compute_feature_scores()` into:
-  - `compute_review_feature_scores()` - returns review-derived scores
-  - `compute_aip_feature_scores()` - returns AIP-derived scores
-- Update `map_ops_ifr_score()` to use `aip_ifr_available` (0-4 enum) instead of boolean
-- Remove `notification_hassle_score` parameter from `map_hassle_score()` (notification integration handled separately)
-- Add `map_aip_ops_ifr_score(aip_ifr_available: int) -> float`
-- Add `map_aip_hospitality_score(hotel_info: int, restaurant_info: int) -> float`
-- Remove `map_ops_vfr_score()` for AIP (keep review version)
+**`FeatureMapper` class refactoring for config-driven computation:**
+
+**Key Changes:**
+1. **Load configuration:** Read `feature_mappings.json` at initialization
+2. **Generic review feature computation:** Loop over review_feature_definitions from config
+3. **Generic AIP feature computation:** Loop over aip_feature_definitions from config
+4. **Remove hard-coded feature logic:** All computation driven by config structure
+5. **Maintain fallback defaults:** If no config file, use hard-coded defaults
+
+**New class structure:**
+```python
+class FeatureMapper:
+    def __init__(self, config: Optional[FeatureMappingConfig] = None):
+        """
+        Initialize with feature mapping configuration.
+
+        Args:
+            config: Feature mapping config (from feature_mappings.json)
+                   If None, uses hard-coded defaults
+        """
+        if config is None:
+            config = self._get_default_config()
+
+        self.config = config
+        self.review_feature_defs = config.review_feature_definitions
+        self.aip_feature_defs = config.aip_feature_definitions
+
+    def compute_review_feature_scores(
+        self,
+        icao: str,
+        distributions: Dict[str, Dict[str, float]]
+    ) -> Dict[str, float]:
+        """
+        Compute ALL review-derived features from config definitions.
+        No hard-coded logic - everything driven by config.
+
+        Returns dict mapping feature_name -> score (0-1)
+        """
+        scores = {}
+        for feature_name, definition in self.review_feature_defs.items():
+            scores[feature_name] = self._compute_review_feature(
+                definition, distributions
+            )
+        return scores
+
+    def _compute_review_feature(
+        self,
+        definition: ReviewFeatureDefinition,
+        distributions: Dict[str, Dict[str, float]]
+    ) -> Optional[float]:
+        """
+        Generic review feature computation based on definition.
+
+        Supports:
+        - Multiple aspects with different weights
+        - Aspect-specific label score mappings
+        - Weighted averaging of aspect scores
+        """
+        if definition.aggregation == "weighted_label_mapping":
+            total_score = 0.0
+            total_weight = 0.0
+
+            for aspect_config in definition.aspects:
+                aspect_name = aspect_config["name"]
+                aspect_weight = aspect_config["weight"]
+
+                # Get label distribution for this aspect
+                label_dist = distributions.get(aspect_name, {})
+                if not label_dist:
+                    continue
+
+                # Get label scores (may be nested by aspect or flat)
+                label_scores = self._get_label_scores_for_aspect(
+                    definition, aspect_name
+                )
+
+                # Map labels to score
+                aspect_score = self._map_labels_to_score(
+                    label_dist, label_scores
+                )
+
+                if aspect_score is not None:
+                    total_score += aspect_weight * aspect_score
+                    total_weight += aspect_weight
+
+            return total_score / total_weight if total_weight > 0 else None
+
+        return None
+
+    def compute_aip_feature_scores(
+        self,
+        icao: str,
+        aip_data: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        Compute ALL AIP-derived features from config definitions.
+        No hard-coded logic - everything driven by config.
+
+        Args:
+            aip_data: Dict with keys like 'aip_ifr_available', 'aip_hotel_info', etc.
+
+        Returns dict mapping feature_name -> score (0-1)
+        """
+        scores = {}
+        for feature_name, definition in self.aip_feature_defs.items():
+            scores[feature_name] = self._compute_aip_feature(
+                definition, aip_data
+            )
+        return scores
+
+    def _compute_aip_feature(
+        self,
+        definition: AIPFeatureDefinition,
+        aip_data: Dict[str, Any]
+    ) -> Optional[float]:
+        """
+        Generic AIP feature computation based on definition.
+
+        Supports:
+        - lookup_table: Direct value -> score mapping
+        - weighted_component_sum: Weighted combination of multiple fields
+        """
+        if definition.computation == "lookup_table":
+            field_name = definition.raw_fields[0]
+            value = aip_data.get(field_name)
+            if value is None:
+                return None
+
+            return definition.value_mapping.get(str(value))
+
+        elif definition.computation == "weighted_component_sum":
+            total_score = 0.0
+            total_weight = 0.0
+
+            for field_name in definition.raw_fields:
+                value = aip_data.get(field_name)
+                if value is None:
+                    continue
+
+                # Map value to score
+                component_score = definition.component_mappings[field_name].get(
+                    str(value)
+                )
+                if component_score is None:
+                    continue
+
+                weight = definition.component_weights[field_name]
+                total_score += weight * component_score
+                total_weight += weight
+
+            return total_score / total_weight if total_weight > 0 else None
+
+        return None
+
+    def _get_default_config(self) -> FeatureMappingConfig:
+        """
+        Hard-coded default configuration as fallback.
+
+        Matches the structure in feature_mappings.json example.
+        This ensures the system works without external config file.
+        """
+        # Return default config matching design document example
+        # (Implementation details: create config programmatically)
+        pass
+```
+
+**What changes from current implementation:**
+
+**OLD (hard-coded):**
+```python
+def compute_feature_scores(...) -> AirportFeatureScores:
+    cost_score = self.map_cost_score(distributions)
+    hassle_score = self.map_hassle_score(distributions)
+    # ... 8 hard-coded calls
+    return AirportFeatureScores(...)
+```
+
+**NEW (config-driven):**
+```python
+def compute_review_feature_scores(...) -> Dict[str, float]:
+    scores = {}
+    for feature_name, definition in self.review_feature_defs.items():
+        scores[feature_name] = self._compute_review_feature(definition, distributions)
+    return scores
+```
+
+**Benefits:**
+- Add "fuel" aspect to hassle_score? Edit JSON, change aspect weights
+- Change cost label scores? Edit JSON
+- Combine multiple aspects differently? Edit JSON
+- **No code changes for any of the above**
 
 **Formula updates:**
 - `aip_ops_ifr_score`: `if aip_ifr_available == 0 then 0.1 else (aip_ifr_available / 4.0 * 0.8 + 0.2)`
+  - Maps: 0→0.1, 1→0.4, 2→0.6, 3→0.8, 4→1.0
+  - **Rationale for 0.1:** VFR-only airports still provide utility as diversion options in VMC for VFR operations. A score of 0.0 would imply "completely unusable" which is too harsh.
 - `aip_hospitality_score`: `0.6 * restaurant_score + 0.4 * hotel_score` where:
   - `restaurant_score = 1.0 if aip_restaurant_info == 2 else (0.6 if aip_restaurant_info == 1 else 0.0)`
   - `hotel_score = 1.0 if aip_hotel_info == 2 else (0.6 if aip_hotel_info == 1 else 0.0)`
@@ -293,32 +484,51 @@ aip_scores = self.feature_mapper.compute_aip_feature_scores(
 ### 7. `shared/ga_friendliness/personas.py`
 
 **`PersonaManager` class:**
-- Update to handle source preferences (prefer_review, prefer_aip, prefer_combined, etc.)
+- **Simplify scoring to weighted sum** - Remove source preference logic
 - Update `compute_score()` to:
-  - Read both `review_*_score` and `aip_*_score` fields
-  - Apply source preference strategy per feature
-  - Combine scores based on persona configuration
-- Update field name references from `ga_*_score` to logical names with source resolution
+  - Read all feature scores directly from `ga_airfield_stats` (review_*_score and aip_*_score fields)
+  - Apply weights directly to actual field names (no logical name mapping)
+  - Simple weighted sum: `score = Σ(weight[field] * value[field]) / Σ(active_weights)`
+- Update `PersonaWeights` model to use actual field names (e.g., `review_cost_score`, `aip_ops_ifr_score`) instead of logical names
+- Remove `source_preferences` handling entirely
 
-**New logic needed:**
+**Simplified logic:**
 ```python
-def _resolve_feature_score(
+def compute_score(
     self,
-    feature_name: str,  # e.g., "ops_ifr_score"
-    review_score: Optional[float],
-    aip_score: Optional[float],
-    source_preference: str
-) -> Optional[float]:
-    """Resolve feature score based on source preference."""
-    if source_preference == "prefer_review":
-        return review_score if review_score is not None else aip_score
-    elif source_preference == "prefer_aip":
-        return aip_score if aip_score is not None else review_score
-    elif source_preference == "prefer_combined":
-        if review_score is not None and aip_score is not None:
-            return 0.7 * review_score + 0.3 * aip_score
-        return review_score or aip_score
-    # ... etc
+    persona_id: str,
+    features: AirportFeatureScores  # or dict of field_name -> value
+) -> float:
+    """Compute persona score as weighted sum of all feature scores."""
+    persona = self.get_persona(persona_id)
+    total_score = 0.0
+    total_weight = 0.0
+    
+    # All available feature scores (both review and AIP)
+    all_features = [
+        "review_cost_score", "review_hassle_score", "review_review_score",
+        "review_ops_ifr_score", "review_ops_vfr_score", "review_access_score",
+        "review_fun_score", "review_hospitality_score",
+        "aip_ops_ifr_score", "aip_hospitality_score"
+    ]
+    
+    for field_name in all_features:
+        weight = persona.weights.get(field_name, 0.0)
+        if weight == 0.0:
+            continue  # Feature not used by this persona
+        
+        value = getattr(features, field_name, None)
+        behavior = persona.missing_behaviors.get(field_name, MissingBehavior.NEUTRAL)
+        
+        effective_value = self._resolve_missing_value(value, behavior)
+        
+        if behavior == MissingBehavior.EXCLUDE and value is None:
+            continue  # Skip excluded features
+        
+        total_score += weight * effective_value
+        total_weight += weight
+    
+    return total_score / total_weight if total_weight > 0 else 0.5
 ```
 
 ### 8. `tools/build_ga_friendliness.py`
@@ -344,12 +554,69 @@ def _resolve_feature_score(
 ### 9. Persona Configuration Updates
 
 **`personas.json` structure:**
-- Update field names in weights to logical names (without prefix):
-  - `ga_cost_score` → `cost_score`
-  - `ga_ops_ifr_score` → `ops_ifr_score`
+- **Remove `source_preferences` entirely** - No longer needed
+- Update field names in `weights` from logical names (e.g., `ops_ifr_score`, `cost_score`) to actual database field names with source prefix:
+  - `cost_score` → `review_cost_score`
+  - `ops_ifr_score` → `aip_ops_ifr_score` or `review_ops_ifr_score` (or both)
+  - `hassle_score` → `review_hassle_score`
+  - `hospitality_score` → `review_hospitality_score` and/or `aip_hospitality_score`
   - etc.
-- Add `source_preferences` section to persona configs
+- Each persona is now a simple weight vector over all available feature scores
+- If a persona doesn't care about a source, set its weights to 0 (or omit from config)
 - Update default personas in `config.py` if they exist
+
+**Example migration:**
+```json
+{
+  "weights": {
+    "ops_ifr_score": 0.25,
+    "hassle_score": 0.20,
+    "hospitality_score": 0.15
+  },
+  "source_preferences": {
+    "ops_ifr_score": "prefer_aip",
+    "hassle_score": "prefer_review",
+    "hospitality_score": "prefer_combined"
+  }
+}
+```
+
+**Becomes (simple weighted sum):**
+```json
+{
+  "weights": {
+    "aip_ops_ifr_score": 0.25,
+    "review_hassle_score": 0.20,
+    "review_hospitality_score": 0.10,
+    "aip_hospitality_score": 0.05
+  }
+}
+```
+
+**Key changes:**
+- Persona can weight both `review_hospitality_score` and `aip_hospitality_score` independently
+- If persona prefers AIP for IFR, they use `aip_ops_ifr_score` with high weight, `review_ops_ifr_score` with 0 (or omitted)
+- If persona doesn't care about reviews at all, all `review_*_score` weights are 0
+- Much simpler: just a weight vector, no source preference logic needed
+
+**Validation Requirements:**
+- **Weight validation:** Warn (not error) if persona weights don't sum to 1.0 ± 0.01
+- **Feature validation:** Error if persona references unknown feature names (prevents typos)
+- **Schema validation:** All weighted features must exist in `ga_airfield_stats`
+
+Example validation code:
+```python
+def validate_persona(persona: Persona, available_features: Set[str]) -> None:
+    # Check weight sum
+    total = sum(persona.weights.values())
+    if abs(total - 1.0) > 0.01:
+        logger.warning(f"Persona '{persona.label}' weights sum to {total:.2f}, expected ~1.0")
+
+    # Check unknown features
+    unknown = set(persona.weights.keys()) - available_features
+    if unknown:
+        raise ValueError(f"Persona '{persona.label}' references unknown features: {unknown}")
+```
 
 ## Migration Strategy
 
@@ -371,52 +638,97 @@ If existing data needs to be preserved:
 
 ## Testing Checklist
 
+### Schema & Storage
 - [ ] Schema creation matches design
 - [ ] Hotel/restaurant text parsing to integers works correctly
 - [ ] Review-derived scores computed and stored with `review_` prefix
 - [ ] AIP-derived scores computed and stored with `aip_` prefix
-- [ ] Persona scoring works with source preferences
-- [ ] Runtime persona score computation works
 - [ ] Storage read/write operations work with new field names
+
+### Config-Driven Feature Computation (Option 1)
+- [ ] `feature_mappings.json` loads correctly
+- [ ] Config validation catches invalid aspect names
+- [ ] Config validation catches invalid aggregation methods
+- [ ] Generic review feature computation works for all features
+- [ ] Generic AIP feature computation works for all features
+- [ ] Multi-aspect features (e.g., hassle = bureaucracy + staff) compute correctly
+- [ ] Label score mappings apply correctly
+- [ ] Fallback to hard-coded defaults works when config file missing
+- [ ] Changing config and rebuilding produces different scores (verify config actually used)
+- [ ] Invalid config shows clear error messages
+
+### Persona Scoring
+- [ ] Persona scoring works with weighted sum over all feature scores
+- [ ] Missing behaviors (neutral, negative, positive, exclude) work correctly
+- [ ] Weights are properly normalized when features are excluded
+- [ ] Persona weight validation warns when weights don't sum to ~1.0
+- [ ] Feature validation catches unknown feature names
+- [ ] Runtime persona score computation works
+
+### End-to-End
 - [ ] Builder pipeline produces correct output
-- [ ] All tests updated and passing
+- [ ] All unit tests updated and passing
+- [ ] Integration tests pass with new schema
+- [ ] Can rebuild database from scratch with new code
+- [ ] Spot check: EGTF, LFPB, EDDB scores are reasonable
 
 ## Files to Modify
 
 1. `shared/ga_friendliness/database.py` - Schema definition
 2. `shared/ga_friendliness/models.py` - Pydantic models
-3. `shared/ga_friendliness/features.py` - Feature computation logic
-4. `shared/ga_friendliness/storage.py` - Database operations
-5. `shared/ga_friendliness/builder.py` - Pipeline orchestration
-6. `shared/ga_friendliness/personas.py` - Persona scoring with source preferences
-7. `shared/ga_friendliness/sources.py` - Hospitality parsing (optional)
-8. `shared/ga_friendliness/config.py` - Default persona configs (if any)
+3. **`shared/ga_friendliness/features.py` - Config-driven feature computation (major refactor)**
+4. **`shared/ga_friendliness/config.py` - Add config models for `feature_mappings.json` loading**
+5. `shared/ga_friendliness/storage.py` - Database operations
+6. `shared/ga_friendliness/builder.py` - Pipeline orchestration
+7. `shared/ga_friendliness/personas.py` - Persona scoring with weighted sum
+8. `shared/ga_friendliness/sources.py` - Hospitality parsing (optional)
 9. All test files in `tests/ga_friendliness/`
+10. **Create `feature_mappings.json` - Default feature computation config (optional, for users to customize)**
 
 ## Estimated Effort
 
 - Schema changes: ~2 hours
 - Model updates: ~2 hours
-- Feature computation refactoring: ~4 hours
+- **Config-driven feature computation (Option 1):**
+  - Config models and loading: ~2 hours
+  - Generic review feature computation: ~3 hours
+  - Generic AIP feature computation: ~2 hours
+  - Hard-coded defaults as fallback: ~2 hours
+  - **Subtotal: ~9 hours**
 - Storage layer updates: ~2 hours
 - Builder updates: ~3 hours
-- Persona scoring with source preferences: ~4 hours
-- Testing and validation: ~4 hours
+- Persona scoring with weighted sum: ~2 hours (simplified from source preferences)
+- Persona validation (weights, features): ~1 hour
+- Testing and validation: ~5 hours (increased due to config testing)
 
-**Total: ~21 hours**
+**Total: ~28 hours** (increased from ~20 hours due to config-driven feature computation)
 
-**Note:** Notification agent updates are handled separately and not included in this estimate.
+**Note:**
+- Notification agent updates are handled separately and not included in this estimate
+- Config-driven feature computation (Option 1) adds ~8 hours but provides significant long-term flexibility
+- This is a one-time investment that makes future changes much faster (minutes instead of hours)
 
 ## Additional Notes
 
 ### Notification Integration (Out of Scope)
 
-The notification parsing system (`shared/ga_notification_agent`) is being updated independently. For this migration:
+**Status:** The notification parsing system is being developed separately and is **not part of this migration**.
 
-- **Do not use `--parse-notifications` flag** during migration
-- Notification-related schema changes (`ga_aip_rule_summary` table) are preserved but not actively used
-- Once notification agent is updated, it will integrate with the new schema
-- Notification scores will be consumed at runtime from `ga_aip_rule_summary` when computing persona scores (future integration)
+**What's included in this migration:**
+- ✅ Ensure persona scoring can handle missing notification data
+- ✅ Don't break if notification features are added later
+
+**What's NOT included:**
+- ❌ Creating `ga_aip_rule_summary` table (will be added in future migration)
+- ❌ Populating notification data
+- ❌ Using `--parse-notifications` flag during migration
+- ❌ Integrating notification scores into hassle scoring
+
+**Future integration (after this migration):**
+- A separate notification parsing system will create its own table structure
+- Notification scores may be added as a new feature (e.g., `aip_notification_score`)
+- Personas can then weight notification scores independently
+- For now, personas should only weight `review_hassle_score` for bureaucracy assessment
 
 ### Migration Strategy
 
@@ -435,4 +747,55 @@ The notification parsing system (`shared/ga_notification_agent`) is being update
 ### Backward Compatibility
 
 **Not Required:** This is a breaking change. The new schema is not backward compatible with the old one. Applications using the old schema will need to be updated to use the new field names.
+
+---
+
+## Config-Driven Feature Computation (Option 1) - Summary
+
+**What is Option 1?**
+
+Make all feature computation configurable via `feature_mappings.json` instead of hard-coded in Python. This enables changing feature calculations without code changes or application rebuilds.
+
+**Benefits:**
+
+1. **Change calculations without code:**
+   - Update label scores (e.g., "expensive" = 0.2 instead of 0.3)
+   - Change which aspects contribute to features
+   - Adjust aspect weights (hassle = 70% bureaucracy + 30% staff)
+   - Modify AIP formulas (IFR score mapping)
+
+2. **Easy experimentation:**
+   - Test different scoring approaches
+   - A/B test feature definitions
+   - Roll back by reverting config file
+   - No need to rebuild application
+
+3. **Clear documentation:**
+   - All feature logic in JSON (not scattered in code)
+   - Easy to understand what contributes to each score
+   - Single source of truth for feature definitions
+
+4. **Faster iteration:**
+   - Before: Change code → rebuild app → rebuild DB (~1 hour)
+   - After: Edit JSON → rebuild DB (~30 minutes)
+   - Saves ~50% time per scoring tweak
+
+**Trade-offs:**
+
+- **Pro:** Much more flexible for tuning calculations
+- **Pro:** Easier to maintain and document
+- **Con:** ~8 hours additional implementation time
+- **Con:** Slightly more complex config loading logic
+
+**Recommendation:**
+
+Implement Option 1 during this migration. The ~8 hours of extra work is a one-time investment that will save many hours in the future. Given your goal of being able to easily update feature calculations, this is the right architectural choice.
+
+**What still requires code changes:**
+
+- Adding completely new feature scores (still need schema column)
+- Complex formulas that don't fit declarative patterns
+- New aggregation methods (beyond weighted_label_mapping and weighted_component_sum)
+
+These are rare compared to the common case of tweaking existing feature calculations.
 
