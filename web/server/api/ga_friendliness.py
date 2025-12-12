@@ -66,7 +66,38 @@ def _get_notification_summary(icao: str) -> Optional[str]:
         if not row or not row["summary"]:
             return None
         
-        return row["summary"].strip()
+        # Clean up the summary - remove empty values
+        import re
+        summary = row["summary"].strip()
+        cleaned_lines = []
+        for line in summary.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Remove patterns like "| Hours:" at end of line
+            line = re.sub(r'\|\s*Hours:\s*$', '', line)
+            # Remove "Hours:" alone at start
+            line = re.sub(r'^Hours:\s*$', '', line)
+            # Remove lines that are just "| Hours:"
+            line = re.sub(r'^\|\s*Hours:\s*$', '', line)
+            # Remove trailing " |"
+            line = re.sub(r'\s*\|\s*$', '', line)
+            line = line.strip()
+            
+            # Skip if line became empty
+            if not line:
+                continue
+            # Skip lines that are only emoji placeholders with no value
+            if line in ("📞", "📧"):
+                continue
+            # Skip lines like "📞 " or "📧 " with only whitespace after
+            if re.match(r'^[📞📧]\s*$', line):
+                continue
+                
+            cleaned_lines.append(line)
+        
+        return "\n".join(cleaned_lines) if cleaned_lines else None
         
     except Exception as e:
         logger.warning(f"Error fetching notification for {icao}: {e}")
