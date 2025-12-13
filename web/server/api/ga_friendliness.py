@@ -34,20 +34,12 @@ def _get_notification_summary(icao: str) -> Optional[str]:
     
     Returns the parsed and formatted summary from the ga_notification_requirements table.
     """
-    # Find notification database path
-    possible_paths = [
-        Path(os.environ.get("GA_NOTIFICATIONS_DB", "")),
-        Path(__file__).parent.parent.parent.parent / "data" / "ga_notifications.db",
-        Path("/home/qian/dev/022_Home/flyfun-apps/data/ga_notifications.db"),
-    ]
+    # Get notification database path using consistent pattern
+    from shared.aviation_agent.config import get_ga_notifications_db_path
     
-    db_path = None
-    for p in possible_paths:
-        if p.exists() and p.stat().st_size > 0:
-            db_path = p
-            break
+    db_path = Path(get_ga_notifications_db_path())
     
-    if not db_path:
+    if not db_path.exists():
         return None
     
     try:
@@ -392,6 +384,53 @@ class GAFriendlinessService:
         except Exception as e:
             logger.error(f"Error getting GA summary for {icao}: {e}")
             return AirportGASummaryResponse(icao=icao.upper(), has_data=False)
+
+    def get_landing_fee_by_weight(
+        self,
+        icao: str,
+        mtow_kg: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get landing fee for a given MTOW (Maximum Take-Off Weight).
+
+        Args:
+            icao: Airport ICAO code
+            mtow_kg: Maximum Take-Off Weight in kilograms
+
+        Returns:
+            Dict with:
+            - fee: Landing fee amount
+            - currency: Currency code
+            - fee_band: Fee band name (e.g., "fee_band_750_1199kg")
+            - fee_last_updated_utc: Last update timestamp
+            Or None if not available
+        """
+        if not self._enabled or not self.storage:
+            return None
+
+        try:
+            stats = self.storage.get_airfield_stats(icao.upper())
+            if not stats:
+                return None
+
+            # Map MTOW to fee band
+            from shared.ga_friendliness.features import get_fee_band_for_mtow
+
+            fee_band = get_fee_band_for_mtow(mtow_kg)
+            fee_value = getattr(stats, fee_band, None)
+
+            if fee_value is None:
+                return None
+
+            return {
+                "fee": fee_value,
+                "currency": stats.fee_currency,
+                "fee_band": fee_band,
+                "fee_last_updated_utc": stats.fee_last_updated_utc,
+            }
+        except Exception as e:
+            logger.error(f"Error getting landing fee for {icao}: {e}")
+            return None
 
 
 # --- Global Service Instance ---

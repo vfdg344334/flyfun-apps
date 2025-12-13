@@ -16,7 +16,6 @@ from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
 from euro_aip.models.navpoint import NavPoint
 from euro_aip.storage.database_storage import DatabaseStorage
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
 from .rules_manager import RulesManager
 from .filtering import FilterEngine
@@ -42,10 +41,16 @@ class ToolSpec(TypedDict):
 
 @dataclass
 class ToolContext:
-    """Context providing access to shared resources for tool execution."""
+    """
+    Context providing access to shared resources for tool execution.
+
+    Note: ToolContext is NOT stateful - do not store user-specific state here.
+    Pass user preferences (like persona) via tool function parameters or context dicts.
+    """
 
     model: EuroAipModel
-    enrichment_storage: Optional[EnrichmentStorage] = None
+    notification_service: Optional[Any] = None  # NotificationService (lazy import to avoid circular deps)
+    ga_friendliness_service: Optional[Any] = None  # GAFriendlinessService (lazy import)
     rules_manager: Optional[RulesManager] = None
 
     @classmethod
@@ -55,17 +60,51 @@ class ToolContext:
         rules_path: Optional[str] = None,
         load_rules: bool = True,
     ) -> "ToolContext":
+        """
+        Create ToolContext with optional services loaded from environment.
+
+        Services are optional and will gracefully degrade if not available.
+        """
+        from pathlib import Path
+
+        # Load core model (required)
         storage = DatabaseStorage(db_path)
         model = storage.load_model()
-        enrichment = EnrichmentStorage(db_path)
 
+        # Initialize NotificationService (optional)
+        notification_service = None
+        try:
+            from shared.aviation_agent.config import get_ga_notifications_db_path
+            from web.server.notification_service import NotificationService
+            notifications_db = get_ga_notifications_db_path()
+            notification_service = NotificationService(notifications_db)
+        except Exception:
+            pass  # Service is optional
+
+        # Initialize GAFriendlinessService (optional)
+        ga_friendliness_service = None
+        try:
+            from shared.aviation_agent.config import get_ga_meta_db_path
+            from web.server.api.ga_friendliness import GAFriendlinessService
+            ga_meta_db = get_ga_meta_db_path()
+            if ga_meta_db and Path(ga_meta_db).exists():
+                ga_friendliness_service = GAFriendlinessService(ga_meta_db, readonly=True)
+        except Exception:
+            pass  # Service is optional
+
+        # Initialize RulesManager (optional)
         rules_manager = None
         if rules_path or load_rules:
             rules_manager = RulesManager(rules_path)
             if load_rules:
                 rules_manager.load_rules()
 
-        return cls(model=model, enrichment_storage=enrichment, rules_manager=rules_manager)
+        return cls(
+            model=model,
+            notification_service=notification_service,
+            ga_friendliness_service=ga_friendliness_service,
+            rules_manager=rules_manager,
+        )
 
     def ensure_rules_manager(self) -> RulesManager:
         if not self.rules_manager:
@@ -98,7 +137,7 @@ def search_airports(
     query: str,
     max_results: int = 50,
     filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
+    priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
     """
     Search for airports by ICAO code, IATA code, airport name, or city name with optional filters (country, procedures, runway, fuel, fees).
@@ -246,7 +285,7 @@ def find_airports_near_route(
     to_location: str,
     max_distance_nm: float = 50.0,
     filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
+    priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
     """
     List airports within a specified distance from a direct route between two locations, with optional airport filters.
@@ -587,193 +626,6 @@ def get_airport_statistics(ctx: ToolContext, country: Optional[str] = None) -> D
     return {"stats": stats, "pretty": "\n".join(pretty)}
 
 
-def get_airport_pricing(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
-    """Get pricing data (landing fees and fuel prices) from airfield.directory, including common aircraft types and currency information."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-    pricing = ctx.enrichment_storage.get_pricing_data(icao)
-
-    if not pricing:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "pretty": f"No pricing data available for {icao}. Data may not be in airfield.directory or not yet synced."
-        }
-
-    pretty = [
-        f"**Pricing for {icao}**",
-        f"Source: {pricing.get('source', 'airfield.directory')}",
-        f"Currency: {pricing.get('currency', 'N/A')}",
-        ""
-    ]
-
-    if any([pricing.get('landing_fee_c172'), pricing.get('landing_fee_da42'),
-            pricing.get('landing_fee_pc12'), pricing.get('landing_fee_sr22')]):
-        pretty.append("**Landing Fees:**")
-        if pricing.get('landing_fee_c172'):
-            pretty.append(f"  C172: {pricing['landing_fee_c172']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_da42'):
-            pretty.append(f"  DA42: {pricing['landing_fee_da42']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_sr22'):
-            pretty.append(f"  SR22: {pricing['landing_fee_sr22']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_pc12'):
-            pretty.append(f"  PC12: {pricing['landing_fee_pc12']} {pricing.get('currency', '')}")
-        pretty.append("")
-
-    if any([pricing.get('avgas_price'), pricing.get('jeta1_price'), pricing.get('superplus_price')]):
-        pretty.append("**Fuel Prices:**")
-        if pricing.get('avgas_price'):
-            pretty.append(f"  AVGAS: {pricing['avgas_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('jeta1_price'):
-            pretty.append(f"  Jet A1: {pricing['jeta1_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('superplus_price'):
-            pretty.append(f"  SuperPlus: {pricing['superplus_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('fuel_provider'):
-            pretty.append(f"  Provider: {pricing['fuel_provider']}")
-        pretty.append("")
-
-    if pricing.get('payment_available'):
-        pretty.append("Payment: Available")
-    if pricing.get('ppr_available'):
-        pretty.append("PPR: Available")
-    if pricing.get('last_updated'):
-        pretty.append(f"\nLast updated: {pricing['last_updated']}")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "pricing": pricing,
-        "pretty": "\n".join(pretty)
-    }
-
-
-def get_pilot_reviews(ctx: ToolContext, icao_code: str, limit: int = 10) -> Dict[str, Any]:
-    """Get community pilot reviews (PIREPs) from airfield.directory, including ratings, comments, and review metadata."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-    reviews = ctx.enrichment_storage.get_pilot_reviews(icao, limit)
-
-    if not reviews:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "count": 0,
-            "pretty": f"No pilot reviews available for {icao}."
-        }
-
-    ratings = [r['rating'] for r in reviews if r.get('rating')]
-    avg_rating = sum(ratings) / len(ratings) if ratings else None
-
-    pretty = [
-        f"**Pilot Reviews for {icao}**",
-        f"Total reviews: {len(reviews)}",
-        f"Average rating: {avg_rating:.1f}/5.0 ⭐" if avg_rating else "Average rating: N/A",
-        ""
-    ]
-
-    for i, review in enumerate(reviews, 1):
-        rating_stars = "⭐" * review.get('rating', 0)
-        author = review.get('author_name') or "Anonymous"
-        pretty.append(f"**Review {i}** - {rating_stars} ({review.get('rating')}/5) by {author}")
-
-        comment = (review.get('comment_en') or
-                   review.get('comment_de') or
-                   review.get('comment_fr') or
-                   review.get('comment_it') or
-                   review.get('comment_es') or
-                   review.get('comment_nl'))
-
-        if comment:
-            comment_display = comment[:200] + "..." if len(comment) > 200 else comment
-            pretty.append(f'  "{comment_display}"')
-
-        if review.get('created_at'):
-            pretty.append(f"  Date: {review['created_at'][:10]}")
-
-        pretty.append("")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "count": len(reviews),
-        "average_rating": avg_rating,
-        "reviews": reviews,
-        "pretty": "\n".join(pretty)
-    }
-
-
-def get_fuel_prices(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
-    """Get fuel availability and prices from airfield.directory, showing which fuel types are available and any known prices."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-
-    fuels = ctx.enrichment_storage.get_fuel_availability(icao)
-    pricing = ctx.enrichment_storage.get_pricing_data(icao)
-
-    if not fuels and not pricing:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "pretty": f"No fuel data available for {icao}."
-        }
-
-    fuel_list = []
-    for fuel in fuels or []:
-        fuel_type = fuel.get('fuel_type', 'Unknown')
-        price = None
-        currency = None
-        if pricing:
-            currency = pricing.get('currency', 'EUR')
-            if 'avgas' in fuel_type.lower():
-                price = pricing.get('avgas_price')
-            elif 'jeta1' in fuel_type.lower() or 'jet a1' in fuel_type.lower():
-                price = pricing.get('jeta1_price')
-            elif 'super' in fuel_type.lower():
-                price = pricing.get('superplus_price')
-
-        fuel_list.append({
-            "fuel_type": fuel_type,
-            "available": bool(fuel.get('available')),
-            "price": price,
-            "currency": currency,
-            "provider": fuel.get('provider')
-        })
-
-    pretty = [f"**Fuel Information for {icao}**", ""]
-    for item in fuel_list:
-        line = f"  ✓ {item['fuel_type']}"
-        if item["price"]:
-            line += f" - {item['price']} {item.get('currency', '')}/L"
-        if item["provider"]:
-            line += f" (Provider: {item['provider']})"
-        pretty.append(line)
-    pretty.append("")
-
-    if pricing:
-        if pricing.get('fuel_provider'):
-            pretty.append(f"**Fuel Provider:** {pricing['fuel_provider']}")
-        if pricing.get('payment_available'):
-            pretty.append("**Payment:** Available")
-        if pricing.get('ppr_available'):
-            pretty.append("**PPR:** Required")
-        if pricing.get('last_updated'):
-            pretty.append(f"\n**Last Updated:** {pricing['last_updated']}")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "fuels": fuel_list,
-        "pricing": pricing,
-        "pretty": "\n".join(pretty)
-    }
-
-
 def list_rules_for_country(
     ctx: ToolContext,
     country_code: str,
@@ -1049,7 +901,7 @@ def find_airports_near_location(
     location_query: str,
     max_distance_nm: float = 50.0,
     filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
+    priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
     """
     Find airports near a geographic location (free-text location name, city, landmark, or coordinates) within a specified distance.
@@ -1256,8 +1108,8 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
                         },
                     },
                     "required": ["query"],
@@ -1289,8 +1141,8 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
                         },
                     },
                     "required": ["location_query"],
@@ -1326,8 +1178,8 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
                         },
                     },
                     "required": ["from_location", "to_location"],
@@ -1386,68 +1238,6 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "description": "Optional ISO-2 country code to filter stats.",
                         },
                     },
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_airport_pricing",
-            {
-                "name": "get_airport_pricing",
-                "handler": get_airport_pricing,
-                "description": _get_tool_description(get_airport_pricing, "get_airport_pricing"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code (e.g., EDAZ).",
-                        },
-                    },
-                    "required": ["icao_code"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_pilot_reviews",
-            {
-                "name": "get_pilot_reviews",
-                "handler": get_pilot_reviews,
-                "description": _get_tool_description(get_pilot_reviews, "get_pilot_reviews"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code.",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of reviews to return.",
-                            "default": 10,
-                        },
-                    },
-                    "required": ["icao_code"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_fuel_prices",
-            {
-                "name": "get_fuel_prices",
-                "handler": get_fuel_prices,
-                "description": _get_tool_description(get_fuel_prices, "get_fuel_prices"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code.",
-                        },
-                    },
-                    "required": ["icao_code"],
                 },
                 "expose_to_llm": True,
             },

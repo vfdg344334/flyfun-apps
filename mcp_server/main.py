@@ -29,27 +29,22 @@ load_component_env(component_dir)
 
 from fastmcp import Context, FastMCP
 
-from euro_aip.models.euro_aip_model import EuroAipModel
-from euro_aip.storage.database_storage import DatabaseStorage
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
-
 from shared.airport_tools import (
     ToolContext,
     search_airports as shared_search_airports,
     find_airports_near_route as shared_find_airports_near_route,
+    find_airports_near_location as shared_find_airports_near_location,
     get_airport_details as shared_get_airport_details,
     get_border_crossing_airports as shared_get_border_crossing_airports,
     get_airport_statistics as shared_get_airport_statistics,
-    get_airport_pricing as shared_get_airport_pricing,
-    get_pilot_reviews as shared_get_pilot_reviews,
-    get_fuel_prices as shared_get_fuel_prices,
     list_rules_for_country as shared_list_rules_for_country,
     compare_rules_between_countries as shared_compare_rules_between_countries,
     get_answers_for_questions as shared_get_answers_for_questions,
     list_rule_categories_and_tags as shared_list_rule_categories_and_tags,
     list_rule_countries as shared_list_rule_countries,
+    get_notification_for_airport as shared_get_notification_for_airport,
+    find_airports_by_notification as shared_find_airports_by_notification,
 )
-from shared.rules_manager import RulesManager
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -74,7 +69,6 @@ class AirportNearRoute(TypedDict):
 
 # ---- Global model storage for FastMCP 2.11 --------------------------------
 _model: Optional[EuroAipModel] = None
-_enrichment_storage: Optional[EnrichmentStorage] = None
 _tool_context: Optional[ToolContext] = None
 
 def get_model() -> EuroAipModel:
@@ -82,13 +76,6 @@ def get_model() -> EuroAipModel:
     if _model is None:
         raise RuntimeError("Model not initialized. Server not started properly.")
     return _model
-
-def get_enrichment_storage() -> EnrichmentStorage:
-    """Get the global enrichment storage instance."""
-    if _enrichment_storage is None:
-        raise RuntimeError("Enrichment storage not initialized. Server not started properly.")
-    return _enrichment_storage
-
 
 def _require_tool_context() -> ToolContext:
     if _tool_context is None:
@@ -99,24 +86,29 @@ def _require_tool_context() -> ToolContext:
 @asynccontextmanager
 async def lifespan(app: FastMCP):
     global _model
-    global _enrichment_storage
     global _tool_context
-    db_path = os.environ.get("AIRPORTS_DB", "airports.db")
-    logger.info(f"Loading model from database at '{db_path}'")
-    # Let FastMCP handle logging/levels via FASTMCP_LOG_LEVEL, etc.
-    db_storage = DatabaseStorage(db_path)
-    _model = db_storage.load_model()
-    _enrichment_storage = EnrichmentStorage(db_path)
-    logger.info("Enrichment storage initialized")
-    rules_path = os.environ.get("RULES_JSON", "rules.json")
-    logger.info(f"Loading rules from '{rules_path}'")
-    rules_manager = RulesManager(rules_path)
-    rules_manager.load_rules()
-    _tool_context = ToolContext(
-        model=_model,
-        enrichment_storage=_enrichment_storage,
-        rules_manager=rules_manager,
-    )
+
+    # Use centralized config to get paths
+    from shared.aviation_agent.config import get_settings
+    
+    settings = get_settings()
+    logger.info(f"Loading model from database at '{settings.airports_db}'")
+    logger.info(f"Loading rules from '{settings.rules_json}'")
+
+    # Use ToolContext.create() for consistent initialization
+    _tool_context = settings.build_tool_context(load_rules=True)
+    _model = _tool_context.model
+    
+    if _tool_context.notification_service:
+        logger.info(f"NotificationService initialized")
+    else:
+        logger.info("NotificationService not available")
+    
+    if _tool_context.ga_friendliness_service:
+        logger.info(f"GAFriendlinessService initialized")
+    else:
+        logger.info("GAFriendlinessService not configured (GA_META_DB not set)")
+
     try:
         yield
     finally:
@@ -245,23 +237,6 @@ def get_airport_statistics(country: Optional[str] = None, ctx: Context = None) -
     context = _require_tool_context()
     return shared_get_airport_statistics(context, country)
 
-
-@mcp.tool(name="get_airport_pricing", description=_desc(shared_get_airport_pricing))
-def get_airport_pricing(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_airport_pricing(context, icao_code)
-
-
-@mcp.tool(name="get_pilot_reviews", description=_desc(shared_get_pilot_reviews))
-def get_pilot_reviews(icao_code: str, limit: int = 10, ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_pilot_reviews(context, icao_code, limit)
-
-
-@mcp.tool(name="get_fuel_prices", description=_desc(shared_get_fuel_prices))
-def get_fuel_prices(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_fuel_prices(context, icao_code)
 
 if __name__ == "__main__":
     import argparse

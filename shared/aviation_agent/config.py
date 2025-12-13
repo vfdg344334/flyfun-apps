@@ -15,55 +15,112 @@ logger = logging.getLogger(__name__)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-AIRPORT_DB_CANDIDATES = [
-    "web/server/airports.db",
-    "data/airports.db",
-    "airports.db",
-]
-RULES_JSON_CANDIDATES = [
-    "data/rules.json",
-    "rules.json",
-    "web/server/rules.json",
-]
-VECTOR_DB_CANDIDATES = [
-    "out/rules_vector_db",
-    "cache/rules_vector_db",
-    "rules_vector_db",
-]
 
 
-def _locate_file(candidates: list[str]) -> Path:
-    for candidate in candidates:
-        path = PROJECT_ROOT / candidate
-        if path.exists():
-            return path
-    # fall back to the first candidate even if it does not exist yet
-    return PROJECT_ROOT / candidates[0]
+def _get_path_from_env(env_var: str, default_filename: str, allow_default: bool = False) -> Path:
+    """
+    Get path from environment variable.
+    
+    Args:
+        env_var: Environment variable name
+        default_filename: Default filename if env var not set (only used if allow_default=True)
+        allow_default: If True, use default_filename in current directory when env var not set.
+                      If False, raise ValueError (production mode - requires explicit config).
+    
+    Production code should use allow_default=False to require explicit environment configuration.
+    """
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return Path(env_value)
+    
+    if allow_default:
+        # Fallback to default in current directory (for backward compatibility)
+        return Path(default_filename)
+    
+    # Production mode: require explicit configuration
+    raise ValueError(
+        f"{env_var} environment variable is required. "
+        f"Please set it to the path of {default_filename}"
+    )
 
 
 def _default_airports_db() -> Path:
-    env_value = os.environ.get("AIRPORTS_DB")
-    if env_value:
-        env_path = Path(env_value)
-        if env_path.exists():
-            return env_path
-    return _locate_file(AIRPORT_DB_CANDIDATES)
+    """
+    Get airports.db path from AIRPORTS_DB environment variable.
+    
+    For production: requires AIRPORTS_DB to be set.
+    For backward compatibility: falls back to "airports.db" in current directory.
+    """
+    return _get_path_from_env("AIRPORTS_DB", "airports.db", allow_default=True)
 
 
 def _default_rules_json() -> Path:
-    env_value = os.environ.get("RULES_JSON")
+    """
+    Get rules.json path from RULES_JSON environment variable.
+    
+    For production: requires RULES_JSON to be set.
+    For backward compatibility: falls back to "rules.json" in current directory.
+    """
+    return _get_path_from_env("RULES_JSON", "rules.json", allow_default=True)
+
+
+def _default_ga_notifications_db() -> Path:
+    """
+    Get ga_notifications.db path from GA_NOTIFICATIONS_DB environment variable.
+    
+    For production: requires GA_NOTIFICATIONS_DB to be set.
+    For backward compatibility: falls back to "ga_notifications.db" in current directory.
+    """
+    return _get_path_from_env("GA_NOTIFICATIONS_DB", "ga_notifications.db", allow_default=True)
+
+
+def _default_ga_meta_db() -> Optional[Path]:
+    """
+    Get ga_meta.sqlite path from GA_META_DB environment variable.
+    
+    Returns None if not set (service is optional).
+    """
+    env_value = os.environ.get("GA_META_DB")
     if env_value:
-        env_path = Path(env_value)
-        if env_path.exists():
-            return env_path
-    return _locate_file(RULES_JSON_CANDIDATES)
+        return Path(env_value)
+    return None
 
 
-def _default_vector_db() -> Path:
+def get_ga_notifications_db_path() -> str:
+    """
+    Get path to GA notifications database as a string.
+    
+    Requires GA_NOTIFICATIONS_DB environment variable to be set.
+    
+    Returns:
+        Path to the database as a string
+    """
+    return str(_default_ga_notifications_db())
+
+
+def get_ga_meta_db_path() -> Optional[str]:
+    """
+    Get path to GA meta database as a string.
+    
+    Returns None if GA_META_DB environment variable is not set (service is optional).
+    
+    Returns:
+        Path to the database as a string, or None if not configured
+    """
+    path = _default_ga_meta_db()
+    return str(path) if path else None
+
+
+def _default_vector_db() -> Optional[Path]:
+    """
+    Get vector database path from VECTOR_DB_PATH environment variable.
+    
+    Returns None if not set (vector DB is optional when using VECTOR_DB_URL).
+    """
     env_value = os.environ.get("VECTOR_DB_PATH")
     if env_value:
         return Path(env_value)
-    return _locate_file(VECTOR_DB_CANDIDATES)
+    return None
 
 
 def _default_vector_db_url() -> Optional[str]:
@@ -106,7 +163,7 @@ class AviationAgentSettings(BaseSettings):
         description="Path to rules.json used by ToolContext.",
         alias="RULES_JSON",
     )
-    vector_db_path: Path = Field(
+    vector_db_path: Optional[Path] = Field(
         default_factory=_default_vector_db,
         description="Path to rules vector database for RAG retrieval (local mode).",
         alias="VECTOR_DB_PATH",

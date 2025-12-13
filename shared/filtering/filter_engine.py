@@ -5,7 +5,6 @@ Filter engine for applying multiple filters to airports.
 import logging
 from typing import Dict, Any, List, Iterable, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
 from .filters import (
     Filter,
@@ -76,25 +75,21 @@ class FilterEngine:
     Engine for applying filters to airports.
 
     Usage:
-        engine = FilterEngine(enrichment_storage=storage)
+        engine = FilterEngine(context=ctx)
         filtered = engine.apply(airports, {"country": "FR", "has_avgas": True})
     """
 
     def __init__(
         self,
         context: Optional["ToolContext"] = None,
-        enrichment_storage: Optional[EnrichmentStorage] = None,
     ):
         """
         Initialize filter engine.
 
         Args:
-            enrichment_storage: Optional enrichment storage for pricing/fuel filters
+            context: ToolContext with services for filters that need them
         """
         self.context = context
-        if enrichment_storage is None and context is not None:
-            enrichment_storage = context.enrichment_storage
-        self.enrichment_storage = enrichment_storage
 
     def apply(
         self,

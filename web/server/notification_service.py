@@ -7,6 +7,7 @@ Integrates with ga_notifications.db for French airports.
 import sqlite3
 import os
 from typing import Optional, Dict, Any
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,11 +18,8 @@ class NotificationService:
     
     def __init__(self, db_path: str = None):
         if db_path is None:
-            # Default to web/server directory
-            db_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "ga_notifications.db"
-            )
+            from shared.aviation_agent.config import get_ga_notifications_db_path
+            db_path = get_ga_notifications_db_path()
         self.db_path = db_path
         self._check_db()
     

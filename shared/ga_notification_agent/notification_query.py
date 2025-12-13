@@ -12,19 +12,13 @@ from pathlib import Path
 
 
 def _get_notifications_db_path() -> str:
-    """Get path to the notifications database."""
-    # Try web/server first
-    web_server_path = Path(__file__).parent.parent.parent / "web" / "server" / "ga_notifications.db"
-    if web_server_path.exists():
-        return str(web_server_path)
+    """Get path to the notifications database.
     
-    # Try relative to this file
-    local_path = Path(__file__).parent / "ga_notifications.db"
-    if local_path.exists():
-        return str(local_path)
-    
-    # Return default path (might not exist)
-    return str(web_server_path)
+    Checks GA_NOTIFICATIONS_DB environment variable first, then falls back
+    to common locations (data/, web/server/, current directory).
+    """
+    from shared.aviation_agent.config import get_ga_notifications_db_path
+    return get_ga_notifications_db_path()
 
 
 def _get_airports_db_path() -> str:
