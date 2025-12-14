@@ -130,70 +130,39 @@ def _default_vector_db_url() -> Optional[str]:
 
 class AviationAgentSettings(BaseSettings):
     """
-    Central configuration for the aviation agent.
+    Deployment configuration for the aviation agent.
 
-    Putting the logic in a BaseSettings class lets FastAPI use dependency
-    injection while keeping CLI scripts simple.
+    This class manages external resources and deployment settings.
+    LLM models and behavior settings are configured in AgentBehaviorConfig (JSON files).
+    Database paths are managed by ToolContextSettings in shared/tool_context.py.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
+    # Master switch
     enabled: bool = Field(
         default=True,
         description="Feature flag that allows the FastAPI layer to disable the agent entirely.",
         alias="AVIATION_AGENT_ENABLED",
     )
-    planner_model: Optional[str] = Field(
-        default=None,
-        description="LLM name to use for the planner. If None, callers must inject an LLM instance.",
-        alias="AVIATION_AGENT_PLANNER_MODEL",
-    )
-    formatter_model: Optional[str] = Field(
-        default=None,
-        description="LLM name to use for the formatter. If None, callers must inject an LLM instance.",
-        alias="AVIATION_AGENT_FORMATTER_MODEL",
-    )
-    airports_db: Path = Field(
-        default_factory=_default_airports_db,
-        description="Path to airports.db used by ToolContext.",
-        alias="AIRPORTS_DB",
-    )
-    rules_json: Path = Field(
-        default_factory=_default_rules_json,
-        description="Path to rules.json used by ToolContext.",
-        alias="RULES_JSON",
-    )
-    vector_db_path: Optional[Path] = Field(
-        default_factory=_default_vector_db,
-        description="Path to rules vector database for RAG retrieval (local mode).",
-        alias="VECTOR_DB_PATH",
-    )
-    vector_db_url: Optional[str] = Field(
-        default_factory=_default_vector_db_url,
-        description="URL to ChromaDB service for RAG retrieval (service mode). If set, takes precedence over vector_db_path.",
-        alias="VECTOR_DB_URL",
-    )
-    
-    # RAG settings
-    embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="Embedding model for RAG (OpenAI: text-embedding-3-small or text-embedding-3-large)",
-        alias="EMBEDDING_MODEL",
-    )
-    enable_query_reformulation: bool = Field(
-        default=True,
-        description="Whether to reformulate queries for better RAG matching",
-        alias="ENABLE_QUERY_REFORMULATION",
-    )
-    router_model: Optional[str] = Field(
-        default="gpt-4o-mini",
-        description="LLM model for query routing",
-        alias="ROUTER_MODEL",
-    )
+
+    # Which behavior config to load
     agent_config_name: Optional[str] = Field(
         default="default",
         description="Name of agent behavior config file (without .json). Loads from configs/aviation_agent/",
         alias="AVIATION_AGENT_CONFIG",
+    )
+
+    # External RAG resources (optional)
+    vector_db_path: Optional[Path] = Field(
+        default=None,
+        description="Path to local ChromaDB vector database for RAG retrieval.",
+        alias="VECTOR_DB_PATH",
+    )
+    vector_db_url: Optional[str] = Field(
+        default=None,
+        description="URL to ChromaDB service for RAG retrieval. If set, takes precedence over vector_db_path.",
+        alias="VECTOR_DB_URL",
     )
 
     def build_tool_context(

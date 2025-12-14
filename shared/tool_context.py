@@ -9,12 +9,59 @@ GA friendliness service.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.storage.database_storage import DatabaseStorage
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .rules_manager import RulesManager
+
+
+class ToolContextSettings(BaseSettings):
+    """
+    Settings for ToolContext database paths.
+
+    Uses Pydantic BaseSettings to read from environment variables and .env files.
+    All paths can be configured via environment variables with fallback defaults.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    airports_db: Path = Field(
+        default=Path("airports.db"),
+        description="Path to airports.db SQLite database",
+        alias="AIRPORTS_DB",
+    )
+    rules_json: Path = Field(
+        default=Path("rules.json"),
+        description="Path to rules.json for query answering",
+        alias="RULES_JSON",
+    )
+    ga_notifications_db: Path = Field(
+        default=Path("ga_notifications.db"),
+        description="Path to GA notifications database",
+        alias="GA_NOTIFICATIONS_DB",
+    )
+    ga_meta_db: Optional[Path] = Field(
+        default=None,
+        description="Path to GA meta database (optional)",
+        alias="GA_META_DB",
+    )
+
+
+@lru_cache(maxsize=1)
+def get_tool_context_settings() -> ToolContextSettings:
+    """Get cached ToolContextSettings instance."""
+    return ToolContextSettings()
 
 
 @dataclass
@@ -34,42 +81,32 @@ class ToolContext:
     @classmethod
     def create(
         cls,
+        settings: Optional[ToolContextSettings] = None,
         load_airports: bool = True,
         load_rules: bool = True,
         load_notifications: bool = True,
         load_ga_friendliness: bool = True,
     ) -> "ToolContext":
         """
-        Create ToolContext with all paths resolved from environment/config.
-        
-        All paths are resolved using centralized config functions from
-        shared/aviation_agent/config.py. Services are optional and will
-        gracefully degrade if not available or disabled.
-        
+        Create ToolContext with all paths resolved from settings.
+
         Args:
+            settings: ToolContextSettings instance. If None, uses cached default.
             load_airports: Load airports database (default: True)
             load_rules: Load rules manager (default: True)
             load_notifications: Load notification service (default: True)
             load_ga_friendliness: Load GA friendliness service (default: True)
-        
+
         Returns:
             ToolContext instance with requested services loaded
         """
-        from pathlib import Path
-
-        # Get all paths from centralized config
-        from shared.aviation_agent.config import (
-            _default_airports_db,
-            _default_rules_json,
-            get_ga_notifications_db_path,
-            get_ga_meta_db_path,
-        )
+        # Use provided settings or get cached default
+        settings = settings or get_tool_context_settings()
 
         # Load core model (required if load_airports is True)
         model = None
         if load_airports:
-            airports_db_path = _default_airports_db()
-            storage = DatabaseStorage(str(airports_db_path))
+            storage = DatabaseStorage(str(settings.airports_db))
             model = storage.load_model()
         else:
             raise ValueError("load_airports must be True - airports database is required")
@@ -88,17 +125,16 @@ class ToolContext:
         if load_ga_friendliness:
             try:
                 from shared.ga_friendliness.service import GAFriendlinessService
-                ga_meta_db = get_ga_meta_db_path()
-                if ga_meta_db and Path(ga_meta_db).exists():
-                    ga_friendliness_service = GAFriendlinessService(ga_meta_db, readonly=True)
+                ga_meta_db = settings.ga_meta_db
+                if ga_meta_db and ga_meta_db.exists():
+                    ga_friendliness_service = GAFriendlinessService(str(ga_meta_db), readonly=True)
             except Exception:
                 pass  # Service is optional
 
         # Initialize RulesManager (optional)
         rules_manager = None
         if load_rules:
-            rules_path = _default_rules_json()
-            rules_manager = RulesManager(str(rules_path))
+            rules_manager = RulesManager(str(settings.rules_json))
             rules_manager.load_rules()
 
         return cls(

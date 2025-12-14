@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
 from .config import get_settings, get_behavior_config
+from shared.tool_context import get_tool_context_settings
 from .execution import ToolRunner
 from .formatting import build_formatter_chain
 from .planning import AviationPlan
@@ -63,12 +64,12 @@ def build_agent_graph(
 
         # Initialize RAG system
         # NOTE: ChromaDB requires local filesystem (not CIFS/NFS)
-        # Vector DB is stored at /root/Projects/flyfun/rules_vector_db
+        # Vector DB config from settings (VECTOR_DB_URL takes precedence over VECTOR_DB_PATH)
         try:
             # Get RulesManager from ToolContext for multi-country lookups
             tool_context = settings.build_tool_context(load_rules=True)
             rules_manager = tool_context.rules_manager
-            
+
             rag_system = RulesRAG(
                 vector_db_path=settings.vector_db_path if not settings.vector_db_url else None,
                 vector_db_url=settings.vector_db_url,
@@ -97,7 +98,8 @@ def build_agent_graph(
     # Initialize next query predictor (if enabled)
     predictor = None
     if enable_next_query_prediction and behavior_config.next_query_prediction.enabled:
-        predictor = NextQueryPredictor(rules_json_path=settings.rules_json)
+        tool_context_settings = get_tool_context_settings()
+        predictor = NextQueryPredictor(rules_json_path=tool_context_settings.rules_json)
         logger.info("✓ Next query predictor enabled")
 
     graph = StateGraph(AgentState)

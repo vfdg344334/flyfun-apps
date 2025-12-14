@@ -29,43 +29,46 @@ def build_agent(
 
     # Load behavior config for LLM settings
     behavior_config = get_behavior_config(settings.agent_config_name)
-    
-    # Resolve LLMs with config overrides
-    planner_model = behavior_config.llms.planner.model or settings.planner_model
+
+    # Resolve LLMs from behavior config (no env var fallback - all config in JSON)
     planner_llm = _resolve_llm(
-        planner_llm, 
-        planner_model, 
+        planner_llm,
+        behavior_config.llms.planner.model,
         role="planner",
+        config_name=settings.agent_config_name,
         temperature=behavior_config.llms.planner.temperature,
         streaming=behavior_config.llms.planner.streaming
     )
-    
-    formatter_model = behavior_config.llms.formatter.model or settings.formatter_model
+
     formatter_llm = _resolve_llm(
-        formatter_llm, 
-        formatter_model, 
+        formatter_llm,
+        behavior_config.llms.formatter.model,
         role="formatter",
+        config_name=settings.agent_config_name,
         temperature=behavior_config.llms.formatter.temperature,
         streaming=behavior_config.llms.formatter.streaming
     )
-    
-    # Router and rules LLMs
-    router_model = behavior_config.llms.router.model or settings.router_model
+
+    # Router LLM (optional - only needed if routing is enabled)
+    router_model = behavior_config.llms.router.model if behavior_config.llms.router else None
     if router_llm is None and router_model:
         router_llm = _resolve_llm(
-            None, 
-            router_model, 
+            None,
+            router_model,
             role="router",
+            config_name=settings.agent_config_name,
             temperature=behavior_config.llms.router.temperature,
             streaming=behavior_config.llms.router.streaming
         )
-    
+
+    # Rules LLM (defaults to formatter LLM if not specified)
     if rules_llm is None:
         if behavior_config.llms.rules and behavior_config.llms.rules.model:
             rules_llm = _resolve_llm(
                 None,
                 behavior_config.llms.rules.model,
                 role="rules",
+                config_name=settings.agent_config_name,
                 temperature=behavior_config.llms.rules.temperature,
                 streaming=behavior_config.llms.rules.streaming
             )
@@ -111,17 +114,19 @@ def run_aviation_agent(
 
 
 def _resolve_llm(
-    llm: Optional[Runnable], 
-    model_name: Optional[str], 
+    llm: Optional[Runnable],
+    model_name: Optional[str],
     role: str,
+    config_name: Optional[str] = None,
     temperature: float = 0.0,
     streaming: bool = False
 ) -> Runnable:
     if llm is not None:
         return llm
     if not model_name:
+        config_hint = f" in configs/aviation_agent/{config_name}.json" if config_name else ""
         raise RuntimeError(
-            f"No {role} LLM provided. Set AVIATION_AGENT_{role.upper()}_MODEL or pass an llm instance."
+            f"No {role} LLM configured. Set llms.{role}.model{config_hint} or pass an llm instance."
         )
 
     try:

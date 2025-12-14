@@ -90,10 +90,12 @@ async def lifespan(app: FastMCP):
 
     # Use centralized config to get paths
     from shared.aviation_agent.config import get_settings
-    
+    from shared.tool_context import get_tool_context_settings
+
     settings = get_settings()
-    logger.info(f"Loading model from database at '{settings.airports_db}'")
-    logger.info(f"Loading rules from '{settings.rules_json}'")
+    tool_context_settings = get_tool_context_settings()
+    logger.info(f"Loading model from database at '{tool_context_settings.airports_db}'")
+    logger.info(f"Loading rules from '{tool_context_settings.rules_json}'")
 
     # Use ToolContext.create() for consistent initialization
     _tool_context = settings.build_tool_context(load_rules=True)

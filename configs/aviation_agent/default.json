@@ -4,12 +4,12 @@
   "description": "Default aviation agent configuration",
   "llms": {
     "planner": {
-      "model": null,
+      "model": "gpt-4o-mini",
       "temperature": 0.0,
       "streaming": false
     },
     "formatter": {
-      "model": null,
+      "model": "gpt-4o-mini",
       "temperature": 0.0,
       "streaming": true
     },

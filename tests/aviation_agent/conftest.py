@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -37,13 +38,18 @@ def data_files() -> Dict[str, str]:
 
 @pytest.fixture(scope="session")
 def agent_settings(data_files: Dict[str, str]) -> AviationAgentSettings:
-    return AviationAgentSettings(
-        enabled=True,
-        planner_model=None,
-        formatter_model=None,
-        airports_db=Path(data_files["airports_db"]),
-        rules_json=Path(data_files["rules_json"]),
-    )
+    # Set environment variables for ToolContextSettings
+    os.environ["AIRPORTS_DB"] = data_files["airports_db"]
+    os.environ["RULES_JSON"] = data_files["rules_json"]
+
+    # Clear cached settings and tool context to pick up new env vars
+    from shared.tool_context import get_tool_context_settings
+    from shared.aviation_agent.config import _cached_tool_context, get_settings
+    get_tool_context_settings.cache_clear()
+    _cached_tool_context.cache_clear()
+    get_settings.cache_clear()
+
+    return AviationAgentSettings(enabled=True)
 
 
 @pytest.fixture(scope="session")
