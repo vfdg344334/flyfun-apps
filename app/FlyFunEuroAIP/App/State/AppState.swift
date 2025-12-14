@@ -154,9 +154,7 @@ extension AppState {
     /// Create a preview AppState with mock data
     @MainActor
     static func preview() -> AppState {
-        // For previews, we need mock implementations
-        // This will be fleshed out with PreviewFactory later
-        fatalError("Use PreviewFactory.makeAppState() instead")
+        PreviewFactory.makeAppState()
     }
 }
 

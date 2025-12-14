@@ -636,19 +636,6 @@ struct HSplitViewOrHStack<Content: View>: View {
     }
 }
 
-// MARK: - RZFlight Extensions
-
-extension RZFlight.Airport {
-    var hasInstrumentProcedures: Bool {
-        !procedures.isEmpty
-    }
-    
-    var maxRunwayLength: Int {
-        // TODO: Access actual runway length from RZFlight
-        0
-    }
-}
-
 // MARK: - Preview
 
 #Preview("Regular") {

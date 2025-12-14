@@ -415,40 +415,6 @@ struct AIPEntryRow: View {
 }
 
 
-// MARK: - RZFlight Extensions
-
-extension RZFlight.Airport.AirportType {
-    var displayName: String {
-        switch self {
-        case .large_airport: return "Large"
-        case .medium_airport: return "Medium"
-        case .small_airport: return "Small"
-        case .seaplane_base: return "Seaplane"
-        case .balloonport: return "Balloon"
-        case .closed: return "Closed"
-        case .none: return "Other"
-        }
-    }
-}
-
-extension RZFlight.Procedure.ProcedureType {
-    var displayName: String {
-        switch self {
-        case .approach: return "Approaches"
-        case .departure: return "Departures (SID)"
-        case .arrival: return "Arrivals (STAR)"
-        }
-    }
-}
-
-extension RZFlight.Runway {
-    /// Combined runway identifier (e.g., "09/27")
-    var ident: String {
-        "\(le.ident)/\(he.ident)"
-    }
-}
-
-
 // MARK: - Preview
 
 #Preview {
