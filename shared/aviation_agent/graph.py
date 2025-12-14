@@ -21,18 +21,19 @@ from .next_query_predictor import NextQueryPredictor, extract_context_from_plan
 logger = logging.getLogger(__name__)
 
 
-def build_agent_graph(
+def _build_agent_graph(
     planner,
     tool_runner: ToolRunner,
     formatter_llm,
     router_llm=None,
     rules_llm=None,
-    enable_routing: bool = True,
-    enable_next_query_prediction: bool = True,
     behavior_config=None,
 ):
     """
-    Assemble the LangGraph workflow with routing support.
+    Internal: Assemble the LangGraph workflow with routing support.
+
+    This is a private function called by build_agent(). Feature flags (routing,
+    next_query_prediction) are controlled via behavior_config, not parameters.
 
     Args:
         planner: Planner runnable for database path
@@ -40,8 +41,7 @@ def build_agent_graph(
         formatter_llm: LLM for formatting responses
         router_llm: Optional LLM for query routing (uses default if None)
         rules_llm: Optional LLM for rules synthesis (uses formatter_llm if None)
-        enable_routing: Whether to enable routing (default True)
-        enable_next_query_prediction: Whether to enable next query prediction (default True)
+        behavior_config: AgentBehaviorConfig instance (loaded from JSON)
 
     Flow:
         1. Router decides: rules, database, or both
@@ -59,7 +59,7 @@ def build_agent_graph(
     rag_system = None
     rules_agent = None
     
-    if enable_routing and behavior_config.routing.enabled:
+    if behavior_config.routing.enabled:
         router = QueryRouter(llm=router_llm)
 
         # Initialize RAG system
@@ -97,7 +97,7 @@ def build_agent_graph(
 
     # Initialize next query predictor (if enabled)
     predictor = None
-    if enable_next_query_prediction and behavior_config.next_query_prediction.enabled:
+    if behavior_config.next_query_prediction.enabled:
         tool_context_settings = get_tool_context_settings()
         predictor = NextQueryPredictor(rules_json_path=tool_context_settings.rules_json)
         logger.info("✓ Next query predictor enabled")
@@ -106,7 +106,7 @@ def build_agent_graph(
 
     def router_node(state: AgentState) -> Dict[str, Any]:
         """Route query to appropriate path (rules, database, or both)."""
-        if not enable_routing or router is None:
+        if router is None:
             # Skip routing, go directly to planner (backward compatibility)
             return {}
         
@@ -246,7 +246,7 @@ def build_agent_graph(
 
         Does NOT use tool results.
         """
-        if not enable_next_query_prediction or predictor is None:
+        if predictor is None:
             return {}
 
         try:
@@ -292,7 +292,7 @@ def build_agent_graph(
         Simpler than database path - just suggests other rule questions
         based on the user's query without needing a plan.
         """
-        if not enable_next_query_prediction or predictor is None:
+        if predictor is None:
             return {}
 
         try:
@@ -542,21 +542,21 @@ def build_agent_graph(
             }
 
     # Add nodes
-    if enable_routing and router:
+    if router:
         graph.add_node("router", router_node)
         graph.add_node("rules_rag", rules_rag_node)
         # rules_agent node will be added with wrapper below
-        if enable_next_query_prediction and predictor:
+        if predictor:
             graph.add_node("predict_next_queries_for_rules", predict_next_queries_for_rules_node)
 
     graph.add_node("planner", planner_node)
-    if enable_next_query_prediction and predictor:
+    if predictor:
         graph.add_node("predict_next_queries", predict_next_queries_node)
     graph.add_node("tool", tool_node)
     graph.add_node("formatter", formatter_node)
 
     # Set entry point
-    if enable_routing and router:
+    if router:
         graph.set_entry_point("router")
         
         # Conditional routing based on RouterDecision
@@ -584,15 +584,15 @@ def build_agent_graph(
         )
         
         # Rules path: RAG → Predict Next Queries (optional) → Rules Agent → END
-        if enable_next_query_prediction and predictor:
+        if predictor:
             graph.add_edge("rules_rag", "predict_next_queries_for_rules")
             graph.add_edge("predict_next_queries_for_rules", "rules_agent")
         else:
             graph.add_edge("rules_rag", "rules_agent")
         graph.add_edge("rules_agent", END)
-        
+
         # Database path: Planner → Predict Next Queries → Tool → check if "both"
-        if enable_next_query_prediction and predictor:
+        if predictor:
             graph.add_edge("planner", "predict_next_queries")
             graph.add_edge("predict_next_queries", "tool")
         else:
@@ -658,9 +658,9 @@ def build_agent_graph(
         graph.add_edge("formatter", END)
         
     else:
-        # Original flow (backward compatibility)
+        # Original flow (routing disabled)
         graph.set_entry_point("planner")
-        if enable_next_query_prediction and predictor:
+        if predictor:
             graph.add_edge("planner", "predict_next_queries")
             graph.add_edge("predict_next_queries", "tool")
         else:

@@ -9,7 +9,8 @@
         "program": "${workspaceFolder}/web/server/main.py",
         "cwd": "${workspaceFolder}/web/server",
         "envFile": "${workspaceFolder}/.env",
-        "console": "integratedTerminal"
+        "console": "integratedTerminal",
+        "env": {"LOG_TO_STDERR": "1"}
       },
       {
         "name": "MCP Server (dev.env)",

@@ -42,26 +42,45 @@ from api import airports, procedures, filters, statistics, rules, aviation_agent
 
 from shared.tool_context import ToolContext
 
-# Configure logging with file output only (uvicorn handles console)
+# Configure logging with file output (and optionally stderr for debugger)
 # Use /app/logs in Docker, /tmp/flyfun-logs for local development
 log_dir = Path(os.getenv("LOG_DIR", "/tmp/flyfun-logs"))
 log_dir.mkdir(exist_ok=True, parents=True)
 log_file = log_dir / "web_server.log"
 
-# Create file handler only (uvicorn's default handlers handle console)
-file_handler = logging.FileHandler(log_file)
+# Create formatter
 formatter = logging.Formatter(LOG_FORMAT)
+
+# Create file handler
+file_handler = logging.FileHandler(log_file)
 file_handler.setFormatter(formatter)
 
-# Configure root logger - only add file handler to avoid duplicate console output
+# Configure root logger
 root_logger = logging.getLogger()
 root_logger.setLevel(getattr(logging, LOG_LEVEL))
-# Only add if not already added
+
+# Add file handler if not already added
 if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file) for h in root_logger.handlers):
     root_logger.addHandler(file_handler)
 
+# Optionally add stderr handler for debugger visibility
+# Enable if LOG_TO_STDERR env var is set, or in development mode
+log_to_stderr = os.getenv("LOG_TO_STDERR", "").lower() in ("1", "true", "yes")
+if log_to_stderr:
+    # Check if stderr handler already exists to avoid duplicates
+    has_stderr_handler = any(
+        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr 
+        for h in root_logger.handlers
+    )
+    if not has_stderr_handler:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        root_logger.addHandler(stderr_handler)
+
 logger = logging.getLogger(__name__)
 logger.info(f"Logging to file: {log_file}")
+if log_to_stderr:
+    logger.info("Also logging to stderr for debugger visibility")
 
 # Global ToolContext (created at startup)
 _tool_context: Optional[ToolContext] = None

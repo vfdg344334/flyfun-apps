@@ -77,18 +77,24 @@ def test_state_handles_errors(agent_settings):
     
     from shared.aviation_agent.execution import ToolRunner
     from shared.aviation_agent.tools import AviationToolClient
-    from shared.aviation_agent.graph import build_agent_graph
+    from shared.aviation_agent.graph import _build_agent_graph
     from shared.aviation_agent.config import get_behavior_config
-    
+    from copy import deepcopy
+
     tool_client = AviationToolClient(agent_settings.build_tool_context())
     tool_runner = ToolRunner(tool_client)
     behavior_config = get_behavior_config(agent_settings.agent_config_name)
-    graph = build_agent_graph(
-        failing_planner_runnable, 
-        tool_runner, 
+
+    # Create a modified config with routing disabled for this error-handling test
+    test_config = deepcopy(behavior_config)
+    test_config.routing.enabled = False
+    test_config.next_query_prediction.enabled = False
+
+    graph = _build_agent_graph(
+        failing_planner_runnable,
+        tool_runner,
         formatter_stub,
-        enable_routing=False,  # Disable routing for this test
-        behavior_config=behavior_config
+        behavior_config=test_config
     )
     
     messages = [HumanMessage(content="Test")]

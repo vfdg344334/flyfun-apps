@@ -411,8 +411,15 @@ def find_airports_near_route(
     }
 
 
-def get_airport_details(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
+def get_airport_details(
+    ctx: ToolContext, 
+    icao_code: str,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
+) -> Dict[str, Any]:
     """Get comprehensive details about a specific airport including runways, procedures, facilities, and AIP information."""
+    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
+    kwargs.pop("_persona_id", None)
+    
     icao = icao_code.strip().upper()
     a = ctx.model.airports.where(ident=icao).first()
 
@@ -984,9 +991,13 @@ def find_airports_near_location(
 def get_notification_for_airport(
     ctx: ToolContext,
     icao: str,
-    day_of_week: Optional[str] = None
+    day_of_week: Optional[str] = None,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
 ) -> Dict[str, Any]:
     """Get customs/immigration notification requirements for a specific airport. Use when user asks about notification requirements, customs, or when to notify for a specific airport."""
+    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
+    kwargs.pop("_persona_id", None)
+    
     if not ctx.notification_service:
         return {
             "found": False,
@@ -1002,9 +1013,13 @@ def find_airports_by_notification(
     max_hours_notice: Optional[int] = None,
     notification_type: Optional[str] = None,
     country: Optional[str] = None,
-    limit: int = 20
+    limit: int = 20,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
 ) -> Dict[str, Any]:
     """Find airports filtered by notification requirements. Use when user asks for airports with specific notice periods (e.g., '<24h notice') or notification types (H24, on_request)."""
+    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
+    kwargs.pop("_persona_id", None)
+    
     if not ctx.notification_service:
         return {
             "found": False,

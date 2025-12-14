@@ -8,7 +8,7 @@ from langchain_core.runnables import Runnable
 from ..config import AviationAgentSettings, get_settings, get_behavior_config
 from ..execution import ToolRunner
 from ..formatting import build_formatter_chain
-from ..graph import build_agent_graph
+from ..graph import _build_agent_graph
 from ..planning import build_planner_runnable
 from ..state import AgentState
 from ..tools import AviationToolClient
@@ -21,8 +21,20 @@ def build_agent(
     formatter_llm: Optional[Runnable] = None,
     router_llm: Optional[Runnable] = None,
     rules_llm: Optional[Runnable] = None,
-    enable_routing: bool = True,  # Re-enabled - ChromaDB now on local filesystem
 ):
+    """
+    Build the aviation agent graph.
+
+    Args:
+        settings: AviationAgentSettings instance (uses default if None)
+        planner_llm: LLM for planning (testing only - uses behavior_config in production)
+        formatter_llm: LLM for formatting (testing only - uses behavior_config in production)
+        router_llm: LLM for routing (testing only - uses behavior_config in production)
+        rules_llm: LLM for rules synthesis (testing only - uses behavior_config in production)
+
+    Feature flags like routing and next_query_prediction are controlled via
+    behavior_config JSON files, not function parameters.
+    """
     settings = settings or get_settings()
     if not settings.enabled:
         raise RuntimeError("Aviation agent is disabled via AVIATION_AGENT_ENABLED flag.")
@@ -78,14 +90,13 @@ def build_agent(
     tool_client = AviationToolClient(settings.build_tool_context())
     tool_runner = ToolRunner(tool_client)
     planner = build_planner_runnable(planner_llm, tuple(tool_client.tools.values()))
-    
-    graph = build_agent_graph(
+
+    graph = _build_agent_graph(
         planner,
         tool_runner,
         formatter_llm,
         router_llm=router_llm,
         rules_llm=rules_llm,
-        enable_routing=enable_routing,
         behavior_config=behavior_config
     )
     return graph
@@ -97,14 +108,22 @@ def run_aviation_agent(
     settings: Optional[AviationAgentSettings] = None,
     planner_llm: Optional[Runnable] = None,
     formatter_llm: Optional[Runnable] = None,
-    enable_routing: bool = True,
     persona_id: Optional[str] = None,
 ) -> AgentState:
+    """
+    Run the aviation agent on a list of messages.
+
+    Args:
+        messages: List of messages to process
+        settings: AviationAgentSettings instance (uses default if None)
+        planner_llm: LLM for planning (testing only - uses behavior_config in production)
+        formatter_llm: LLM for formatting (testing only - uses behavior_config in production)
+        persona_id: Optional persona ID for the agent
+    """
     graph = build_agent(
         settings=settings,
         planner_llm=planner_llm,
         formatter_llm=formatter_llm,
-        enable_routing=enable_routing,
     )
     initial_state = {"messages": messages}
     if persona_id:
