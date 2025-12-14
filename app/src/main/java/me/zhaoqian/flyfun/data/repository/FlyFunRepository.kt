@@ -66,6 +66,16 @@ class FlyFunRepository @Inject constructor(
         apiService.searchAirports(query, limit)
     }
     
+    suspend fun searchAirportsNearRoute(
+        airports: List<String>,
+        distanceNm: Double = 50.0
+    ): Result<RouteSearchResponse> = runCatching {
+        apiService.searchAirportsNearRoute(
+            airports = airports.joinToString(","),
+            distanceNm = distanceNm
+        )
+    }
+    
     // ========== Rules ==========
     
     suspend fun getCountryRules(countryCode: String): Result<CountryRulesResponse> = runCatching {

@@ -53,6 +53,13 @@ interface FlyFunApiService {
         @Query("limit") limit: Int = 20
     ): List<Airport>
     
+    @GET("api/airports/route-search")
+    suspend fun searchAirportsNearRoute(
+        @Query("airports") airports: String,
+        @Query("segment_distance_nm") distanceNm: Double = 50.0,
+        @Query("limit") limit: Int = 1000
+    ): RouteSearchResponse
+    
     // ========== Rules ==========
     
     @GET("api/rules/{country_code}/")

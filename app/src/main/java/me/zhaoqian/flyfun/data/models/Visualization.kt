@@ -24,7 +24,20 @@ data class VisualizationPayload(
     @SerialName("mcp_raw")
     val mcpRaw: McpRaw? = null,
     val visualization: VisualizationData? = null,
-    val airports: List<MarkerData>? = null
+    val airports: List<MarkerData>? = null,
+    @SerialName("suggested_queries")
+    val suggestedQueries: List<SuggestedQuery>? = null
+)
+
+/**
+ * Suggested follow-up question from the AI assistant.
+ */
+@Serializable
+data class SuggestedQuery(
+    val text: String,
+    val tool: String? = null,
+    val category: String? = null,
+    val priority: Int? = null
 )
 
 @Serializable

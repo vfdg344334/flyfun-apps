@@ -44,12 +44,19 @@ data class GASummary(
 
 @Serializable
 data class AirportDetail(
-    val icao: String,
-    val name: String,
-    val country: String,
-    val latitude: Double,
-    val longitude: Double,
-    @SerialName("elevation_ft") val elevationFt: Int? = null,
+    @SerialName("ident") val icao: String,
+    val name: String? = null,
+    val type: String? = null,
+    @SerialName("iso_country") val country: String? = null,
+    @SerialName("iso_region") val region: String? = null,
+    @SerialName("latitude_deg") val latitude: Double? = null,
+    @SerialName("longitude_deg") val longitude: Double? = null,
+    @SerialName("elevation_ft") val elevationFt: Double? = null,
+    val municipality: String? = null,
+    @SerialName("iata_code") val iataCode: String? = null,
+    @SerialName("home_link") val homeLink: String? = null,
+    @SerialName("wikipedia_link") val wikipediaLink: String? = null,
+    val sources: List<String> = emptyList(),
     val runways: List<Runway> = emptyList(),
     val procedures: List<Procedure> = emptyList(),
     @SerialName("aip_entries") val aipEntries: List<AipEntry> = emptyList()
@@ -57,25 +64,29 @@ data class AirportDetail(
 
 @Serializable
 data class Runway(
-    val identifier: String,
-    @SerialName("length_ft") val lengthFt: Int? = null,
-    @SerialName("width_ft") val widthFt: Int? = null,
+    @SerialName("le_ident") val identifier: String? = null,
+    @SerialName("length_ft") val lengthFt: Double? = null,
+    @SerialName("width_ft") val widthFt: Double? = null,
     val surface: String? = null,
-    val lighted: Boolean = false
-)
+    val lighted: Int = 0
+) {
+    val isLighted: Boolean get() = lighted == 1
+}
 
 @Serializable
 data class Procedure(
-    val type: String,
-    val name: String,
-    val runway: String? = null
+    val type: String? = null,
+    val name: String? = null,
+    val runway: String? = null,
+    @SerialName("procedure_type") val procedureType: String? = null
 )
 
 @Serializable
 data class AipEntry(
-    val section: String,
+    val section: String = "",
+    val field: String = "",
+    val value: String = "",
     @SerialName("std_field") val stdField: String? = null,
-    val content: String,
     val source: String? = null
 )
 

@@ -6,9 +6,19 @@ plugins {
     kotlin("kapt")
 }
 
+import java.util.Properties
+
 android {
     namespace = "me.zhaoqian.flyfun"
     compileSdk = 34
+
+    // Read API URL from local.properties
+    val localProperties = Properties()
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { localProperties.load(it) }
+    }
+    val apiBaseUrl = localProperties.getProperty("API_BASE_URL", "http://localhost:8000/")
 
     defaultConfig {
         applicationId = "me.zhaoqian.flyfun"
@@ -16,6 +26,9 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+
+        // Add API URL as BuildConfig field
+        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

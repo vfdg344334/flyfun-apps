@@ -38,6 +38,9 @@ fun MapScreen(
     val uiState by viewModel.uiState.collectAsState()
     val selectedAirport by viewModel.selectedAirport.collectAsState()
     val airportDetail by viewModel.airportDetail.collectAsState()
+    val aipEntries by viewModel.aipEntries.collectAsState()
+    val countryRules by viewModel.countryRules.collectAsState()
+    val gaSummary by viewModel.gaSummary.collectAsState()
     val filters by viewModel.filters.collectAsState()
     val selectedPersona by viewModel.selectedPersona.collectAsState()
     val gaConfig by viewModel.gaConfig.collectAsState()
@@ -49,6 +52,7 @@ fun MapScreen(
     var showFiltersDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showSearchBar by remember { mutableStateOf(false) }
+    var selectedLegendMode by remember { mutableStateOf(LegendMode.AIRPORT_TYPE) }
     
     // Initialize osmdroid configuration
     LaunchedEffect(Unit) {
@@ -70,6 +74,7 @@ fun MapScreen(
             airports = displayedAirports,
             isSearchActive = isSearchActive,
             selectedPersona = selectedPersona,
+            legendMode = selectedLegendMode,
             routeVisualization = routeVisualization,
             onAirportClick = { airport -> viewModel.selectAirport(airport) },
             modifier = Modifier.fillMaxSize()
@@ -124,6 +129,8 @@ fun MapScreen(
         
         // Legend overlay (bottom-left corner)
         LegendOverlay(
+            selectedMode = selectedLegendMode,
+            onModeChange = { selectedLegendMode = it },
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
@@ -160,6 +167,9 @@ fun MapScreen(
             AirportDetailSheet(
                 airport = selectedAirport!!,
                 airportDetail = airportDetail,
+                aipEntries = aipEntries,
+                countryRules = countryRules,
+                gaSummary = gaSummary,
                 selectedPersona = selectedPersona,
                 onPersonaChange = { viewModel.setSelectedPersona(it) },
                 onDismiss = { viewModel.clearSelectedAirport() }
@@ -189,6 +199,7 @@ private fun OsmMapView(
     airports: List<Airport>,
     isSearchActive: Boolean,
     selectedPersona: String,
+    legendMode: LegendMode,
     routeVisualization: RouteVisualization?,
     onAirportClick: (Airport) -> Unit,
     modifier: Modifier = Modifier
@@ -239,8 +250,8 @@ private fun OsmMapView(
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 
                 // Use colors and sizes matching the legend
-                val color = getMarkerColor(airport)
-                val size = getMarkerSize(airport)
+                val color = getMarkerColor(airport, legendMode)
+                val size = getMarkerSize(airport, legendMode)
                 icon = createCircleMarker(context, color, size)
                 
                 setOnMarkerClickListener { _, _ ->
@@ -363,30 +374,106 @@ private object MarkerColors {
 }
 
 /**
- * Get airport marker color based on Airport Type legend mode
- * Matching web app: Green = Border Crossing, Yellow = With Procedures, Red = VFR only
+ * Get airport marker color based on selected legend mode
  */
-private fun getMarkerColor(airport: Airport): Int {
-    return when {
-        airport.pointOfEntry == true -> MarkerColors.BORDER_CROSSING
-        airport.hasProcedures -> MarkerColors.WITH_PROCEDURES
-        else -> MarkerColors.WITHOUT_PROCEDURES
+private fun getMarkerColor(airport: Airport, legendMode: LegendMode): Int {
+    return when (legendMode) {
+        LegendMode.AIRPORT_TYPE -> when {
+            airport.pointOfEntry == true -> MarkerColors.BORDER_CROSSING
+            airport.hasProcedures -> MarkerColors.WITH_PROCEDURES
+            else -> MarkerColors.WITHOUT_PROCEDURES
+        }
+        LegendMode.PROCEDURE_PRECISION -> when {
+            // Check for precision approaches (ILS/LPV)
+            airport.hasProcedures && airport.procedureCount > 3 -> 0xFF28A745.toInt() // Green - ILS/LPV
+            airport.hasProcedures && airport.procedureCount > 1 -> 0xFF17A2B8.toInt() // Teal - RNAV/RNP
+            airport.hasProcedures -> 0xFFFFC107.toInt() // Yellow - VOR/NDB
+            else -> 0xFFDC3545.toInt() // Red - None
+        }
+        LegendMode.RUNWAY_LENGTH -> {
+            val lengthFt = airport.longestRunwayLengthFt ?: 0
+            val lengthM = lengthFt * 0.3048
+            when {
+                lengthM > 1500 -> 0xFF28A745.toInt() // Green - > 1500m
+                lengthM > 1000 -> 0xFF17A2B8.toInt() // Teal - 1000-1500m
+                lengthM > 600 -> 0xFFFFC107.toInt() // Yellow - 600-1000m
+                else -> 0xFFDC3545.toInt() // Red - < 600m
+            }
+        }
+        LegendMode.COUNTRY -> {
+            // Generate a deterministic color based on country code
+            val countryCode = airport.country ?: "XX"
+            val hash = countryCode.hashCode()
+            val hue = (hash and 0x7FFFFFFF) % 360
+            android.graphics.Color.HSVToColor(floatArrayOf(hue.toFloat(), 0.7f, 0.8f))
+        }
+        LegendMode.GA_RELEVANCE -> {
+            // Based on GA friendliness (use procedures and border crossing as proxy for now)
+            when {
+                airport.pointOfEntry == true && airport.hasProcedures -> 0xFF28A745.toInt() // Green - Very Relevant
+                airport.hasProcedures -> 0xFF17A2B8.toInt() // Teal - Relevant
+                airport.pointOfEntry == true -> 0xFFFFC107.toInt() // Yellow - Somewhat
+                else -> 0xFFDC3545.toInt() // Red - Not Relevant
+            }
+        }
     }
 }
 
 /**
- * Get marker size based on airport type (larger = more important)
+ * Get marker size based on airport and legend mode
  */
-private fun getMarkerSize(airport: Airport): Int {
-    return when {
-        airport.pointOfEntry == true -> 16
-        airport.hasProcedures -> 14
-        else -> 12
+private fun getMarkerSize(airport: Airport, legendMode: LegendMode): Int {
+    return when (legendMode) {
+        LegendMode.AIRPORT_TYPE -> when {
+            airport.pointOfEntry == true -> 16
+            airport.hasProcedures -> 14
+            else -> 12
+        }
+        LegendMode.PROCEDURE_PRECISION -> when {
+            airport.hasProcedures && airport.procedureCount > 3 -> 16
+            airport.hasProcedures && airport.procedureCount > 1 -> 14
+            airport.hasProcedures -> 12
+            else -> 10
+        }
+        LegendMode.RUNWAY_LENGTH -> {
+            val lengthFt = airport.longestRunwayLengthFt ?: 0
+            val lengthM = lengthFt * 0.3048
+            when {
+                lengthM > 1500 -> 16
+                lengthM > 1000 -> 14
+                lengthM > 600 -> 12
+                else -> 10
+            }
+        }
+        LegendMode.COUNTRY -> 12 // Same size for all
+        LegendMode.GA_RELEVANCE -> when {
+            airport.pointOfEntry == true && airport.hasProcedures -> 16
+            airport.hasProcedures -> 14
+            airport.pointOfEntry == true -> 12
+            else -> 10
+        }
     }
 }
 
+/**
+ * Legend mode for map marker coloring
+ */
+enum class LegendMode(val label: String) {
+    AIRPORT_TYPE("Airport Type"),
+    PROCEDURE_PRECISION("Procedure Precision"),
+    RUNWAY_LENGTH("Runway Length"),
+    COUNTRY("Country"),
+    GA_RELEVANCE("GA Relevance")
+}
+
 @Composable
-private fun LegendOverlay(modifier: Modifier = Modifier) {
+private fun LegendOverlay(
+    selectedMode: LegendMode,
+    onModeChange: (LegendMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showModeMenu by remember { mutableStateOf(false) }
+    
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(8.dp),
@@ -397,7 +484,7 @@ private fun LegendOverlay(modifier: Modifier = Modifier) {
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Header
+            // Header with dropdown
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -415,22 +502,98 @@ private fun LegendOverlay(modifier: Modifier = Modifier) {
                 )
             }
             
-            // Legend items
-            LegendItem(
-                color = androidx.compose.ui.graphics.Color(0xFF28A745),
-                size = 16.dp,
-                label = "Border Crossing"
-            )
-            LegendItem(
-                color = androidx.compose.ui.graphics.Color(0xFFFFC107),
-                size = 14.dp,
-                label = "Airport with Procedures"
-            )
-            LegendItem(
-                color = androidx.compose.ui.graphics.Color(0xFFDC3545),
-                size = 12.dp,
-                label = "Airport without Procedures"
-            )
+            // Mode selector dropdown
+            Box {
+                Surface(
+                    onClick = { showModeMenu = true },
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = selectedMode.label,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                DropdownMenu(
+                    expanded = showModeMenu,
+                    onDismissRequest = { showModeMenu = false }
+                ) {
+                    LegendMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.label) },
+                            onClick = {
+                                onModeChange(mode)
+                                showModeMenu = false
+                            },
+                            leadingIcon = {
+                                if (mode == selectedMode) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            
+            // Legend items based on selected mode
+            when (selectedMode) {
+                LegendMode.AIRPORT_TYPE -> {
+                    LegendItem(
+                        color = androidx.compose.ui.graphics.Color(0xFF28A745),
+                        size = 16.dp,
+                        label = "Border Crossing"
+                    )
+                    LegendItem(
+                        color = androidx.compose.ui.graphics.Color(0xFFFFC107),
+                        size = 14.dp,
+                        label = "Airport with Procedures"
+                    )
+                    LegendItem(
+                        color = androidx.compose.ui.graphics.Color(0xFFDC3545),
+                        size = 12.dp,
+                        label = "Airport without Procedures"
+                    )
+                }
+                LegendMode.PROCEDURE_PRECISION -> {
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF28A745), size = 14.dp, label = "ILS/LPV")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF17A2B8), size = 14.dp, label = "RNAV/RNP")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFFFC107), size = 14.dp, label = "VOR/NDB")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFDC3545), size = 14.dp, label = "None")
+                }
+                LegendMode.RUNWAY_LENGTH -> {
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF28A745), size = 16.dp, label = "> 1500m")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF17A2B8), size = 14.dp, label = "1000-1500m")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFFFC107), size = 12.dp, label = "600-1000m")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFDC3545), size = 10.dp, label = "< 600m")
+                }
+                LegendMode.COUNTRY -> {
+                    Text(
+                        text = "Each country has unique color",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                LegendMode.GA_RELEVANCE -> {
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF28A745), size = 16.dp, label = "Very Relevant")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFF17A2B8), size = 14.dp, label = "Relevant")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFFFC107), size = 12.dp, label = "Somewhat")
+                    LegendItem(color = androidx.compose.ui.graphics.Color(0xFFDC3545), size = 10.dp, label = "Not Relevant")
+                }
+            }
         }
     }
 }

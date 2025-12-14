@@ -31,6 +31,18 @@ class MapViewModel @Inject constructor(
     private val _airportDetail = MutableStateFlow<AirportDetail?>(null)
     val airportDetail: StateFlow<AirportDetail?> = _airportDetail.asStateFlow()
     
+    // AIP entries for selected airport
+    private val _aipEntries = MutableStateFlow<List<AipEntry>>(emptyList())
+    val aipEntries: StateFlow<List<AipEntry>> = _aipEntries.asStateFlow()
+    
+    // Country rules for selected airport
+    private val _countryRules = MutableStateFlow<CountryRulesResponse?>(null)
+    val countryRules: StateFlow<CountryRulesResponse?> = _countryRules.asStateFlow()
+    
+    // GA summary for selected airport
+    private val _gaSummary = MutableStateFlow<GADetailedSummary?>(null)
+    val gaSummary: StateFlow<GADetailedSummary?> = _gaSummary.asStateFlow()
+    
     // Filters
     private val _filters = MutableStateFlow(AirportFilters())
     val filters: StateFlow<AirportFilters> = _filters.asStateFlow()
@@ -119,20 +131,55 @@ class MapViewModel @Inject constructor(
     }
     
     fun selectAirport(airport: Airport) {
+        android.util.Log.w("MapVM", "selectAirport called: ${airport.icao}")
         _selectedAirport.value = airport
-        loadAirportDetail(airport.icao)
+        loadAirportDetail(airport.icao, airport.country)
     }
     
     fun clearSelectedAirport() {
         _selectedAirport.value = null
         _airportDetail.value = null
+        _aipEntries.value = emptyList()
+        _countryRules.value = null
+        _gaSummary.value = null
     }
     
-    private fun loadAirportDetail(icao: String) {
+    private fun loadAirportDetail(icao: String, countryCode: String?) {
+        android.util.Log.w("MapVM", "loadAirportDetail: icao=$icao, country=$countryCode")
         viewModelScope.launch {
-            repository.getAirportDetail(icao).onSuccess { detail ->
-                _airportDetail.value = detail
+            // Fetch airport detail (includes aipEntries)
+            repository.getAirportDetail(icao)
+                .onSuccess { detail ->
+                    android.util.Log.w("MapVM", "AirportDetail success: runways=${detail.runways.size}, procedures=${detail.procedures.size}, aipEntries=${detail.aipEntries.size}")
+                    _airportDetail.value = detail
+                    // Use AIP entries from the main detail endpoint
+                    _aipEntries.value = detail.aipEntries
+                }
+                .onFailure { e ->
+                    android.util.Log.e("MapVM", "AirportDetail failed: ${e.message}", e)
+                }
+            
+            // Fetch country rules if country code is available
+            countryCode?.let { country ->
+                repository.getCountryRules(country)
+                    .onSuccess { rules ->
+                        android.util.Log.d("MapVM", "CountryRules success: ${rules.totalRules} rules")
+                        _countryRules.value = rules
+                    }
+                    .onFailure { e ->
+                        android.util.Log.e("MapVM", "CountryRules failed: ${e.message}")
+                    }
             }
+            
+            // Fetch GA summary with selected persona
+            repository.getGASummary(icao, _selectedPersona.value)
+                .onSuccess { summary ->
+                    android.util.Log.d("MapVM", "GASummary success: hasData=${summary.hasData}, score=${summary.score}")
+                    _gaSummary.value = summary
+                }
+                .onFailure { e ->
+                    android.util.Log.e("MapVM", "GASummary failed: ${e.message}")
+                }
         }
     }
     

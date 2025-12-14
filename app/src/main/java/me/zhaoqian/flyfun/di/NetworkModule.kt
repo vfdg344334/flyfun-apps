@@ -20,13 +20,10 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
     
-    // API Base URL - configurable for different environments
-    private const val BASE_URL = "http://ovh.zhaoqian.me:8000/"
-    
     @Provides
     @Singleton
     @Named("baseUrl")
-    fun provideBaseUrl(): String = BASE_URL
+    fun provideBaseUrl(): String = me.zhaoqian.flyfun.BuildConfig.API_BASE_URL
     
     @Provides
     @Singleton

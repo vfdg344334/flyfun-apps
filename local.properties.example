@@ -1,0 +1,9 @@
+# FlyFun Android App - Local Configuration
+# Copy this file to local.properties and update values
+
+# Android SDK location (set by Android Studio)
+# sdk.dir=/path/to/android/sdk
+
+# API Base URL - point to your FlyFun API server
+# See https://github.com/roznet/flyfun-apps for API setup
+API_BASE_URL=http://localhost:8000/

@@ -3,6 +3,7 @@ package me.zhaoqian.flyfun.ui.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import me.zhaoqian.flyfun.ui.theme.*
+import me.zhaoqian.flyfun.data.models.SuggestedQuery
 import me.zhaoqian.flyfun.viewmodel.ChatViewModel
 import me.zhaoqian.flyfun.viewmodel.Role
 import me.zhaoqian.flyfun.viewmodel.UiChatMessage
@@ -46,8 +48,12 @@ fun ChatScreen(
     val isStreaming by viewModel.isStreaming.collectAsState()
     val currentThinking by viewModel.currentThinking.collectAsState()
     val error by viewModel.error.collectAsState()
+    val suggestedQueries by viewModel.suggestedQueries.collectAsState()
+    val personas by viewModel.personas.collectAsState()
+    val selectedPersonaId by viewModel.selectedPersonaId.collectAsState()
     
     var inputText by remember { mutableStateOf("") }
+    var showPersonaMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     
@@ -90,6 +96,52 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // Persona dropdown
+                    Box {
+                        val selectedPersona = personas.find { it.id == selectedPersonaId }
+                        TextButton(onClick = { showPersonaMenu = true }) {
+                            Text(
+                                text = selectedPersona?.label ?: "Select Persona",
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showPersonaMenu,
+                            onDismissRequest = { showPersonaMenu = false }
+                        ) {
+                            personas.forEach { persona ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                text = persona.label,
+                                                fontWeight = if (persona.id == selectedPersonaId) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.selectPersona(persona.id)
+                                        showPersonaMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (persona.id == selectedPersonaId) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    // Clear chat button
                     IconButton(onClick = { viewModel.clearChat() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "New conversation")
                     }
@@ -123,6 +175,18 @@ fun ChatScreen(
                 if (isStreaming) {
                     item {
                         ThinkingIndicator(thinking = currentThinking ?: "Processing your request...")
+                    }
+                }
+                
+                // Suggested follow-up questions
+                if (!isStreaming && suggestedQueries.isNotEmpty()) {
+                    item {
+                        SuggestedQueriesSection(
+                            suggestions = suggestedQueries,
+                            onSuggestionClick = { suggestion ->
+                                viewModel.sendMessage(suggestion.text)
+                            }
+                        )
                     }
                 }
             }
@@ -500,5 +564,102 @@ private fun parseInlineMarkdown(builder: AnnotatedString.Builder, text: String) 
                 }
             }
         }
+    }
+}
+
+/**
+ * Section displaying suggested follow-up questions from the AI.
+ * Matches web UI design: vertical list with colored category badges.
+ */
+@Composable
+private fun SuggestedQueriesSection(
+    suggestions: List<SuggestedQuery>,
+    onSuggestionClick: (SuggestedQuery) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header with lightbulb icon
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "💡",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "You might also want to ask:",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            
+            // Vertical list of suggestions (like web UI)
+            suggestions.forEach { suggestion ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSuggestionClick(suggestion) },
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        androidx.compose.ui.graphics.Color(0xFF4285F4).copy(alpha = 0.3f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Category badge with vibrant color
+                        suggestion.category?.let { category ->
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = getCategoryColor(category)
+                            ) {
+                                Text(
+                                    text = category.uppercase(),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = androidx.compose.ui.graphics.Color.White
+                                )
+                            }
+                        }
+                        // Query text
+                        Text(
+                            text = suggestion.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Get color for suggestion category badge - matches web UI colors exactly.
+ */
+@Composable
+private fun getCategoryColor(category: String): androidx.compose.ui.graphics.Color {
+    return when (category.lowercase()) {
+        "route", "routing" -> androidx.compose.ui.graphics.Color(0xFF6C5DD3) // Purple
+        "rules" -> androidx.compose.ui.graphics.Color(0xFF4285F4) // Blue
+        "details" -> androidx.compose.ui.graphics.Color(0xFF27AE60) // Green
+        "pricing" -> androidx.compose.ui.graphics.Color(0xFFE67E22) // Orange
+        "airports" -> androidx.compose.ui.graphics.Color(0xFF4285F4) // Blue
+        "weather" -> androidx.compose.ui.graphics.Color(0xFF3498DB) // Light blue
+        else -> MaterialTheme.colorScheme.secondary
     }
 }

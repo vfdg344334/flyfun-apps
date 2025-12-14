@@ -9,7 +9,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChatRequest(
-    val messages: List<ChatMessage>
+    val messages: List<ChatMessage>,
+    @SerialName("persona_id") val personaId: String? = null
 )
 
 @Serializable

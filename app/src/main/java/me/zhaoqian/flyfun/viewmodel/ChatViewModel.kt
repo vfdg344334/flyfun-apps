@@ -38,12 +38,49 @@ class ChatViewModel @Inject constructor(
     private val _routeVisualization = MutableStateFlow<RouteVisualization?>(null)
     val routeVisualization: StateFlow<RouteVisualization?> = _routeVisualization.asStateFlow()
     
+    // Suggested follow-up questions
+    private val _suggestedQueries = MutableStateFlow<List<SuggestedQuery>>(emptyList())
+    val suggestedQueries: StateFlow<List<SuggestedQuery>> = _suggestedQueries.asStateFlow()
+    
+    // Personas for chat - default to SR22 IFR touring
+    private val _personas = MutableStateFlow<List<Persona>>(listOf(
+        Persona("ifr_touring_sr22", "IFR touring (SR22)", "IFR capable single engine touring", emptyMap()),
+        Persona("vfr_budget_flyer", "VFR budget flyer", "VFR budget conscious pilot", emptyMap()),
+        Persona("lunch_stop", "Lunch stop", "Looking for nice airport restaurants", emptyMap()),
+        Persona("training_flight", "Training flight", "Training or practice flights", emptyMap())
+    ))
+    val personas: StateFlow<List<Persona>> = _personas.asStateFlow()
+    
+    private val _selectedPersonaId = MutableStateFlow("ifr_touring_sr22")
+    val selectedPersonaId: StateFlow<String?> = _selectedPersonaId.asStateFlow()
+    
+    init {
+        loadPersonas()
+    }
+    
+    private fun loadPersonas() {
+        viewModelScope.launch {
+            repository.getGAConfig().onSuccess { config ->
+                _personas.value = config.personas
+                // Only update selection if API returns a default
+                if (config.defaultPersona.isNotEmpty()) {
+                    _selectedPersonaId.value = config.defaultPersona
+                }
+            }
+            // On failure, use hardcoded fallback personas
+        }
+    }
+    
+    fun selectPersona(personaId: String) {
+        _selectedPersonaId.value = personaId
+    }
     
     fun sendMessage(content: String) {
         if (content.isBlank() || _isStreaming.value) return
         
-        // Clear previous visualization when starting new chat
+        // Clear previous visualization and suggestions when starting new chat
         _routeVisualization.value = null
+        _suggestedQueries.value = emptyList()
         
         viewModelScope.launch {
             // Add user message
@@ -72,7 +109,7 @@ class ChatViewModel @Inject constructor(
                 .dropLast(1) // Exclude the assistant placeholder we just added
                 .map { ChatMessage(role = it.role.value, content = it.content) }
             
-            val request = ChatRequest(messages = allMessages)
+            val request = ChatRequest(messages = allMessages, personaId = _selectedPersonaId.value)
             
             // Stream response
             var accumulatedContent = StringBuilder()
@@ -98,6 +135,12 @@ class ChatViewModel @Inject constructor(
                         is ChatStreamEvent.UiPayloadEvent -> {
                             // Process visualization payload for map display
                             processVisualization(event.payload)
+                            // Extract suggested queries if present
+                            event.payload.suggestedQueries?.let { queries ->
+                                if (queries.isNotEmpty()) {
+                                    _suggestedQueries.value = queries
+                                }
+                            }
                         }
                         is ChatStreamEvent.FinalAnswerEvent -> {
                             updateAssistantMessage(assistantMessageId, event.response, false)
@@ -135,53 +178,71 @@ class ChatViewModel @Inject constructor(
         }
         
         // First airport is departure, second is destination (sorted by enroute_distance)
-        val fromAirport = markerList.first()
-        val toAirport = markerList.find { it.enrouteDistanceNm != null && it.enrouteDistanceNm > 0 }
+        val fromAirportMarker = markerList.first()
+        val toAirportMarker = markerList.find { it.enrouteDistanceNm != null && it.enrouteDistanceNm > 0 }
             ?: markerList[1]
         
-        val fromLat = fromAirport.latitude ?: return
-        val fromLon = fromAirport.longitude ?: return
-        val toLat = toAirport.latitude ?: return
-        val toLon = toAirport.longitude ?: return
+        val fromIcao = fromAirportMarker.ident ?: fromAirportMarker.icao ?: "DEP"
+        val toIcao = toAirportMarker.ident ?: toAirportMarker.icao ?: "ARR"
         
-        android.util.Log.d("ChatVM", "Route: ${fromAirport.ident} ($fromLat,$fromLon) -> ${toAirport.ident} ($toLat,$toLon)")
+        val fromLat = fromAirportMarker.latitude ?: return
+        val fromLon = fromAirportMarker.longitude ?: return
+        val toLat = toAirportMarker.latitude ?: return
+        val toLon = toAirportMarker.longitude ?: return
         
-        // Extract all airport ICAOs for highlighting
+        android.util.Log.d("ChatVM", "Route: $fromIcao ($fromLat,$fromLon) -> $toIcao ($toLat,$toLon)")
+        
+        // Extract highlighted airports from the chat payload (these are what the LLM specifically mentioned)
         val highlightedAirports = markerList.mapNotNull { it.ident ?: it.icao }
         
-        // Map MarkerData to Airport objects
-        val mappedAirports = markerList.mapNotNull { marker ->
-            if (marker.latitude == null || marker.longitude == null) return@mapNotNull null
-            val icao = marker.ident ?: marker.icao ?: return@mapNotNull null
+        // Launch coroutine to fetch full airport list from backend API
+        viewModelScope.launch {
+            android.util.Log.d("ChatVM", "Fetching full route details for $fromIcao -> $toIcao")
+            val routeResponseResult = repository.searchAirportsNearRoute(listOf(fromIcao, toIcao))
             
-            Airport(
-                icao = icao,
-                name = marker.name,
-                country = marker.country,
-                latitude = marker.latitude,
-                longitude = marker.longitude,
-                pointOfEntry = marker.pointOfEntry,
-                hasProcedures = marker.hasProcedures ?: false,
-                hasHardRunway = marker.hasHardRunway ?: false,
-                hasRunways = true // Assumption for visualized airports
+            val finalAirports = routeResponseResult.getOrNull()?.airports?.map { it.airport }
+            
+            val airportsToDisplay = if (finalAirports != null && finalAirports.isNotEmpty()) {
+                android.util.Log.d("ChatVM", "Using ${finalAirports.size} airports from API search")
+                finalAirports
+            } else {
+                android.util.Log.w("ChatVM", "API search failed or empty, falling back to chat payload")
+                // Fallback to mapping MarkerData to Airport
+                markerList.mapNotNull { marker ->
+                    if (marker.latitude == null || marker.longitude == null) return@mapNotNull null
+                    val icao = marker.ident ?: marker.icao ?: return@mapNotNull null
+                    
+                    Airport(
+                        icao = icao,
+                        name = marker.name,
+                        country = marker.country,
+                        latitude = marker.latitude,
+                        longitude = marker.longitude,
+                        pointOfEntry = marker.pointOfEntry,
+                        hasProcedures = marker.hasProcedures ?: false,
+                        hasHardRunway = marker.hasHardRunway ?: false,
+                        hasRunways = true
+                    )
+                }
+            }
+            
+            if (airportsToDisplay.isEmpty()) return@launch
+            
+            val routeViz = RouteVisualization(
+                fromLat = fromLat,
+                fromLon = fromLon,
+                toLat = toLat,
+                toLon = toLon,
+                fromIcao = fromIcao,
+                toIcao = toIcao,
+                highlightedAirports = highlightedAirports,
+                airports = airportsToDisplay
             )
+            
+            android.util.Log.d("ChatVM", "RouteVisualization ready with ${airportsToDisplay.size} airports")
+            _routeVisualization.value = routeViz
+            routeStateHolder.setRouteVisualization(routeViz)
         }
-        
-        val routeViz = RouteVisualization(
-            fromLat = fromLat,
-            fromLon = fromLon,
-            toLat = toLat,
-            toLon = toLon,
-            fromIcao = fromAirport.ident ?: "DEP",
-            toIcao = toAirport.ident ?: "ARR",
-            highlightedAirports = highlightedAirports,
-            airports = mappedAirports
-        )
-        
-        android.util.Log.d("ChatVM", "RouteVisualization created with ${mappedAirports.size} airports")
-        _routeVisualization.value = routeViz
-        // Also publish to shared state for MapViewModel
-        routeStateHolder.setRouteVisualization(routeViz)
     }
     
     private fun updateAssistantMessage(id: String, content: String, isStreaming: Boolean) {
@@ -202,6 +263,7 @@ class ChatViewModel @Inject constructor(
         _currentThinking.value = null
         _error.value = null
         _routeVisualization.value = null
+        _suggestedQueries.value = emptyList()
         routeStateHolder.setRouteVisualization(null)
     }
     

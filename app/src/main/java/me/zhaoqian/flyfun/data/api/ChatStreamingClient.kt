@@ -104,6 +104,7 @@ class ChatStreamingClient @Inject constructor(
                     // 1. { "ui_payload": ... } (Wrapper)
                     // 2. { "state": { "ui_payload": ... } } (State object)
                     // 3. { "kind": "route", "mcp_raw": ... } (Direct payload)
+                    // Also extract suggested_queries from root if present
                     try {
                         android.util.Log.d("ChatStream", "ui_payload event received: $data")
                         val rootObj = json.decodeFromString<kotlinx.serialization.json.JsonObject>(data)
@@ -114,7 +115,7 @@ class ChatStreamingClient @Inject constructor(
                                 if (it is kotlinx.serialization.json.JsonObject) it["ui_payload"] else null 
                             }
                         
-                        val payload = if (uiPayloadJson != null) {
+                        var payload = if (uiPayloadJson != null) {
                             json.decodeFromString<VisualizationPayload>(uiPayloadJson.toString())
                         } else {
                             // Fallback: Assume the root object is the payload itself
@@ -122,7 +123,16 @@ class ChatStreamingClient @Inject constructor(
                             json.decodeFromString<VisualizationPayload>(data)
                         }
                         
-                        android.util.Log.d("ChatStream", "ui_payload parsed: kind=${payload.kind}, airports=${payload.mcpRaw?.airports?.size}")
+                        // Also check for suggested_queries at root level (how web UI receives them)
+                        val suggestedQueriesJson = rootObj["suggested_queries"]
+                        if (suggestedQueriesJson != null && payload.suggestedQueries == null) {
+                            android.util.Log.d("ChatStream", "Found suggested_queries at root: $suggestedQueriesJson")
+                            val queries = json.decodeFromString<List<me.zhaoqian.flyfun.data.models.SuggestedQuery>>(suggestedQueriesJson.toString())
+                            // Create new payload with suggested queries
+                            payload = payload.copy(suggestedQueries = queries)
+                        }
+                        
+                        android.util.Log.d("ChatStream", "ui_payload parsed: kind=${payload.kind}, airports=${payload.mcpRaw?.airports?.size}, suggestions=${payload.suggestedQueries?.size}")
                         ChatStreamEvent.UiPayloadEvent(payload)
 
                     } catch (e: Exception) {

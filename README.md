@@ -9,6 +9,7 @@ An Android app for the FlyFun aviation assistant, providing airport information,
 - **GA Friendliness**: Scores and summaries for General Aviation friendliness
 - **AI Assistant**: Chat with an aviation-focused AI for flight planning help
 - **Filters**: Filter airports by country, procedures, runway length, and more
+- **Legend Modes**: Color airports by type, procedure precision, runway length, country, or GA relevance
 
 ## Setup
 
@@ -18,10 +19,18 @@ An Android app for the FlyFun aviation assistant, providing airport information,
 - JDK 17
 - Android SDK with API 34
 
+### Configuration
+
+1. Copy `local.properties.example` to `local.properties`
+2. Update `API_BASE_URL` with your API server URL
+
+```properties
+API_BASE_URL=http://your-server:8000/
+```
+
 ### Building
 
 ```bash
-cd android
 ./gradlew assembleDebug
 ```
 
@@ -30,6 +39,18 @@ cd android
 Open the project in Android Studio and run on an emulator or device.
 
 **No API keys required!** The app uses OpenStreetMap via osmdroid.
+
+## Backend API
+
+This app requires the FlyFun API server. For setting up the backend:
+
+👉 **See [flyfun-apps](https://github.com/roznet/flyfun-apps) for API documentation and setup**
+
+The API provides:
+- Airport data and search
+- Aviation rules by country
+- GA friendliness scores
+- AI-powered aviation assistant (streaming)
 
 ## Architecture
 
@@ -40,20 +61,10 @@ Open the project in Android Studio and run on an emulator or device.
 - **osmdroid** for OpenStreetMap display (like Leaflet on web)
 - **Kotlinx Serialization** for JSON parsing
 
-## API Endpoints
-
-The app connects to `http://ovh.zhaoqian.me:3001/` for:
-
-- `/airports` - List and filter airports
-- `/airports/{icao}` - Airport details
-- `/rules/{country}` - Aviation rules
-- `/ga/*` - GA friendliness data
-- `/aviation-agent/chat/stream` - AI chatbot (SSE)
-
 ## Project Structure
 
 ```
-android/app/src/main/java/me/zhaoqian/flyfun/
+app/src/main/java/.../
 ├── data/
 │   ├── api/           # Retrofit API interfaces
 │   ├── models/        # Data classes
