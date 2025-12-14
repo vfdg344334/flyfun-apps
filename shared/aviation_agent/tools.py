@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping
 
 from shared.airport_tools import (
-    ToolContext,
     ToolSpec,
     get_shared_tool_specs,
 )
+from shared.tool_context import ToolContext
 
 
 @dataclass(frozen=True)

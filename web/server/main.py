@@ -40,7 +40,7 @@ from security_config import (
 # Import API routes
 from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness, notifications
 
-from shared.airport_tools import ToolContext
+from shared.tool_context import ToolContext
 
 # Configure logging with file output only (uvicorn handles console)
 # Use /app/logs in Docker, /tmp/flyfun-logs for local development

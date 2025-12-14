@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from euro_aip.models.airport import Airport
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 @dataclass

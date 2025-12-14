@@ -24,7 +24,7 @@ from .filters import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class FilterRegistry:

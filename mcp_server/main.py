@@ -30,7 +30,6 @@ load_component_env(component_dir)
 from fastmcp import Context, FastMCP
 
 from shared.airport_tools import (
-    ToolContext,
     search_airports as shared_search_airports,
     find_airports_near_route as shared_find_airports_near_route,
     find_airports_near_location as shared_find_airports_near_location,
@@ -45,6 +44,7 @@ from shared.airport_tools import (
     get_notification_for_airport as shared_get_notification_for_airport,
     find_airports_by_notification as shared_find_airports_by_notification,
 )
+from shared.tool_context import ToolContext
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

@@ -7,7 +7,7 @@ from euro_aip.models.airport import Airport
 from .base import Filter
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 class CountryFilter(Filter):
     """Filter airports by ISO country code."""

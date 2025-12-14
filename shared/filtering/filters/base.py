@@ -7,7 +7,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class Filter(ABC):

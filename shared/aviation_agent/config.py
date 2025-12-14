@@ -9,7 +9,7 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from shared.airport_tools import ToolContext
+from shared.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 

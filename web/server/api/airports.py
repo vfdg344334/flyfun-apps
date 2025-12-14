@@ -9,7 +9,8 @@ from euro_aip.models.airport import Airport
 from euro_aip.models.navpoint import NavPoint
 from .models import AirportSummary, AirportDetail, AIPEntryResponse, GAFriendlySummary
 from .ga_friendliness import get_service as get_ga_service
-from shared.airport_tools import ToolContext, find_airports_near_location
+from shared.airport_tools import find_airports_near_location
+from shared.tool_context import ToolContext
 
 # Type alias for route airports (can be ICAO codes or NavPoint objects)
 Route: TypeAlias = List[Union[str, NavPoint]]

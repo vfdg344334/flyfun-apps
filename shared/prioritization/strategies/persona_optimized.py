@@ -10,7 +10,7 @@ from euro_aip.models.airport import Airport
 from .base import PriorityStrategy, ScoredAirport
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 class PersonaOptimizedStrategy(PriorityStrategy):
     """
