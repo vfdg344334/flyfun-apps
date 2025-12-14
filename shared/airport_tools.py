@@ -54,7 +54,7 @@ def _airport_summary(a: Airport) -> Dict[str, Any]:
 def search_airports(
     ctx: ToolContext,
     query: str,
-    max_results: int = 50,
+    max_results: int = 5,
     filters: Optional[Dict[str, Any]] = None,
     priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
@@ -154,7 +154,7 @@ def search_airports(
         f"Found {len(airport_summaries)} airports matching '{query}':\n\n" +
         "\n\n".join(
             f"**{m['ident']} - {m['name']}**\nLocation: {m['municipality'] or 'Unknown'}, {m['country'] or 'Unknown'}"
-            for m in airport_summaries[:20]  # Only show first 20 in text
+            for m in airport_summaries[:max_results]
         )
     )
 
@@ -184,7 +184,7 @@ def search_airports(
 
     # Limit for LLM to save tokens
     total_count = len(airport_summaries)
-    airports_for_llm = airport_summaries[:20] if len(airport_summaries) > 20 else airport_summaries
+    airports_for_llm = airport_summaries[:max_results]
 
     return {
         "count": total_count,
@@ -203,6 +203,7 @@ def find_airports_near_route(
     from_location: str,
     to_location: str,
     max_distance_nm: float = 50.0,
+    max_results: int = 5,
     filters: Optional[Dict[str, Any]] = None,
     priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
@@ -316,9 +317,8 @@ def find_airports_near_route(
         pretty = "\n".join(substitution_notes) + "\n\n" + pretty
 
     # Limit airports sent to LLM to save tokens (keep all for visualization)
-    # For route planning, top 20 airports sorted by priority is sufficient
     total_count = len(airports)
-    airports_for_llm = airports[:20] if len(airports) > 20 else airports
+    airports_for_llm = airports[:max_results]
 
     # Generate filter profile for UI synchronization
     filter_profile = {"route_distance": max_distance_nm}
@@ -820,6 +820,7 @@ def find_airports_near_location(
     ctx: ToolContext,
     location_query: str,
     max_distance_nm: float = 50.0,
+    max_results: int = 5,
     filters: Optional[Dict[str, Any]] = None,
     priority_strategy: str = "persona_optimized",
 ) -> Dict[str, Any]:
@@ -886,7 +887,7 @@ def find_airports_near_location(
         airports.append(summary)
 
     total_count = len(airports)
-    airports_for_llm = airports[:20] if total_count > 20 else airports
+    airports_for_llm = airports[:max_results]
 
     # Build pretty output with airport list (similar to search_airports)
     if airports:
@@ -894,7 +895,7 @@ def find_airports_near_location(
         pretty += "\n\n".join(
             f"**{a['ident']} - {a['name']}** ({a['distance_nm']}nm)\n"
             f"Location: {a['municipality'] or 'Unknown'}, {a['country'] or 'Unknown'}"
-            for a in airports_for_llm[:20]  # Only show first 20 in text
+            for a in airports_for_llm
         )
     else:
         pretty = f"No airports within {max_distance_nm}nm of {geocode['formatted']}."
@@ -1034,8 +1035,8 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "max_results": {
                             "type": "integer",
-                            "description": "Maximum number of results to return.",
-                            "default": 20,
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
                         },
                         "filters": {
                             "type": "object",
@@ -1069,6 +1070,11 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "number",
                             "description": "Max distance from the location in nautical miles.",
                             "default": 50.0,
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
                         },
                         "filters": {
                             "type": "object",
@@ -1106,6 +1112,11 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "number",
                             "description": "Max distance from route centerline in nautical miles.",
                             "default": 50.0,
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
                         },
                         "filters": {
                             "type": "object",
