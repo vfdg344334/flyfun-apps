@@ -5,10 +5,10 @@
 set -e
 
 echo "Building base image..."
-docker-compose build base
+docker compose build base
 
 echo "Building web-server and mcp-server..."
-docker-compose build web-server mcp-server
+docker compose build web-server mcp-server
 
 echo "All images built successfully!"
 
