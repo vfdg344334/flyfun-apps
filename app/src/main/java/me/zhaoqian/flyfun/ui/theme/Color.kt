@@ -36,5 +36,5 @@ val MarkerDefault = Color(0xFF667EEA)
 
 // Chat colors
 val ChatUserBubble = Color(0xFF667EEA)
-val ChatAssistantBubble = Color(0xFFF8F9FA)
+val ChatAssistantBubble = Color(0xFFE9ECEF)  // Slightly darker gray for visibility
 val ChatThinking = Color(0xFFE9ECEF)
