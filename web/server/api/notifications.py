@@ -26,7 +26,10 @@ def _get_service() -> NotificationService:
     """Get notification service instance."""
     global _notification_service
     if _notification_service is None:
-        _notification_service = NotificationService()
+        raise RuntimeError(
+            "NotificationService not initialized. "
+            "Service must be set during application startup via set_notification_service()."
+        )
     return _notification_service
 
 

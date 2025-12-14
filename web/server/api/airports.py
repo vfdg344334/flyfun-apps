@@ -559,9 +559,13 @@ async def get_airport_aip_entries(
         entries = [e for e in entries if e.std_field == std_field]
     
     # Get parsed notification summary if available
-    from shared.ga_notification_agent.service import NotificationService
-    notification_service = NotificationService()
-    parsed_notification = notification_service.get_notification_summary(icao.upper())
+    from . import notifications
+    try:
+        notification_service = notifications.get_notification_service()
+        parsed_notification = notification_service.get_notification_summary(icao.upper())
+    except (RuntimeError, AttributeError):
+        # Notification service not available - skip enrichment
+        parsed_notification = None
     
     # Convert entries to dicts, injecting parsed notifications for field 302
     result = []

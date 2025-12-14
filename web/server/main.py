@@ -29,7 +29,6 @@ import logging
 from datetime import datetime
 import time
 
-from euro_aip.storage.database_storage import DatabaseStorage
 from euro_aip.models.euro_aip_model import EuroAipModel
 
 # Import security configuration (values only)
@@ -38,15 +37,10 @@ from security_config import (
     FORCE_HTTPS, SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
 )
 
-# Import configuration helper functions (logic only)
-from config_helpers import (
-    get_safe_db_path, get_safe_rules_path, get_safe_ga_meta_db_path
-)
-
 # Import API routes
 from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness, notifications
 
-from shared.rules_manager import RulesManager
+from shared.airport_tools import ToolContext
 
 # Configure logging with file output only (uvicorn handles console)
 # Use /app/logs in Docker, /tmp/flyfun-logs for local development
@@ -69,10 +63,8 @@ if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file
 logger = logging.getLogger(__name__)
 logger.info(f"Logging to file: {log_file}")
 
-# Global database storage
-db_storage = None
-model = None
-rules_manager: Optional[RulesManager] = None
+# Global ToolContext (created at startup)
+_tool_context: Optional[ToolContext] = None
 
 # Simple rate limiting storage
 request_counts = {}
@@ -105,59 +97,75 @@ def check_rate_limit(client_ip: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
-    global db_storage, model, rules_manager
+    global _tool_context
     
     # Startup
     logger.info("Starting up Euro AIP Airport Explorer...")
     
-    # Get database path from environment or use default
-    db_path = get_safe_db_path()
-    
     try:
-        logger.info(f"Loading model from database at '{db_path}'")
-        db_storage = DatabaseStorage(db_path)
-        model = db_storage.load_model()
-        model.remove_airports_by_country("RU")
-        logger.info(f"Loaded model with {model.airports.count()} airports")
+        # Create ToolContext with all services using centralized configuration
+        logger.info("Initializing ToolContext with all services...")
+        _tool_context = ToolContext.create(
+            load_airports=True,
+            load_rules=True,
+            load_notifications=True,
+            load_ga_friendliness=True
+        )
+        
+        # Apply custom logic to model
+        _tool_context.model.remove_airports_by_country("RU")
+        logger.info(f"Loaded model with {_tool_context.model.airports.count()} airports")
         
         # All derived fields are now updated automatically in load_model()
         logger.info("Model loaded with all derived fields updated")
         
-        # Make model available to API routes
-        airports.set_model(model)
-        procedures.set_model(model)
-        filters.set_model(model)
-        statistics.set_model(model)
+        # Make model available to API routes (extract from ToolContext)
+        airports.set_model(_tool_context.model)
+        procedures.set_model(_tool_context.model)
+        filters.set_model(_tool_context.model)
+        statistics.set_model(_tool_context.model)
 
-        # Initialize rules manager
-        rules_path = get_safe_rules_path()
-        logger.info(f"Loading rules from '{rules_path}'")
-        rules_manager = RulesManager(rules_path)
-        if not rules_manager.load_rules():
-            logger.warning("No rules loaded from %s", rules_path)
-        rules.set_rules_manager(rules_manager)
-
-        # Initialize GA friendliness service (optional)
-        # Web server only reads, so always use readonly=True
-        ga_meta_db_path = get_safe_ga_meta_db_path()
-        ga_service = ga_friendliness.GAFriendlinessService(ga_meta_db_path, readonly=True)
-        ga_friendliness.set_service(ga_service)
-        if ga_service.enabled:
-            logger.info(f"GA Friendliness service enabled (readonly): {ga_meta_db_path}")
+        # Extract and distribute rules manager from ToolContext
+        if _tool_context.rules_manager:
+            # ToolContext.create() already calls load_rules(), but check anyway
+            if not _tool_context.rules_manager.loaded:
+                if not _tool_context.rules_manager.load_rules():
+                    logger.warning("No rules loaded")
+            rules.set_rules_manager(_tool_context.rules_manager)
+            logger.info("Rules manager initialized")
         else:
-            logger.info("GA Friendliness service disabled (no database configured)")
+            logger.warning("Rules manager not available")
+
+        # Extract and distribute GA friendliness service
+        if _tool_context.ga_friendliness_service:
+            ga_friendliness.set_service(_tool_context.ga_friendliness_service)
+            if _tool_context.ga_friendliness_service.enabled:
+                logger.info("GA Friendliness service enabled (readonly)")
+            else:
+                logger.info("GA Friendliness service disabled")
+        else:
+            logger.info("GA Friendliness service not configured")
+            ga_friendliness.set_service(None)
+
+        # Extract and distribute notification service
+        if _tool_context.notification_service:
+            notifications.set_notification_service(_tool_context.notification_service)
+            logger.info("Notification service initialized")
+        else:
+            logger.info("Notification service not available")
+            # Set None explicitly so API knows it's not available (instead of lazy creation)
 
         logger.info("Application startup complete")
         
     except Exception as e:
-        logger.error(f"Failed to load database: {e}")
+        logger.error(f"Failed to initialize services: {e}", exc_info=True)
         raise
     
     yield
     
     # Shutdown
     logger.info("Shutting down Euro AIP Airport Explorer...")
-    # Add any cleanup code here if needed
+    # ToolContext and its services will be cleaned up automatically
 
 # Create FastAPI app with lifespan context manager
 app = FastAPI(
