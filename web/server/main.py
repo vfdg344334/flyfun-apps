@@ -137,9 +137,16 @@ async def lifespan(app: FastAPI):
             logger.warning("Rules manager not available")
 
         # Extract and distribute GA friendliness service
+        # Wrap the base service in the web API wrapper class for API response models
         if _tool_context.ga_friendliness_service:
-            ga_friendliness.set_service(_tool_context.ga_friendliness_service)
-            if _tool_context.ga_friendliness_service.enabled:
+            from api.ga_friendliness import GAFriendlinessService as WebGAFriendlinessService
+            # The web API wrapper extends the base service and adds methods that return API models
+            web_ga_service = WebGAFriendlinessService(
+                db_path=_tool_context.ga_friendliness_service.db_path,
+                readonly=_tool_context.ga_friendliness_service.readonly
+            )
+            ga_friendliness.set_service(web_ga_service)
+            if web_ga_service.enabled:
                 logger.info("GA Friendliness service enabled (readonly)")
             else:
                 logger.info("GA Friendliness service disabled")

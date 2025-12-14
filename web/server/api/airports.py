@@ -315,8 +315,8 @@ async def locate_airports(
     request: Request,
     q: Optional[str] = Query(None, description="Free-text location to search around", max_length=200),
     radius_nm: float = Query(50.0, description="Max distance from location (NM)", ge=0.1, le=500.0),
-    center_lat: Optional[float] = Query(None, description="Pre-resolved center latitude (bypass geocoding)"),
-    center_lon: Optional[float] = Query(None, description="Pre-resolved center longitude (bypass geocoding)"),
+    center_lat: Optional[str] = Query(None, description="Pre-resolved center latitude (bypass geocoding)"),
+    center_lon: Optional[str] = Query(None, description="Pre-resolved center longitude (bypass geocoding)"),
     country: Optional[str] = Query(None, description="Filter by ISO country code", max_length=3),
     has_procedures: Optional[bool] = Query(None, description="Filter airports with procedures"),
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
@@ -342,10 +342,26 @@ async def locate_airports(
     if point_of_entry is not None:
         filters["point_of_entry"] = point_of_entry
 
+    # Parse center coordinates, handling "undefined" string from frontend
+    center_lat_float: Optional[float] = None
+    center_lon_float: Optional[float] = None
+    
+    if center_lat and center_lat.lower() not in ("undefined", "null", ""):
+        try:
+            center_lat_float = float(center_lat)
+        except (ValueError, TypeError):
+            center_lat_float = None
+    
+    if center_lon and center_lon.lower() not in ("undefined", "null", ""):
+        try:
+            center_lon_float = float(center_lon)
+        except (ValueError, TypeError):
+            center_lon_float = None
+
     # If center provided, bypass geocoding and compute directly
-    if center_lat is not None and center_lon is not None:
+    if center_lat_float is not None and center_lon_float is not None:
         # Prepare center navpoint
-        center = NavPoint(latitude=center_lat, longitude=center_lon, name=q or "Center")
+        center = NavPoint(latitude=center_lat_float, longitude=center_lon_float, name=q or "Center")
         # Compute distances and filter
         filtered_airports = []
         for a in model.airports:
