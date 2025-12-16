@@ -4,8 +4,21 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { 
-  AppState, FilterConfig, LegendMode, Highlight, RouteState, LocateState, MapView, Airport,
-  GAConfig, AirportGAScore, AirportGASummary, GAState, QuartileThresholds
+  AppState,
+  FilterConfig,
+  LegendMode,
+  Highlight,
+  RouteState,
+  LocateState,
+  MapView,
+  Airport,
+  GAConfig,
+  AirportGAScore,
+  AirportGASummary,
+  GAState,
+  QuartileThresholds,
+  CountryRules,
+  RulesState
 } from './types';
 import { computeQuartileThresholds } from '../utils/relevance';
 
@@ -67,6 +80,14 @@ const initialState: AppState = {
     summaries: new Map(),
     isLoading: false,
     computedQuartiles: null
+  },
+
+  rules: {
+    allRulesByCountry: {},
+    activeCountries: [],
+    visualFilter: null,
+    textFilter: '',
+    sectionState: {}
   }
 };
 
@@ -153,6 +174,13 @@ interface StoreActions {
   setGALoading: (loading: boolean) => void;
   setGAComputedQuartiles: (quartiles: QuartileThresholds | null) => void;
   clearGAScores: () => void;
+
+  // Rules / regulations actions
+  setRulesForCountry: (countryCode: string, rules: CountryRules) => void;
+  setRulesSelection: (countries: string[], visualFilter: RulesState['visualFilter']) => void;
+  setRulesTextFilter: (text: string) => void;
+  setRuleSectionState: (sectionId: string, expanded: boolean) => void;
+  clearRules: () => void;
 }
 
 /**
@@ -178,6 +206,9 @@ const createStore = (set: any, get: any) => ({
         ...initialState.ga,
         scores: new Map(),
         summaries: new Map()
+      },
+      rules: {
+        ...initialState.rules
       },
       
       // Set airports and auto-filter
@@ -506,6 +537,71 @@ const createStore = (set: any, get: any) => ({
             computedQuartiles: null
           }
         }));
+      },
+
+      // --- Rules / regulations actions ---
+
+      // Store full rules payload for a single country
+      setRulesForCountry: (countryCode, rules) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            allRulesByCountry: {
+              ...state.rules.allRulesByCountry,
+              [countryCode]: {
+                ...rules,
+                country: countryCode
+              }
+            }
+          }
+        }));
+      },
+
+      // Set which countries are active in the Rules panel and the current visual filter
+      setRulesSelection: (countries, visualFilter) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            activeCountries: countries,
+            visualFilter: visualFilter || null
+          }
+        }));
+      },
+
+      // Update free-text filter for rules
+      setRulesTextFilter: (text) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            textFilter: text
+          }
+        }));
+      },
+
+      // Persist expand/collapse state for a single rules section
+      setRuleSectionState: (sectionId, expanded) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            sectionState: {
+              ...state.rules.sectionState,
+              [sectionId]: expanded
+            }
+          }
+        }));
+      },
+
+      // Clear all rules state (used when chatbot resets rules panel)
+      clearRules: () => {
+        set({
+          rules: {
+            allRulesByCountry: {},
+            activeCountries: [],
+            visualFilter: null,
+            textFilter: '',
+            sectionState: {}
+          }
+        });
       }
 });
 

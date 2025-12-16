@@ -249,6 +249,55 @@ export interface UIState {
 }
 
 /**
+ * Rules / country regulations state
+ *
+ * Note: we keep this fairly generic and close to the API / LLM payloads so that
+ * UI code can render from it without duplicating structures. The store owns:
+ * - full rules per country (as returned by the API)
+ * - which countries are currently active/visible
+ * - a "visual" filter coming from the LLM UI payload (e.g. categoriesByCountry)
+ * - a free-text filter from the Rules search box
+ * - per-section expand/collapse state
+ */
+
+// Raw rules category (matches API structure closely)
+export interface RulesCategory {
+  name: string;
+  count?: number;
+  country?: string;
+  rules: any[];
+}
+
+// Raw rules payload per country (matches API)
+export interface CountryRules {
+  country: string;
+  total_rules?: number;
+  categories: RulesCategory[];
+}
+
+// Visual filters coming from LLM UI payload
+export interface RulesVisualFilter {
+  categoriesByCountry: Record<string, string[]>;
+}
+
+export interface RulesState {
+  // All rules we have loaded, keyed by ISO country code
+  allRulesByCountry: Record<string, CountryRules>;
+
+  // Countries currently selected/visible in the Rules panel, in display order
+  activeCountries: string[];
+
+  // Visual filter from LLM (e.g. subset of categories per country)
+  visualFilter: RulesVisualFilter | null;
+
+  // Free-text filter from the Rules search box
+  textFilter: string;
+
+  // Expand/collapse state for individual sections (by sectionId)
+  sectionState: Record<string, boolean>;
+}
+
+/**
  * Complete application state
  */
 export interface AppState {
@@ -279,6 +328,9 @@ export interface AppState {
   
   // GA Friendliness state
   ga: GAState;
+
+  // Country rules / regulations state
+  rules: RulesState;
 }
 
 /**

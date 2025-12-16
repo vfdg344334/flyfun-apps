@@ -154,6 +154,7 @@ class Application {
     let lastRouteHash: string = '';
     let lastLocateHash: string = '';
     let lastProcedureLinesHash: string = ''; // Track loaded procedure lines
+    let lastRulesHash: string = ''; // Track rules state for Rules panel rendering
 
     // Zustand's subscribe - listens to all state changes
     // Use debounce to prevent infinite loops
@@ -320,6 +321,17 @@ class Application {
 
           // NOTE: We don't update map view here to prevent infinite loops
           // Map view is only updated from map events (moveend/zoomend) or initial load
+
+          // --- Rules panel rendering (store-driven) ---
+          try {
+            const currentRulesHash = JSON.stringify((state as any).rules);
+            if (currentRulesHash !== lastRulesHash) {
+              this.renderRulesPanelFromStore();
+              lastRulesHash = currentRulesHash;
+            }
+          } catch (rulesError) {
+            console.error('Error updating Rules panel from store', rulesError);
+          }
         } catch (error) {
           console.error('Error in store subscription callback:', error);
         }
@@ -392,16 +404,10 @@ class Application {
     // Reset rules panel event (from chatbot when starting new query)
     window.addEventListener('reset-rules-panel', (() => {
       console.log('FlyFunApp: Resetting rules panel');
-      // Clear rules summary header
-      const rulesSummary = document.getElementById('rules-summary');
-      if (rulesSummary) {
-        rulesSummary.textContent = '';
-      }
-      // Clear rules display - show "no selection" state
-      const rulesContent = document.getElementById('rules-content');
-      if (rulesContent) {
-        rulesContent.innerHTML = '<p class="text-muted">No rules to display. Ask a country-specific question to see relevant rules.</p>';
-      }
+      // Clear rules state in store and let renderer update the panel
+      const store = this.store as any;
+      store.getState().clearRules();
+      this.renderRulesPanelFromStore();
     }) as EventListener);
 
     // Show country rules event (from RAG chatbot)
@@ -420,46 +426,24 @@ class Application {
           const rulesPromises = countries.map(code => this.apiAdapter.getCountryRules(code));
           const allRulesResults = await Promise.all(rulesPromises);
 
-          // Filter each country's rules to only relevant categories and combine
-          const combinedCategories: any[] = [];
-          let totalRules = 0;
+          const store = this.store as any;
 
+          // Store full rules per country in centralized state
           countries.forEach((countryCode, index) => {
             const rules = allRulesResults[index];
-            const relevantCategories = categoriesByCountry?.[countryCode] || [];
-
-            if (rules && rules.categories) {
-              // Filter categories if we have specific ones
-              let filteredCategories = rules.categories;
-              if (relevantCategories.length > 0) {
-                filteredCategories = rules.categories.filter((cat: any) =>
-                  relevantCategories.includes(cat.name)
-                );
-              }
-
-              // Add country prefix to category names and combine
-              filteredCategories.forEach((cat: any) => {
-                combinedCategories.push({
-                  ...cat,
-                  name: `${countryCode}: ${cat.name}`,
-                  country: countryCode
-                });
-                totalRules += cat.count || 0;
-              });
+            if (rules) {
+              store.getState().setRulesForCountry(countryCode, rules);
             }
           });
 
-          // Create combined rules object
-          const combinedRules = {
-            country: countries.join(', '),
-            total_rules: totalRules,
-            categories: combinedCategories
-          };
+          // Persist selection and LLM-provided visual filter in store
+          store.getState().setRulesSelection(countries, {
+            categoriesByCountry: categoriesByCountry || {}
+          });
+          // Reset any existing free-text filter when applying a new selection
+          store.getState().setRulesTextFilter('');
 
-          console.log('FlyFunApp: Combined rules from', countries.length, 'countries,', combinedCategories.length, 'categories,', totalRules, 'rules');
-
-          // Display in right panel
-          this.displayCountryRules(combinedRules, countries.join(', '));
+          console.log('FlyFunApp: Stored rules for', countries.length, 'countries');
 
           // Show the right panel and switch to Rules tab
           this.showRulesTab();
@@ -856,9 +840,19 @@ class Application {
 
     infoContainer.innerHTML = html;
 
-    // Display AIP data and rules
+    // Display AIP data
     this.displayAIPData(aipEntries);
-    this.displayCountryRules(rules, airport.iso_country);
+
+    // Store country rules in centralized state and let the Rules panel render from store
+    const store = this.store as any;
+    if (airport.iso_country && rules) {
+      store.getState().setRulesForCountry(airport.iso_country, rules);
+      store.getState().setRulesSelection([airport.iso_country], null);
+      store.getState().setRulesTextFilter('');
+    } else {
+      // If we don't have country information, clear rules state so panel shows appropriate message
+      store.getState().clearRules();
+    }
 
     // Track selected airport and load GA relevance data
     this.currentSelectedIcao = airport.ident;
@@ -951,6 +945,113 @@ class Application {
 
     aipContentContainer.innerHTML = html;
     this.initializeAIPFilter();
+  }
+
+  /**
+   * Compute visible rules from centralized store state
+   * This applies both the LLM visual filter (categoriesByCountry) and the
+   * free-text filter from the Rules search box.
+   */
+  private getVisibleRulesFromStore(): { countryLabel: string | null; totalRules: number; categories: any[] } {
+    const state = (this.store as any).getState() as AppState & { rules: any };
+    const rulesState = (state as any).rules;
+    if (!rulesState) {
+      return { countryLabel: null, totalRules: 0, categories: [] };
+    }
+
+    const activeCountries: string[] = rulesState.activeCountries || [];
+    const allRulesByCountry = rulesState.allRulesByCountry || {};
+    const visualFilter = rulesState.visualFilter || null;
+    const categoriesByCountry: Record<string, string[]> = visualFilter?.categoriesByCountry || {};
+    const textFilter: string = (rulesState.textFilter || '').toLowerCase();
+
+    const combinedCategories: any[] = [];
+    let totalRules = 0;
+
+    activeCountries.forEach((countryCode: string) => {
+      const countryRules: any = allRulesByCountry[countryCode];
+      if (!countryRules || !Array.isArray(countryRules.categories)) {
+        return;
+      }
+
+      const relevantCategories = categoriesByCountry[countryCode] || [];
+
+      countryRules.categories.forEach((cat: any) => {
+        // Apply visual filter (categoriesByCountry) if present
+        if (relevantCategories.length > 0 && !relevantCategories.includes(cat.name)) {
+          return;
+        }
+
+        const rulesArray: any[] = Array.isArray(cat.rules) ? cat.rules : [];
+
+        // Apply free-text filter
+        const visibleRules = rulesArray.filter((rule: any) => {
+          if (!textFilter) return true;
+
+          const question = (rule.question_text || '').toString().toLowerCase();
+          const answer = (rule.answer_html || '').toString().toLowerCase();
+          const tags = Array.isArray(rule.tags) ? rule.tags.map((t: any) => String(t)).join(' ') : '';
+          const lastReviewed = rule.last_reviewed ? String(rule.last_reviewed) : '';
+          const confidence = rule.confidence ? String(rule.confidence) : '';
+          const categoryName = (cat.name || '').toString().toLowerCase();
+          const countryLabel = countryCode.toLowerCase();
+
+          const combined = `${question} ${answer} ${tags} ${lastReviewed} ${confidence} ${categoryName} ${countryLabel}`.toLowerCase();
+          return combined.includes(textFilter);
+        });
+
+        if (visibleRules.length === 0) {
+          return;
+        }
+
+        const displayName = activeCountries.length > 1
+          ? `${countryCode}: ${cat.name}`
+          : cat.name;
+
+        combinedCategories.push({
+          ...cat,
+          name: displayName,
+          country: countryCode,
+          count: visibleRules.length,
+          rules: visibleRules
+        });
+
+        totalRules += visibleRules.length;
+      });
+    });
+
+    const countryLabel = activeCountries.length > 0 ? activeCountries.join(', ') : null;
+    return { countryLabel, totalRules, categories: combinedCategories };
+  }
+
+  /**
+   * Render Rules panel from centralized store state
+   */
+  private renderRulesPanelFromStore(): void {
+    const rulesContainer = document.getElementById('rules-content');
+    const rulesSummary = document.getElementById('rules-summary');
+
+    if (!rulesContainer) {
+      return;
+    }
+
+    const { countryLabel, totalRules, categories } = this.getVisibleRulesFromStore();
+
+    if (!countryLabel || !categories.length) {
+      if (rulesSummary) {
+        rulesSummary.textContent = '';
+      }
+      rulesContainer.innerHTML = '<p class="text-muted">No rules to display. Ask a country-specific question to see relevant rules.</p>';
+      return;
+    }
+
+    const combinedRules = {
+      country: countryLabel,
+      total_rules: totalRules,
+      categories
+    };
+
+    this.displayCountryRules(combinedRules, countryLabel);
   }
 
   /**
@@ -1503,79 +1604,34 @@ class Application {
       clearButton.parentNode?.replaceChild(newClearButton, clearButton);
     }
 
-    newFilterInput.value = ''; // Clear any stale value
+    // Sync input with current store text filter so UI reflects state
+    try {
+      const state = (this.store as any).getState() as AppState & { rules: any };
+      const rulesState = (state as any).rules;
+      newFilterInput.value = (rulesState && typeof rulesState.textFilter === 'string')
+        ? rulesState.textFilter
+        : '';
+    } catch {
+      newFilterInput.value = '';
+    }
 
     newFilterInput.addEventListener('input', (e) => {
-      this.handleRulesFilter(e as any);
+      const target = e.target as HTMLInputElement;
+      const store = this.store as any;
+      store.getState().setRulesTextFilter(target.value || '');
+      // Render will also be triggered by store subscription, but do an immediate
+      // update here for snappy UX.
+      this.renderRulesPanelFromStore();
     });
 
     if (newClearButton) {
       newClearButton.addEventListener('click', () => {
         newFilterInput.value = '';
-        this.handleRulesFilter({ target: { value: '' } } as any);
+        const store = this.store as any;
+        store.getState().setRulesTextFilter('');
+        this.renderRulesPanelFromStore();
       });
     }
-  }
-
-  /**
-   * Handle rules filter
-   */
-  private handleRulesFilter(event: { target: { value: string } }): void {
-    const filterText = (event.target.value || '').toLowerCase();
-    const entries = document.querySelectorAll('.rules-entry');
-
-    const matchedSections = new Set<string>();
-
-    entries.forEach((entry) => {
-      const question = entry.querySelector('.rule-question')?.textContent || '';
-      const answer = entry.querySelector('.rule-answer')?.textContent || '';
-      const tags = Array.from(entry.querySelectorAll('.badge')).map(b => b.textContent || '').join(' ');
-      const meta = entry.querySelector('.text-muted')?.textContent || '';
-      const category = entry.closest('.rules-section')?.getAttribute('data-category') || '';
-
-      const combined = `${question} ${answer} ${tags} ${meta} ${category}`.toLowerCase();
-      const matches = combined.includes(filterText);
-
-      if (matches) {
-        entry.classList.remove('hidden');
-        entry.classList.toggle('highlight', Boolean(filterText));
-        const sectionContent = entry.closest('.rules-section-content');
-        if (sectionContent) {
-          matchedSections.add((sectionContent as HTMLElement).id);
-        }
-      } else {
-        entry.classList.add('hidden');
-        entry.classList.remove('highlight');
-      }
-    });
-
-    // Expand matched sections, collapse others if filter active
-    const sections = document.querySelectorAll('.rules-section-content');
-    sections.forEach((section) => {
-      const sectionId = (section as HTMLElement).id;
-      const toggle = document.getElementById(`rules-toggle-${sectionId}`);
-      const visibleEntries = section.querySelectorAll('.rules-entry:not(.hidden)');
-      const sectionElement = section.parentElement as HTMLElement;
-
-      if (filterText) {
-        const shouldExpand = matchedSections.has(sectionId) || visibleEntries.length > 0;
-        if (shouldExpand) {
-          section.classList.add('expanded');
-          if (toggle) toggle.classList.add('expanded');
-        } else {
-          section.classList.remove('expanded');
-          if (toggle) toggle.classList.remove('expanded');
-        }
-        if (sectionElement) {
-          sectionElement.style.display = visibleEntries.length > 0 ? 'block' : 'none';
-        }
-      } else {
-        // Restore visibility when filter cleared
-        if (sectionElement) {
-          sectionElement.style.display = 'block';
-        }
-      }
-    });
   }
 
 
