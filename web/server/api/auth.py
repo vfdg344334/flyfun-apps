@@ -96,12 +96,32 @@ def require_auth(request: Request) -> dict:
 # ============================================================================
 
 @router.get("/google")
-async def google_login():
+async def google_login(request: Request):
     """Initiate Google OAuth flow."""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=503, detail="Google OAuth not configured")
     
     state = _generate_state()
+    
+    # Dynamically construct redirect URI from request
+    # Check forwarded headers first (for proxies like Vite and Nginx)
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "http")
+    x_forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("x-forwarded-server")
+    
+    if x_forwarded_host:
+        origin = f"{x_forwarded_proto}://{x_forwarded_host}"
+    else:
+        # Fallback to origin/referer header
+        origin = request.headers.get("origin") or request.headers.get("referer", "").rstrip("/")
+        if not origin:
+            # Last fallback to constructing from host header
+            scheme = request.url.scheme
+            host = request.headers.get("host", "localhost:8000")
+            origin = f"{scheme}://{host}"
+    
+    redirect_uri = f"{origin}/api/auth/callback/google"
+    
+    logger.info(f"Google OAuth initiated from origin: {origin}, redirect_uri: {redirect_uri}")
     
     # Fetch Google's OAuth configuration
     async with httpx.AsyncClient() as client:
@@ -110,7 +130,7 @@ async def google_login():
     
     params = {
         "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
@@ -136,6 +156,24 @@ async def google_callback(request: Request, code: str = None, state: str = None,
         logger.warning("Invalid state token in Google callback")
         return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
     
+    # Dynamically construct redirect URI from request
+    # Check forwarded headers first (for proxies like Vite and Nginx)
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "http")
+    x_forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("x-forwarded-server")
+    
+    if x_forwarded_host:
+        origin = f"{x_forwarded_proto}://{x_forwarded_host}"
+    else:
+        # Fallback to origin/referer header
+        origin = request.headers.get("origin") or request.headers.get("referer", "").rstrip("/")
+        if not origin:
+            # Last fallback to constructing from host header
+            scheme = request.url.scheme
+            host = request.headers.get("host", "localhost:8000")
+            origin = f"{scheme}://{host}"
+    
+    redirect_uri = f"{origin}/api/auth/callback/google"
+    
     try:
         # Fetch Google's OAuth configuration
         async with httpx.AsyncClient() as client:
@@ -150,7 +188,7 @@ async def google_callback(request: Request, code: str = None, state: str = None,
                     "client_secret": GOOGLE_CLIENT_SECRET,
                     "code": code,
                     "grant_type": "authorization_code",
-                    "redirect_uri": GOOGLE_REDIRECT_URI
+                    "redirect_uri": redirect_uri
                 }
             )
             tokens = token_resp.json()
@@ -223,16 +261,36 @@ def _generate_apple_client_secret() -> str:
 
 
 @router.get("/apple")
-async def apple_login():
+async def apple_login(request: Request):
     """Initiate Apple OAuth flow."""
     if not APPLE_CLIENT_ID or not APPLE_TEAM_ID or not APPLE_KEY_ID:
         raise HTTPException(status_code=503, detail="Apple OAuth not configured")
     
     state = _generate_state()
     
+    # Dynamically construct redirect URI from request
+    # Check forwarded headers first (for proxies like Vite and Nginx)
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "http")
+    x_forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("x-forwarded-server")
+    
+    if x_forwarded_host:
+        origin = f"{x_forwarded_proto}://{x_forwarded_host}"
+    else:
+        # Fallback to origin/referer header
+        origin = request.headers.get("origin") or request.headers.get("referer", "").rstrip("/")
+        if not origin:
+            # Last fallback to constructing from host header
+            scheme = request.url.scheme
+            host = request.headers.get("host", "localhost:8000")
+            origin = f"{scheme}://{host}"
+    
+    redirect_uri = f"{origin}/api/auth/callback/apple"
+    
+    logger.info(f"Apple OAuth initiated from origin: {origin}, redirect_uri: {redirect_uri}")
+    
     params = {
         "client_id": APPLE_CLIENT_ID,
-        "redirect_uri": APPLE_REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "response_type": "code id_token",
         "response_mode": "form_post",
         "scope": "name email",
@@ -246,6 +304,7 @@ async def apple_login():
 @router.post("/callback/apple")
 async def apple_callback(request: Request):
     """Handle Apple OAuth callback (uses form_post)."""
+    print("=== APPLE CALLBACK ENTERED ===")
     form = await request.form()
     code = form.get("code")
     id_token = form.get("id_token")
@@ -253,18 +312,51 @@ async def apple_callback(request: Request):
     error = form.get("error")
     user_data = form.get("user")  # Only sent on first authorization
     
+    # Debug logging
+    print(f"Apple callback - code: {bool(code)}, id_token: {bool(id_token)}, state: {bool(state)}, error: {error}")
+    logger.info(f"Apple callback received - code: {bool(code)}, id_token: {bool(id_token)}, state: {bool(state)}, error: {error}")
+    
     if error:
-        logger.warning(f"Apple OAuth error: {error}")
+        print(f"Apple OAuth error: {error}")
+        logger.warning(f"Apple OAuth error from provider: {error}")
         return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
     
-    if not state or not _verify_state(state):
-        logger.warning("Invalid state token in Apple callback")
+    if not state:
+        print("Apple OAuth: No state token")
+        logger.warning("Apple OAuth: No state token received")
         return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
+    
+    if not _verify_state(state):
+        print(f"Apple OAuth: Invalid state token: {state[:30]}...")
+        logger.warning(f"Apple OAuth: Invalid state token - received: {state[:20]}...")
+        return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
+    
+    print("State verification passed")
+    
+    # Dynamically construct redirect URI from request
+    # Check forwarded headers first (for proxies like Vite and Nginx)
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "http")
+    x_forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("x-forwarded-server")
+    
+    if x_forwarded_host:
+        origin = f"{x_forwarded_proto}://{x_forwarded_host}"
+    else:
+        # Fallback to origin/referer header
+        origin = request.headers.get("origin") or request.headers.get("referer", "").rstrip("/")
+        if not origin:
+            # Last fallback to constructing from host header
+            scheme = request.url.scheme
+            host = request.headers.get("host", "localhost:8000")
+            origin = f"{scheme}://{host}"
+    
+    redirect_uri = f"{origin}/api/auth/callback/apple"
     
     try:
         # If we have an id_token, we can decode it directly
         # Otherwise, exchange code for tokens
+        print(f"id_token present: {bool(id_token)}, code present: {bool(code)}")
         if not id_token and code:
+            print("Exchanging code for tokens...")
             client_secret = _generate_apple_client_secret()
             
             async with httpx.AsyncClient() as client:
@@ -275,31 +367,38 @@ async def apple_callback(request: Request):
                         "client_secret": client_secret,
                         "code": code,
                         "grant_type": "authorization_code",
-                        "redirect_uri": APPLE_REDIRECT_URI
+                        "redirect_uri": redirect_uri
                     }
                 )
                 tokens = token_resp.json()
                 
                 if "error" in tokens:
+                    print(f"Token exchange error: {tokens}")
                     logger.error(f"Apple token error: {tokens}")
                     return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
                 
                 id_token = tokens.get("id_token")
         
         if not id_token:
+            print("No id_token available!")
             return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
         
+        print("Decoding id_token...")
         # Fetch Apple's public keys to verify the token
         async with httpx.AsyncClient() as client:
             keys_resp = await client.get(APPLE_JWKS_URL)
             apple_keys = keys_resp.json()
         
-        # Decode the id_token (we trust Apple's signature for now)
-        # In production, you should verify the signature with Apple's JWKS
+        # Decode the id_token
+        # Note: When verify_signature=False, the key is not used but must still be provided
         id_token_payload = jwt.decode(
             id_token,
-            options={"verify_signature": False}  # TODO: Implement proper verification
+            key="",  # Not used when verify_signature=False, but required parameter
+            algorithms=["RS256"],
+            audience=APPLE_CLIENT_ID,  # Apple sets aud to the client_id (Services ID)
+            options={"verify_signature": False}  # TODO: Implement proper verification with JWKS
         )
+        print(f"id_token decoded successfully: email={id_token_payload.get('email')}")
         
         # Extract user info
         # Note: Apple only sends name on first authorization
@@ -319,6 +418,7 @@ async def apple_callback(request: Request):
             except json.JSONDecodeError:
                 pass
         
+        print(f"Creating access token for: {email}")
         # Create our JWT token
         token_data = {
             "sub": sub,
@@ -329,6 +429,7 @@ async def apple_callback(request: Request):
         }
         access_token = create_access_token(token_data)
         
+        print("Setting cookie and redirecting...")
         # Set cookie and redirect
         response = RedirectResponse(url=LOGIN_SUCCESS_REDIRECT, status_code=302)
         response.set_cookie(
@@ -340,10 +441,12 @@ async def apple_callback(request: Request):
             samesite=COOKIE_SAMESITE
         )
         
+        print(f"Apple login SUCCESS for {email}")
         logger.info(f"User logged in via Apple: {email}")
         return response
         
     except Exception as e:
+        print(f"EXCEPTION in Apple callback: {type(e).__name__}: {e}")
         logger.error(f"Apple OAuth callback error: {e}", exc_info=True)
         return RedirectResponse(url=LOGIN_FAILURE_REDIRECT)
 

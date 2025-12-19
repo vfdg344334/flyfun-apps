@@ -250,8 +250,9 @@ app.add_middleware(
 # Force HTTPS in production
 # Note: In Docker deployments, HTTPS termination happens at reverse proxy level
 # Container should accept HTTP, so FORCE_HTTPS is typically False in Docker
-if FORCE_HTTPS:
-    app.add_middleware(HTTPSRedirectMiddleware)
+# DISABLED: Nginx proxy handles SSL termination, backend receives HTTP
+# if FORCE_HTTPS:
+#     app.add_middleware(HTTPSRedirectMiddleware)
 
 # Add CORS middleware with restricted origins
 app.add_middleware(
