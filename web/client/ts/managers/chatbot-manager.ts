@@ -195,6 +195,7 @@ export class ChatbotManager {
     let visualizationApplied = false;
     let filterProfileApplied = false;
     let showRulesReceived = false;
+    let feedbackInsertPoint: HTMLElement | null = null; // Track where to insert feedback buttons
 
     // Dispatch event to reset rules panel at start of new query
     // It will be updated if RAG is used, otherwise stays hidden/reset
@@ -340,11 +341,20 @@ export class ChatbotManager {
               if (eventData.visualization) {
                 visualization = eventData.visualization;
                 console.log('ChatbotManager: Received ui_payload with visualization', visualization);
+                // Create a wrapper container for visualization indicator and feedback buttons
+                const vizWrapper = document.createElement('div');
+                vizWrapper.className = 'message-visualization-wrapper';
+                
                 // Add visualization indicator
                 const vizDiv = document.createElement('div');
                 vizDiv.className = 'message-visualization-indicator';
                 vizDiv.innerHTML = '<small><i class="fas fa-map-marked-alt"></i> Results shown on map</small>';
-                messageDiv.appendChild(vizDiv);
+                vizWrapper.appendChild(vizDiv);
+                
+                // Set insert point for feedback buttons inside the wrapper
+                feedbackInsertPoint = vizDiv;
+                
+                messageDiv.appendChild(vizWrapper);
 
                 // Apply visualization immediately (don't wait for 'done' event)
                 if (!visualizationApplied) {
@@ -468,8 +478,16 @@ export class ChatbotManager {
               }
 
               // Add feedback buttons if we have a run_id
+              // Insert them in the same wrapper as the visualization indicator (if present) or at the end
               if (this.currentRunId) {
-                this.renderFeedbackButtons(messageDiv, this.currentRunId);
+                if (feedbackInsertPoint && feedbackInsertPoint.parentNode) {
+                  // Insert feedback buttons in the same wrapper container as the visualization indicator
+                  const feedbackContainer = this.createFeedbackButtons(this.currentRunId);
+                  feedbackInsertPoint.parentNode.appendChild(feedbackContainer);
+                } else {
+                  // Fallback: append at the end if no visualization indicator
+                  this.renderFeedbackButtons(messageDiv, this.currentRunId);
+                }
               }
 
               // Break out of inner loop
@@ -881,9 +899,10 @@ export class ChatbotManager {
   }
 
   /**
-   * Render feedback buttons (thumbs up/down)
+   * Create feedback buttons container (thumbs up/down)
+   * Returns the container element without appending it
    */
-  private renderFeedbackButtons(messageDiv: HTMLElement, runId: string): void {
+  private createFeedbackButtons(runId: string): HTMLElement {
     const feedbackContainer = document.createElement('div');
     feedbackContainer.className = 'feedback-container';
 
@@ -906,6 +925,14 @@ export class ChatbotManager {
     thumbsContainer.appendChild(thumbsUpBtn);
     thumbsContainer.appendChild(thumbsDownBtn);
     feedbackContainer.appendChild(thumbsContainer);
+    return feedbackContainer;
+  }
+
+  /**
+   * Render feedback buttons (thumbs up/down) - appends to messageDiv
+   */
+  private renderFeedbackButtons(messageDiv: HTMLElement, runId: string): void {
+    const feedbackContainer = this.createFeedbackButtons(runId);
     messageDiv.appendChild(feedbackContainer);
   }
 

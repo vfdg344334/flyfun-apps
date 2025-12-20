@@ -362,14 +362,30 @@
     font-size: 12px;
 }
 
-.message-visualization-indicator {
+/* Wrapper for visualization indicator and feedback buttons */
+.message-visualization-wrapper {
     margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.message-visualization-indicator {
     padding: 6px 12px;
     background: #e3f2fd;
     color: #1976d2;
     border-radius: 6px;
     font-size: 12px;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+/* Feedback container positioned next to visualization indicator */
+.message-visualization-wrapper > .feedback-container {
+    margin-top: 0;
+    padding: 0;
 }
 
 /* Loading Indicator */
@@ -678,8 +694,10 @@
 
 /* Feedback UI Styles */
 .feedback-container {
-  margin-top: 10px;
-  padding: 8px 0;
+  margin-top: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
 }
 
 .feedback-thumbs {
@@ -700,6 +718,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
 }
 
 .feedback-btn:hover {
