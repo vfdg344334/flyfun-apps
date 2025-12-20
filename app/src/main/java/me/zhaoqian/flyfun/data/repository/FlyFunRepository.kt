@@ -28,6 +28,12 @@ class FlyFunRepository @Inject constructor(
         pointOfEntry: Boolean? = null,
         runwayMinLength: Int? = null,
         search: String? = null,
+        hasProcedures: Boolean? = null,
+        hasAipData: Boolean? = null,
+        hasHardRunway: Boolean? = null,
+        aipField: String? = null,
+        aipValue: String? = null,
+        aipOperator: String? = null,
         limit: Int = 10000,
         offset: Int = 0
     ): Result<List<Airport>> = runCatching {
@@ -38,6 +44,12 @@ class FlyFunRepository @Inject constructor(
             pointOfEntry = pointOfEntry,
             runwayMinLength = runwayMinLength,
             search = search,
+            hasProcedures = hasProcedures,
+            hasAipData = hasAipData,
+            hasHardRunway = hasHardRunway,
+            aipField = aipField,
+            aipValue = aipValue,
+            aipOperator = aipOperator,
             limit = limit,
             offset = offset
         )

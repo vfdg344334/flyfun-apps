@@ -218,7 +218,7 @@ fun ChatScreen(
                 }
             }
             
-            // Input area
+            // Input area - at the very bottom
             ChatInputArea(
                 value = inputText,
                 onValueChange = { inputText = it },
@@ -229,7 +229,7 @@ fun ChatScreen(
                     }
                 },
                 isEnabled = !isStreaming,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 0.dp)
             )
         }
     }

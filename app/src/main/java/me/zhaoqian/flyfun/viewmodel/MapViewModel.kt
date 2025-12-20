@@ -66,15 +66,33 @@ class MapViewModel @Inject constructor(
         loadAirports()
         loadGAConfig()
         
-        // Observe route and filter airports accordingly
+        // Observe route, filters and apply client-side filtering
         viewModelScope.launch {
-            combine(_allAirports, routeVisualization) { allAirports, routeViz ->
-                if (routeViz != null && routeViz.airports.isNotEmpty()) {
+            combine(_allAirports, routeVisualization, _filters) { allAirports, routeViz, filters ->
+                val baseAirports = if (routeViz != null && routeViz.airports.isNotEmpty()) {
                     // If visualising a route, show ONLY the airports from the route
                     routeViz.airports
                 } else {
                     // Otherwise show all loaded airports
                     allAirports
+                }
+                
+                // Apply client-side filters
+                baseAirports.filter { airport ->
+                    // Has Procedures filter
+                    val passesHasProcedures = filters.hasProcedures != true || 
+                        airport.hasProcedures
+                    
+                    // Has AIP Data filter
+                    val passesHasAipData = filters.hasAipData != true || 
+                        airport.hasAipData
+                    
+                    // Has Hard Runway filter
+                    val passesHasHardRunway = filters.hasHardRunway != true || 
+                        airport.hasHardRunway
+                    
+                    // Combine all filters
+                    passesHasProcedures && passesHasAipData && passesHasHardRunway
                 }
             }.collect { filteredAirports ->
                 _uiState.update { 
@@ -96,13 +114,33 @@ class MapViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, error = null) }
             
             val currentFilters = _filters.value
+            
+            // Map facility filters to AIP field/value/operator
+            // Only one AIP filter can be used at a time, so prioritize
+            val (aipField, aipValue, aipOperator) = when {
+                currentFilters.hasAvgas == true -> Triple("Fuel and oil types", "avgas", "contains")
+                currentFilters.hasJetA == true -> Triple("Fuel and oil types", "jet a", "contains")
+                currentFilters.hasHotels == true -> Triple("Hotels", null, "not_empty")
+                currentFilters.hasRestaurants == true -> Triple("Restaurants", null, "not_empty")
+                currentFilters.hasCustoms == true -> Triple("Customs and immigration", null, "not_empty")
+                currentFilters.hasDeicing == true -> Triple("De-icing facilities", null, "not_empty")
+                currentFilters.hasHangar == true -> Triple("Hangar space for visiting aircraft", null, "not_empty")
+                else -> Triple(null, null, null)
+            }
+            
             repository.getAirports(
                 country = currentFilters.country,
                 hasProcedure = currentFilters.procedureType,
                 hasIls = currentFilters.hasIls,
                 pointOfEntry = currentFilters.pointOfEntry,
                 runwayMinLength = currentFilters.runwayMinLength,
-                search = currentFilters.searchQuery
+                search = currentFilters.searchQuery,
+                hasProcedures = currentFilters.hasProcedures,
+                hasAipData = currentFilters.hasAipData,
+                hasHardRunway = currentFilters.hasHardRunway,
+                aipField = aipField,
+                aipValue = aipValue,
+                aipOperator = aipOperator
             ).fold(
                 onSuccess = { airports ->
                     _allAirports.value = airports
@@ -224,5 +262,17 @@ data class AirportFilters(
     val hasIls: Boolean? = null,
     val pointOfEntry: Boolean? = null,
     val runwayMinLength: Int? = null,
-    val searchQuery: String? = null
+    val searchQuery: String? = null,
+    // Additional filters matching web UI
+    val hasProcedures: Boolean? = null,
+    val hasAipData: Boolean? = null,
+    val hasHardRunway: Boolean? = null,
+    // AIP Quick Filters
+    val hasHotels: Boolean? = null,
+    val hasRestaurants: Boolean? = null,
+    val hasAvgas: Boolean? = null,
+    val hasJetA: Boolean? = null,
+    val hasCustoms: Boolean? = null,
+    val hasDeicing: Boolean? = null,
+    val hasHangar: Boolean? = null
 )

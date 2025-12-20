@@ -113,20 +113,6 @@ fun MapScreen(
             isLoading = uiState.isLoading
         )
         
-        // Floating action button for chat
-        FloatingActionButton(
-            onClick = onNavigateToChat,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp),
-            containerColor = MaterialTheme.colorScheme.primary
-        ) {
-            Icon(
-                imageVector = Icons.Default.Chat,
-                contentDescription = "Open Assistant"
-            )
-        }
-        
         // Legend overlay (bottom-left corner)
         LegendOverlay(
             selectedMode = selectedLegendMode,
@@ -223,8 +209,8 @@ private fun OsmMapView(
     // Track if we've done initial zoom
     var hasInitialized by remember { mutableStateOf(false) }
     
-    // Update markers when airports change
-    LaunchedEffect(airports, selectedPersona, routeVisualization) {
+    // Update markers when airports or legend mode changes
+    LaunchedEffect(airports, selectedPersona, routeVisualization, legendMode) {
         mapView.overlays.clear()
         
         // Draw route polyline if visualization exists

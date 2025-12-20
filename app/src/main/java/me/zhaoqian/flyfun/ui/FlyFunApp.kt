@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -20,35 +21,14 @@ import me.zhaoqian.flyfun.ui.chat.ChatScreen
 @Composable
 fun FlyFunApp() {
     val navController = rememberNavController()
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var currentScreen by remember { mutableStateOf("map") }
     
     Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    icon = { Icon(imageVector = Icons.Default.Map, contentDescription = "Map") },
-                    label = { Text("Map") },
-                    selected = selectedTab == 0,
-                    onClick = { 
-                        selectedTab = 0
-                        navController.navigate("map") {
-                            // Avoid multiple copies of the same destination
-                            launchSingleTop = true
-                            // Restore state when navigating back
-                            restoreState = true
-                            // Save state when navigating away
-                            popUpTo(navController.graph.startDestinationId) {
-                                saveState = true
-                            }
-                        }
-                    }
-                )
-                NavigationBarItem(
-                    icon = { Icon(imageVector = Icons.Default.Chat, contentDescription = "Chat") },
-                    label = { Text("Assistant") },
-                    selected = selectedTab == 1,
-                    onClick = { 
-                        selectedTab = 1
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    if (currentScreen == "map") {
+                        currentScreen = "chat"
                         navController.navigate("chat") {
                             launchSingleTop = true
                             restoreState = true
@@ -56,20 +36,38 @@ fun FlyFunApp() {
                                 saveState = true
                             }
                         }
+                    } else {
+                        currentScreen = "map"
+                        navController.navigate("map") {
+                            launchSingleTop = true
+                            restoreState = true
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                        }
                     }
+                },
+                containerColor = androidx.compose.ui.graphics.Color(0xFF4285F4), // Google blue
+                contentColor = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier.padding(bottom = 72.dp)
+            ) {
+                Icon(
+                    imageVector = if (currentScreen == "map") Icons.Default.Chat else Icons.Default.Map,
+                    contentDescription = if (currentScreen == "map") "Open Assistant" else "Open Map"
                 )
             }
         }
-    ) { paddingValues ->
+    ) { _ ->
         NavHost(
             navController = navController,
             startDestination = "map",
-            modifier = Modifier.padding(paddingValues)
+            modifier = Modifier.fillMaxSize()
         ) {
             composable("map") {
+                currentScreen = "map"
                 MapScreen(
                     onNavigateToChat = {
-                        selectedTab = 1
+                        currentScreen = "chat"
                         navController.navigate("chat") {
                             launchSingleTop = true
                             restoreState = true
@@ -81,9 +79,10 @@ fun FlyFunApp() {
                 )
             }
             composable("chat") {
+                currentScreen = "chat"
                 ChatScreen(
                     onNavigateToMap = {
-                        selectedTab = 0
+                        currentScreen = "map"
                         navController.navigate("map") {
                             launchSingleTop = true
                             restoreState = true

@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import me.zhaoqian.flyfun.viewmodel.AirportFilters
 
@@ -21,6 +22,7 @@ fun FiltersDialog(
     onDismiss: () -> Unit
 ) {
     var filters by remember { mutableStateOf(currentFilters) }
+    var showAdvanced by remember { mutableStateOf(false) }
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -30,7 +32,7 @@ fun FiltersDialog(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Search field
                 OutlinedTextField(
@@ -98,26 +100,170 @@ fun FiltersDialog(
                     singleLine = true
                 )
                 
-                // Toggle filters
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
-                
-                // Has ILS
-                FilterCheckbox(
-                    checked = filters.hasIls == true,
-                    onCheckedChange = { 
-                        filters = filters.copy(hasIls = if (it) true else null) 
-                    },
-                    label = "Has ILS Approach"
+                // Quick Filters Section
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Text(
+                    text = "Quick Filters",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
                 )
                 
-                // Point of Entry
-                FilterCheckbox(
-                    checked = filters.pointOfEntry == true,
-                    onCheckedChange = { 
-                        filters = filters.copy(pointOfEntry = if (it) true else null) 
-                    },
-                    label = "Border Crossing (Point of Entry)"
-                )
+                // Quick Filters - Row 1
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    GridFilterCheckbox(
+                        checked = filters.hasProcedures == true,
+                        onCheckedChange = { filters = filters.copy(hasProcedures = if (it) true else null) },
+                        label = "Procedures",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GridFilterCheckbox(
+                        checked = filters.hasAipData == true,
+                        onCheckedChange = { filters = filters.copy(hasAipData = if (it) true else null) },
+                        label = "AIP Data",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                // Quick Filters - Row 2
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    GridFilterCheckbox(
+                        checked = filters.hasHardRunway == true,
+                        onCheckedChange = { filters = filters.copy(hasHardRunway = if (it) true else null) },
+                        label = "Hard Runway",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GridFilterCheckbox(
+                        checked = filters.hasIls == true,
+                        onCheckedChange = { filters = filters.copy(hasIls = if (it) true else null) },
+                        label = "ILS Approach",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                // Quick Filters - Row 3
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    GridFilterCheckbox(
+                        checked = filters.pointOfEntry == true,
+                        onCheckedChange = { filters = filters.copy(pointOfEntry = if (it) true else null) },
+                        label = "Border Crossing",
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                
+                // Advanced AIP Filters Section
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = showAdvanced,
+                            onValueChange = { showAdvanced = it },
+                            role = Role.Button
+                        )
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "⚙️ Advanced AIP Filters",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (showAdvanced) "▲" else "▼",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                
+                if (showAdvanced) {
+                    Text(
+                        text = "Facility Filters:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // Facility Filters - Row 1
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        GridFilterCheckbox(
+                            checked = filters.hasHotels == true,
+                            onCheckedChange = { filters = filters.copy(hasHotels = if (it) true else null) },
+                            label = "Hotels",
+                            modifier = Modifier.weight(1f)
+                        )
+                        GridFilterCheckbox(
+                            checked = filters.hasRestaurants == true,
+                            onCheckedChange = { filters = filters.copy(hasRestaurants = if (it) true else null) },
+                            label = "Restaurants",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    // Facility Filters - Row 2
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        GridFilterCheckbox(
+                            checked = filters.hasAvgas == true,
+                            onCheckedChange = { filters = filters.copy(hasAvgas = if (it) true else null) },
+                            label = "AVGAS",
+                            modifier = Modifier.weight(1f)
+                        )
+                        GridFilterCheckbox(
+                            checked = filters.hasJetA == true,
+                            onCheckedChange = { filters = filters.copy(hasJetA = if (it) true else null) },
+                            label = "Jet A",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    // Facility Filters - Row 3
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        GridFilterCheckbox(
+                            checked = filters.hasCustoms == true,
+                            onCheckedChange = { filters = filters.copy(hasCustoms = if (it) true else null) },
+                            label = "Customs",
+                            modifier = Modifier.weight(1f)
+                        )
+                        GridFilterCheckbox(
+                            checked = filters.hasDeicing == true,
+                            onCheckedChange = { filters = filters.copy(hasDeicing = if (it) true else null) },
+                            label = "De-icing",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    // Facility Filters - Row 4
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        GridFilterCheckbox(
+                            checked = filters.hasHangar == true,
+                            onCheckedChange = { filters = filters.copy(hasHangar = if (it) true else null) },
+                            label = "Hangar",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
             }
         },
         confirmButton = {
@@ -139,27 +285,30 @@ fun FiltersDialog(
 }
 
 @Composable
-private fun FilterCheckbox(
+private fun GridFilterCheckbox(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    label: String
+    label: String,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .toggleable(
                 value = checked,
                 onValueChange = onCheckedChange,
                 role = Role.Checkbox
             )
-            .padding(vertical = 8.dp),
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Checkbox(
             checked = checked,
             onCheckedChange = null
         )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(label)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }

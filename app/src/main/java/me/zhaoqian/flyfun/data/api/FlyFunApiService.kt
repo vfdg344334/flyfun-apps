@@ -18,6 +18,12 @@ interface FlyFunApiService {
         @Query("point_of_entry") pointOfEntry: Boolean? = null,
         @Query("runway_min_length") runwayMinLength: Int? = null,
         @Query("search") search: String? = null,
+        @Query("has_procedures") hasProcedures: Boolean? = null,
+        @Query("has_aip_data") hasAipData: Boolean? = null,
+        @Query("has_hard_runway") hasHardRunway: Boolean? = null,
+        @Query("aip_field") aipField: String? = null,
+        @Query("aip_value") aipValue: String? = null,
+        @Query("aip_operator") aipOperator: String? = null,
         @Query("limit") limit: Int = 10000,
         @Query("offset") offset: Int = 0,
         @Query("include_ga") includeGa: Boolean = true
