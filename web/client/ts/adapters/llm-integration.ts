@@ -18,9 +18,10 @@ interface Visualization {
     from: {icao: string; lat?: number; lon?: number; latitude?: number; longitude?: number};
     to: {icao: string; lat?: number; lon?: number; latitude?: number; longitude?: number};
   };
-  point?: {lat: number; lng: number; label: string};
+  point?: {lat: number; lon?: number; lng?: number; label?: string};
   marker?: {ident: string; lat?: number; lon?: number; zoom?: number};
   filter_profile?: Partial<FilterConfig>;
+  radius_nm?: number;  // Search radius for point_with_markers and route_with_markers
 }
 
 /**
@@ -353,26 +354,39 @@ export class LLMIntegration {
   
   /**
    * Handle point with markers visualization
+   * Shows all airports near location via search, highlights specific airports from chat
    */
   private handlePointWithMarkers(viz: Visualization): boolean {
-    const airports = (viz.markers || []) as Airport[];
-    const pointData = viz.point as {lat: number; lng: number; label?: string} | undefined;
+    const recommendedAirports = (viz.markers || []) as Airport[];
+    const pointData = viz.point;
+    const radiusNm = viz.radius_nm || 50.0;
 
-    if (!Array.isArray(airports) || airports.length === 0) {
-      console.error('point_with_markers missing valid airports array');
+    if (!pointData) {
+      console.error('point_with_markers missing point data');
       return false;
     }
+
+    // Normalize lon/lng
+    const pointLon = pointData.lon ?? pointData.lng;
+    if (pointLon === undefined) {
+      console.error('point_with_markers missing longitude');
+      return false;
+    }
+
+    console.log('🔵 handlePointWithMarkers called with viz:', {
+      point: pointData,
+      radiusNm,
+      recommendedCount: recommendedAirports.length
+    });
 
     // Clear old LLM highlights
     this.clearLLMHighlights();
 
-    // Update store with airports
     const store = this.store as any;
-    store.getState().setAirports(airports as Airport[]);
 
-    // Add blue highlights for airports mentioned in chat (same as route_with_markers)
+    // Add blue highlights for recommended airports only (not all airports)
     let highlightCount = 0;
-    airports.forEach((airport) => {
+    recommendedAirports.forEach((airport) => {
       if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
         store.getState().highlightPoint({
           id: `llm-airport-${airport.ident}`,
@@ -381,42 +395,47 @@ export class LLMIntegration {
           lng: airport.longitude_deg,
           color: '#007bff',
           radius: 15,
-          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
-          country: airport.iso_country || airport.country  // Add country for filtering
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Recommended by assistant</em>`,
+          country: airport.iso_country || airport.country
         });
         highlightCount++;
       }
     });
 
-    console.log(`✅ Point with markers: highlighted ${highlightCount} airports from chat`);
+    console.log(`🔵 Added highlights for ${highlightCount} recommended airports`);
 
-    // Fit bounds to show all airports after markers are updated
-    if (this.visualizationEngine && airports.length > 0) {
-      setTimeout(() => {
-        this.visualizationEngine.fitBounds();
-        console.log('LLMIntegration: Fitted map bounds for point with airports');
-      }, 300);
-    }
+    // Set locate state with center point
+    store.getState().setLocate({
+      query: pointData.label || null,
+      center: {
+        lat: pointData.lat,
+        lng: pointLon,
+        label: pointData.label || 'Location'
+      },
+      radiusNm: radiusNm
+    });
 
-    // Set locate state if point provided
-    if (pointData) {
-      (this.store as any).getState().setLocate({
-        query: pointData.label || null,
-        center: {
-          lat: pointData.lat,
-          lng: pointData.lng,
-          label: pointData.label || 'Location'
-        },
-        radiusNm: 50.0 // Default, will be updated from filter profile if provided
-      });
-    }
-
-    // Apply filter profile if provided
+    // Apply filter profile if provided (before triggering search)
     const filterProfile = viz.filter_profile;
     if (filterProfile) {
       this.applyFilterProfile(filterProfile);
     }
 
+    // Update search query in store (will display in UI)
+    store.getState().setSearchQuery(pointData.label || '');
+
+    // Trigger locate search via event (uses normal search flow to load ALL airports)
+    // This will show all airports within radius, with highlights on recommended airports
+    window.dispatchEvent(new CustomEvent('trigger-locate', {
+      detail: {
+        lat: pointData.lat,
+        lon: pointLon,
+        label: pointData.label,
+        radiusNm: radiusNm
+      }
+    }));
+
+    console.log(`✅ LLM point visualization: location "${pointData.label}", radius ${radiusNm}nm, highlighting ${recommendedAirports.length} recommended airports`);
     return true;
   }
   

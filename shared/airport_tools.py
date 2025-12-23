@@ -406,7 +406,8 @@ def find_airports_near_route(
                     "lon": getattr(to_airport, "longitude_deg", None),
                 }
             },
-            "markers": airports  # Include ALL airports for map visualization (not just LLM-limited subset)
+            "markers": airports_for_llm,  # Only recommended airports for highlighting
+            "radius_nm": max_distance_nm  # For UI to trigger search with same radius
         }
     }
 
@@ -983,7 +984,8 @@ def find_airports_near_location(
                 "lat": geocode["lat"],
                 "lon": geocode["lon"],
             },
-            "markers": airports  # Show all within radius on map
+            "markers": airports_for_llm,  # Only recommended airports for highlighting
+            "radius_nm": max_distance_nm  # For UI to trigger search with same radius
         }
     }
 

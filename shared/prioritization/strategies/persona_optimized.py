@@ -4,6 +4,7 @@ Persona-optimized priority strategy.
 
 Uses GAFriendlinessService persona scores to rank airports.
 Falls back to basic ranking (procedures, border crossing) if GA data unavailable.
+Distance is used as a tiebreaker within each priority level.
 """
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
@@ -16,17 +17,22 @@ class PersonaOptimizedStrategy(PriorityStrategy):
     """
     Persona-optimized priority strategy.
 
-    Ranks airports by GA friendliness score for the selected persona.
+    Ranks airports by GA friendliness score for the selected persona,
+    using distance as a tiebreaker within each priority group.
     Airports without GA data are ranked lower by basic criteria.
 
     Persona is passed via context dict:
         context = {"persona_id": "ifr_touring_sr22"}
 
+    Distance context (optional):
+        context = {"point_distances": {...}}  # For location searches
+        context = {"segment_distances": {...}, "enroute_distances": {...}}  # For route searches
+
     Default persona: "ifr_touring_sr22"
     """
 
     name = "persona_optimized"
-    description = "Rank airports by GA friendliness score for selected persona"
+    description = "Rank airports by GA friendliness score for selected persona, with distance tiebreaker"
 
     def score(
         self,
@@ -34,13 +40,17 @@ class PersonaOptimizedStrategy(PriorityStrategy):
         context: Optional[Dict[str, Any]] = None,
         tool_context: Optional["ToolContext"] = None,
     ) -> List[ScoredAirport]:
-        """Score airports by persona-based GA friendliness."""
+        """Score airports by persona-based GA friendliness with distance tiebreaker."""
         scored: List[ScoredAirport] = []
 
         # Get persona from context (default to ifr_touring_sr22)
         persona_id = "ifr_touring_sr22"
         if context and "persona_id" in context:
             persona_id = context["persona_id"]
+
+        # Get distance maps from context
+        point_distances = context.get("point_distances", {}) if context else {}
+        segment_distances = context.get("segment_distances", {}) if context else {}
 
         for airport in airports:
             # Try to get GA persona score
@@ -55,6 +65,9 @@ class PersonaOptimizedStrategy(PriorityStrategy):
                         ga_score = summary_dict["score"]
                 except Exception:
                     pass  # GA data not available
+
+            # Get distance for this airport (prefer point_distances, fallback to segment_distances)
+            distance_nm = point_distances.get(airport.ident) or segment_distances.get(airport.ident) or 9999.0
 
             # Determine priority level and score
             if ga_score is not None:
@@ -76,26 +89,23 @@ class PersonaOptimizedStrategy(PriorityStrategy):
                 else:
                     score = 2  # Basic
 
-            # Get distance if available (for secondary sorting/display)
-            segment_distance_nm = None
-            if context and "segment_distances" in context:
-                segment_distance_nm = context["segment_distances"].get(airport.ident)
-
             scored.append(ScoredAirport(
                 airport=airport,
                 priority_level=priority_level,
                 score=score,
+                distance_nm=distance_nm,  # Store distance for sorting
                 metadata={
                     "ga_score": ga_score,
                     "persona_id": persona_id,
                     "has_ga_data": ga_score is not None,
-                    "segment_distance_nm": segment_distance_nm,
+                    "distance_nm": distance_nm,
                 }
             ))
 
-        # Sort by priority level first, then by score (ascending)
+        # Sort by: priority level → score → distance (ascending)
         # For priority 1: lower score (more negative) = higher GA score = better
         # For priority 2: lower score = better basic criteria
-        scored.sort(key=lambda x: (x.priority_level, x.score))
+        # Within same priority+score: closer airports come first
+        scored.sort(key=lambda x: (x.priority_level, x.score, x.distance_nm))
 
         return scored

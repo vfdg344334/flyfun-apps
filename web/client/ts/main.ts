@@ -386,6 +386,28 @@ class Application {
       }
     }) as EventListener);
 
+    // Trigger locate event (from LLM integration for point_with_markers)
+    window.addEventListener('trigger-locate', (async (e: CustomEvent<{ lat: number; lon: number; label?: string; radiusNm: number }>) => {
+      const { lat, lon, label, radiusNm } = e.detail;
+      console.log('🔵 trigger-locate event received:', { lat, lon, label, radiusNm });
+
+      try {
+        const state = this.store.getState();
+        const response = await this.apiAdapter.locateAirportsByCenter(
+          { lat, lon, label: label || 'Location' },
+          radiusNm,
+          state.filters
+        );
+
+        if (response.airports) {
+          this.store.getState().setAirports(response.airports);
+          console.log(`✅ Loaded ${response.airports.length} airports within ${radiusNm}nm of "${label || 'location'}"`);
+        }
+      } catch (error) {
+        console.error('Error in trigger-locate:', error);
+      }
+    }) as EventListener);
+
     // Relevance tab listener and Persona selector listener moved to UIManager
 
 
