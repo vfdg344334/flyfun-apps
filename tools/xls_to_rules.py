@@ -454,17 +454,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 vector_db_path_str = args.vector_db_path or os.environ.get("VECTOR_DB_PATH", "cache/rules_vector_db")
                 vector_db_path = Path(vector_db_path_str)
             
-            doc_count = build_vector_db(
+            result = build_vector_db(
                 rules_json_path=out_path,
                 vector_db_path=vector_db_path,
                 vector_db_url=vector_db_url,
                 embedding_model=args.embedding_model,
-                force_rebuild=True  # Always rebuild to ensure new embeddings are used
+                force_rebuild=True,  # Always rebuild to ensure new embeddings are used
+                build_answer_embeddings=True  # Build answer embeddings for comparison feature
             )
-            if vector_db_url:
-                print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
+            # Handle both dict (new) and int (legacy) return types
+            if isinstance(result, dict):
+                q_count = result.get("questions", 0)
+                a_count = result.get("answers", 0)
+                location = vector_db_url or vector_db_path
+                print(f"✓ Vector database built at {location}")
+                print(f"  - Questions collection: {q_count} documents")
+                print(f"  - Answers collection: {a_count} documents")
             else:
-                print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
+                doc_count = result
+                if vector_db_url:
+                    print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
+                else:
+                    print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
         except ImportError as e:
             print(f"Warning: Could not build vector database: {e}", file=sys.stderr)
             print("Install dependencies: pip install chromadb langchain-openai", file=sys.stderr)

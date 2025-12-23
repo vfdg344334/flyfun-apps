@@ -48,11 +48,20 @@
     "enabled": true,
     "max_suggestions": 4
   },
+  "comparison": {
+    "enabled": true,
+    "max_questions": 15,
+    "min_difference": 0.1,
+    "send_all_threshold": 10,
+    "synthesis_model": null,
+    "synthesis_temperature": 0.0
+  },
   "prompts": {
     "planner": "prompts/planner_v1.md",
     "formatter": "prompts/formatter_v1.md",
     "rules_agent": "prompts/rules_agent_v1.md",
-    "router": "prompts/router_v1.md"
+    "router": "prompts/router_v1.md",
+    "comparison_synthesis": "prompts/comparison_synthesis_v1.md"
   },
   "examples": {
     "planner": "examples/planner_examples_v1.json"

@@ -192,6 +192,7 @@ def list_rules_for_country(country: str,
 def compare_rules_between_countries(country_a: str,
                                     country_b: str,
                                     category: Optional[str] = None,
+                                    tag: Optional[str] = None,
                                     ctx: Context = None) -> Dict[str, Any]:
     context = _require_tool_context()
     result = shared_compare_rules_between_countries(
@@ -199,11 +200,18 @@ def compare_rules_between_countries(country_a: str,
         country1=country_a,
         country2=country_b,
         category=category,
+        tag=tag,
     )
-    comparison = result.get("comparison", {})
     return {
         "found": result.get("found", False),
-        "comparison": comparison,
+        "countries": result.get("countries", []),
+        "category": category,
+        "tag": tag,
+        "total_questions": result.get("total_questions"),
+        "questions_analyzed": result.get("questions_analyzed"),
+        "filtered_by_embedding": result.get("filtered_by_embedding", False),
+        "differences": result.get("differences", []),
+        "synthesis": result.get("synthesis"),
         "formatted_summary": result.get("formatted_summary"),
         "total_differences": result.get("total_differences"),
         "pretty": result.get("formatted_summary"),

@@ -64,11 +64,54 @@ class NextQueryPredictionConfig(BaseModel):
     max_suggestions: int = Field(default=4, gt=0, le=20)
 
 
+class ComparisonConfig(BaseModel):
+    """
+    Configuration for cross-country rule comparison feature.
+
+    This feature uses answer embeddings to identify semantic differences
+    between countries' rules, then uses LLM synthesis to explain differences.
+    """
+    enabled: bool = True
+
+    # Embedding-based filtering parameters
+    max_questions: int = Field(
+        default=15,
+        gt=0,
+        le=100,
+        description="Maximum questions to send to LLM for synthesis. "
+                    "Set high (e.g., 100) to send all, low (e.g., 5) for aggressive filtering."
+    )
+    min_difference: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine difference threshold. "
+                    "0.0 = include identical answers, 1.0 = only opposite answers."
+    )
+    send_all_threshold: int = Field(
+        default=10,
+        gt=0,
+        description="If total questions <= this, send all regardless of difference score."
+    )
+
+    # LLM synthesis settings
+    synthesis_model: Optional[str] = Field(
+        default=None,
+        description="Model for synthesis. None = use formatter model."
+    )
+    synthesis_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0
+    )
+
+
 class PromptsConfig(BaseModel):
     planner: str  # Path to prompt file, e.g., "prompts/planner_v1.md"
     formatter: str
     rules_agent: str
     router: str
+    comparison_synthesis: Optional[str] = None  # Optional: for cross-country comparison
 
 
 class ExamplesConfig(BaseModel):
@@ -126,6 +169,7 @@ class AgentBehaviorConfig(BaseModel):
     rag: RAGConfig
     reranking: RerankingConfig
     next_query_prediction: NextQueryPredictionConfig
+    comparison: ComparisonConfig = ComparisonConfig()  # Cross-country comparison
     prompts: PromptsConfig
     examples: ExamplesConfig
     tools: Optional[ToolsConfig] = None  # Optional: tool description file paths
@@ -247,6 +291,12 @@ class AgentBehaviorConfig(BaseModel):
                 openai=OpenAIRerankingConfig(model="text-embedding-3-large"),
             ),
             next_query_prediction=NextQueryPredictionConfig(enabled=True, max_suggestions=4),
+            comparison=ComparisonConfig(
+                enabled=True,
+                max_questions=15,
+                min_difference=0.1,
+                send_all_threshold=10,
+            ),
             prompts=PromptsConfig(
                 planner="prompts/planner_v1.md",
                 formatter="prompts/formatter_v1.md",

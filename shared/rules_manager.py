@@ -479,6 +479,48 @@ class RulesManager:
             return []
         return sorted(self.rules_index.get('categories', {}).keys())
 
+    def get_available_tags(self) -> List[str]:
+        """Get list of available tags."""
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        return sorted(self.rules_index.get('tags', {}).keys())
+
+    def get_questions_by_tag(self, tag: str) -> List[str]:
+        """
+        Get question IDs that have a specific tag.
+
+        Args:
+            tag: Tag name to filter by
+
+        Returns:
+            List of question IDs
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        question_ids = self.rules_index.get('tags', {}).get(tag, set())
+        return sorted(question_ids)
+
+    def get_questions_by_category(self, category: str) -> List[str]:
+        """
+        Get question IDs that belong to a specific category.
+
+        Args:
+            category: Category name to filter by
+
+        Returns:
+            List of question IDs
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        question_ids = self.rules_index.get('categories', {}).get(category, set())
+        return sorted(question_ids)
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about loaded rules."""
         if not self.loaded:
@@ -490,7 +532,9 @@ class RulesManager:
             'total_questions': len(self.question_map),
             'countries': len(self.rules_index.get('by_country', {})),
             'categories': len(self.rules_index.get('categories', {})),
+            'tags': len(self.rules_index.get('tags', {})),
             'country_list': self.get_available_countries(),
-            'category_list': self.get_available_categories()
+            'category_list': self.get_available_categories(),
+            'tag_list': self.get_available_tags()
         }
 

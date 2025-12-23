@@ -763,13 +763,15 @@ def build_vector_db(
     embedding_model: str = "text-embedding-3-small",
     batch_size: int = 100,
     force_rebuild: bool = False,
-) -> int:
+    build_answer_embeddings: bool = True,
+) -> int | Dict[str, int]:
     """
     Build vector database from rules.json.
-    
-    This function creates a ChromaDB collection with embeddings for all
-    questions in the rules.json file, indexed by country.
-    
+
+    This function creates ChromaDB collections with embeddings:
+    - aviation_rules: Question embeddings for semantic search
+    - aviation_rules_answers: Answer embeddings for cross-country comparison
+
     Args:
         rules_json_path: Path to rules.json file
         vector_db_path: Path to ChromaDB storage directory (for local mode)
@@ -777,10 +779,12 @@ def build_vector_db(
         embedding_model: Name of embedding model to use
         batch_size: Number of documents to process per batch
         force_rebuild: If True, rebuild even if collection exists
-        
+        build_answer_embeddings: If True, also build answer embeddings collection
+
     Returns:
-        Number of documents added to the database
-        
+        If build_answer_embeddings=False: Number of documents added (int)
+        If build_answer_embeddings=True: Dict with counts {"questions": N, "answers": M}
+
     Raises:
         FileNotFoundError: If rules.json doesn't exist
         ValueError: If rules.json format is invalid
@@ -942,9 +946,101 @@ def build_vector_db(
             logger.error(f"Failed to add batch {i // batch_size + 1}: {e}")
             continue
     
-    logger.info(f"✓ Vector DB built with {total_added} documents")
-    logger.info(f"✓ Saved to {vector_db_path}")
-    
+    logger.info(f"✓ Questions collection built with {total_added} documents")
+
+    # Build answer embeddings collection if requested
+    answers_added = 0
+    if build_answer_embeddings:
+        answers_collection_name = "aviation_rules_answers"
+
+        # Delete existing answers collection if rebuilding
+        try:
+            existing_answers = client.get_collection(answers_collection_name)
+            if force_rebuild:
+                logger.info("Force rebuild: deleting existing answers collection")
+                client.delete_collection(answers_collection_name)
+        except Exception:
+            pass  # Collection doesn't exist
+
+        # Create answers collection
+        answers_collection = client.create_collection(
+            name=answers_collection_name,
+            metadata={"description": "Aviation rule answer embeddings for cross-country comparison"}
+        )
+        logger.info(f"Created collection: {answers_collection_name}")
+
+        # Prepare answer documents
+        answer_documents = []
+        answer_metadatas = []
+        answer_ids = []
+
+        for rule in rules_list:
+            question_id = rule.get("question_id")
+            answer_text = rule.get("answer", "")
+            country_code = rule.get("country_code", "")
+
+            if not question_id or not country_code:
+                continue
+
+            # Skip empty answers
+            if not answer_text or not answer_text.strip():
+                continue
+
+            # Create unique document ID for answer
+            doc_id = f"{question_id}_{country_code}_answer".replace(" ", "_")
+
+            answer_documents.append(answer_text)
+            answer_metadatas.append({
+                "question_id": question_id,
+                "country_code": country_code.upper(),
+                "category": rule.get("category", ""),
+                "tags": json.dumps(rule.get("tags", [])),
+                "question_text": rule.get("question_text", ""),
+            })
+            answer_ids.append(doc_id)
+
+        if answer_documents:
+            logger.info(f"Processing {len(answer_documents)} answer embeddings in batches of {batch_size}")
+
+            # Add answer documents in batches
+            for i in range(0, len(answer_documents), batch_size):
+                batch_docs = answer_documents[i:i + batch_size]
+                batch_metas = answer_metadatas[i:i + batch_size]
+                batch_ids = answer_ids[i:i + batch_size]
+
+                # Generate embeddings for batch
+                try:
+                    embeddings = embedding_provider.embed(batch_docs)
+                except Exception as e:
+                    logger.error(f"Failed to generate answer embeddings for batch {i // batch_size + 1}: {e}")
+                    continue
+
+                # Add to collection
+                try:
+                    answers_collection.add(
+                        documents=batch_docs,
+                        embeddings=embeddings,
+                        metadatas=batch_metas,
+                        ids=batch_ids
+                    )
+                    answers_added += len(batch_docs)
+                    batch_num = i // batch_size + 1
+                    logger.info(f"Added answers batch {batch_num}: {len(batch_docs)} documents")
+                except Exception as e:
+                    logger.error(f"Failed to add answers batch {i // batch_size + 1}: {e}")
+                    continue
+
+            logger.info(f"✓ Answers collection built with {answers_added} documents")
+        else:
+            logger.warning("No valid answer documents to add")
+
+    if vector_db_path:
+        logger.info(f"✓ Saved to {vector_db_path}")
+    else:
+        logger.info(f"✓ Saved to {vector_db_url}")
+
+    if build_answer_embeddings:
+        return {"questions": total_added, "answers": answers_added}
     return total_added
 
 

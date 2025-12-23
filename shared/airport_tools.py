@@ -644,9 +644,48 @@ def compare_rules_between_countries(
     ctx: ToolContext,
     country1: str,
     country2: str,
-    category: Optional[str] = None
+    category: Optional[str] = None,
+    tag: Optional[str] = None,
+    use_embeddings: bool = True,
 ) -> Dict[str, Any]:
-    """Compare aviation rules and regulations between two countries (iso-2 code eg FR,GB) and highlight differences in answers. Can be filtered by category like IFR/VFR, airspace, etc."""
+    """Compare aviation rules and regulations between two countries (iso-2 code eg FR,GB) and highlight differences in answers. Can be filtered by category like IFR/VFR, airspace, etc. or by tag like flight_plan, customs, etc."""
+    countries = [country1.upper(), country2.upper()]
+
+    # Try embedding-based comparison first (smarter - detects semantic differences)
+    if use_embeddings and ctx.comparison_service:
+        try:
+            result = ctx.comparison_service.compare_countries(
+                countries=countries,
+                category=category,
+                tag=tag,
+                synthesize=True,
+            )
+
+            # Build differences for response
+            differences = result.differences if result.differences else []
+
+            return {
+                "found": True,
+                "countries": countries,
+                "category": category,
+                "tag": tag,
+                "total_questions": result.total_questions,
+                "questions_analyzed": result.questions_analyzed,
+                "filtered_by_embedding": result.filtered_by_embedding,
+                "differences": differences,
+                "synthesis": result.synthesis,
+                "formatted_summary": result.synthesis,  # For backward compatibility
+                "total_differences": len(differences),
+                "message": f"Comparison between {countries[0]} and {countries[1]} complete.",
+            }
+        except Exception as e:
+            # Log and fall back to simple comparison
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Embedding comparison failed, falling back to text: {e}"
+            )
+
+    # Fall back to simple text-based comparison
     rules_manager = ctx.ensure_rules_manager()
     comparison = rules_manager.compare_rules_between_countries(
         country1=country1,
@@ -658,10 +697,13 @@ def compare_rules_between_countries(
 
     return {
         "found": True,
+        "countries": countries,
+        "category": category,
         "comparison": comparison,
         "formatted_summary": comparison.get('summary', ''),
         "total_differences": diff_count,
-        "message": f"Comparison between {country1.upper()} and {country2.upper()} complete."
+        "filtered_by_embedding": False,
+        "message": f"Comparison between {countries[0]} and {countries[1]} complete."
     }
 
 
@@ -736,11 +778,14 @@ def _compare_rules_between_countries_tool(
     country1: str,
     country2: str,
     category: Optional[str] = None,
+    tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Wrapper that adds a human readable summary field expected by UI clients.
     """
-    result = compare_rules_between_countries(ctx, country1, country2, category=category)
+    result = compare_rules_between_countries(
+        ctx, country1, country2, category=category, tag=tag
+    )
     if result.get("formatted_summary") and "pretty" not in result:
         result["pretty"] = result["formatted_summary"]
     return result
@@ -1342,7 +1387,11 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "category": {
                             "type": "string",
-                            "description": "Optional category filter.",
+                            "description": "Optional category filter (e.g., VFR, IFR, Customs).",
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Optional tag filter (e.g., flight_plan, airspace, transponder).",
                         },
                     },
                     "required": ["country1", "country2"],
