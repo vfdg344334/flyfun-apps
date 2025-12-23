@@ -68,6 +68,7 @@ def search_airports(
     query: str,
     max_results: int = 5,
     filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
     priority_strategy: str = "persona_optimized",
     **kwargs: Any,  # Accept _persona_id injected by ToolRunner
 ) -> Dict[str, Any]:
@@ -83,6 +84,9 @@ def search_airports(
     - "CDG" → use this tool (IATA code search)
 
     **DO NOT use this tool for "near" queries** - use find_airports_near_location instead for proximity searches.
+
+    **By default, large commercial airports are excluded** (not suitable for GA).
+    Set include_large_airports=True only if user explicitly asks for large/commercial airports.
 
     Returns matching airports sorted by priority.
     """
@@ -109,14 +113,14 @@ def search_airports(
     
     if country_code:
         # Search by country code
-        for a in ctx.model.airports:
+        for a in ctx.model.airports.values():
             if (a.iso_country or "").upper() == country_code:
                 matches.append(a)
                 if len(matches) >= 200:
                     break
     else:
         # Standard search: ICAO, name, IATA, municipality, or ISO country
-        for a in ctx.model.airports:
+        for a in ctx.model.airports.values():
             if (
                 (q in a.ident)
                 or (a.name and q in a.name.upper())
@@ -134,7 +138,7 @@ def search_airports(
         if geocode:
             # Find airports near the geocoded location (within 50nm by default)
             center_point = NavPoint(latitude=geocode["lat"], longitude=geocode["lon"], name=geocode["formatted"])
-            for airport in ctx.model.airports:
+            for airport in ctx.model.airports.values():
                 if not getattr(airport, "navpoint", None):
                     continue
                 try:
@@ -145,11 +149,18 @@ def search_airports(
                     matches.append(airport)
                     if len(matches) >= 200:
                         break
-    
-    # Apply filters using FilterEngine
+
+    # Build effective filters (always exclude large airports unless explicitly included)
+    effective_filters: Dict[str, Any] = {}
+    if not include_large_airports:
+        effective_filters["exclude_large_airports"] = True
     if filters:
+        effective_filters.update(filters)
+
+    # Apply filters using FilterEngine
+    if effective_filters:
         filter_engine = FilterEngine(context=ctx)
-        matches = filter_engine.apply(matches, filters)
+        matches = filter_engine.apply(matches, effective_filters)
 
     # Extract persona_id from kwargs (injected by ToolRunner)
     persona_id = kwargs.pop("_persona_id", None)
@@ -224,6 +235,7 @@ def find_airports_near_route(
     filters: Optional[Dict[str, Any]] = None,
     include_large_airports: bool = False,
     priority_strategy: str = "persona_optimized",
+    max_hours_notice: Optional[int] = None,  # Filter by notification requirements
     **kwargs: Any,  # Accept _persona_id injected by ToolRunner
 ) -> Dict[str, Any]:
     """
@@ -240,15 +252,17 @@ def find_airports_near_route(
       - "between Paris and Vik in Iceland" → from_location="Paris", to_location="Vik, Iceland"
       - "Vik, Iceland" or "Vik in Iceland" → to_location="Vik, Iceland" (INCLUDE COUNTRY!)
       - "between LFPO and EDDM" → from_location="LFPO", to_location="EDDM"
+      - "border entry between EGTF and LFMD with less than 24h notice" → use with point_of_entry=True, max_hours_notice=24
 
     **Filters:**
-    When user mentions fuel (e.g., AVGAS, Jet-A), customs/border crossing, runway type (paved/hard), IFR procedures, or country, you MUST include the corresponding filter:
+    When user mentions fuel (e.g., AVGAS, Jet-A), customs/border crossing, runway type (paved/hard), IFR procedures, country, or notification requirements, you MUST include the corresponding filter:
     - has_avgas=True for AVGAS
     - has_jet_a=True for Jet-A
     - point_of_entry=True for customs
     - has_hard_runway=True for paved runways
     - has_procedures=True for IFR
     - country='XX' for specific country
+    - max_hours_notice=24 for airports with <24h notification (or 48 for <48h, etc.)
 
     **By default, large commercial airports are excluded** (not suitable for GA).
     Set include_large_airports=True only if user explicitly asks for large/commercial airports.
@@ -325,6 +339,24 @@ def find_airports_near_route(
         filter_engine = FilterEngine(context=ctx)
         airport_objects = filter_engine.apply(airport_objects, effective_filters)
 
+    # Fetch notification info for all candidate airports (for filtering and enrichment)
+    notification_infos = {}
+    if ctx.notification_service and airport_objects:
+        candidate_icaos = [a.ident for a in airport_objects]
+        notification_infos = ctx.notification_service.get_notification_info_batch(candidate_icaos)
+
+    # Filter by notification requirements if max_hours_notice is specified
+    if max_hours_notice is not None and notification_infos:
+        filtered_by_notification = []
+        for airport in airport_objects:
+            info = notification_infos.get(airport.ident)
+            if info and info.matches_criteria(max_hours_notice=max_hours_notice):
+                filtered_by_notification.append(airport)
+            elif info is None:
+                # No notification data - include by default (unknown requirements)
+                filtered_by_notification.append(airport)
+        airport_objects = filtered_by_notification
+
     # Extract persona_id from kwargs (injected by ToolRunner)
     persona_id = kwargs.pop("_persona_id", None)
 
@@ -347,13 +379,16 @@ def find_airports_near_route(
         max_results=100  # Get more for full list, will limit to 20 for LLM later
     )
 
-    # Convert to summaries with distance_nm
+    # Convert to summaries with distance_nm and notification info
     airports: List[Dict[str, Any]] = []
     for airport in sorted_airports:
         summary = _airport_summary(airport)
         summary["segment_distance_nm"] = segment_distances.get(airport.ident, 0.0)
         if airport.ident in enroute_distances:
             summary["enroute_distance_nm"] = enroute_distances[airport.ident]
+        # Add notification info if available
+        if airport.ident in notification_infos:
+            summary["notification"] = notification_infos[airport.ident].to_summary_dict()
         airports.append(summary)
 
     pretty = (
@@ -372,6 +407,8 @@ def find_airports_near_route(
 
     # Generate filter profile for UI synchronization
     filter_profile = {"route_distance": max_distance_nm}
+    if max_hours_notice is not None:
+        filter_profile["max_hours_notice"] = max_hours_notice
     if filters:
         # Legacy filters
         if filters.get("country"):
@@ -447,7 +484,7 @@ def get_airport_details(
     kwargs.pop("_persona_id", None)
     
     icao = icao_code.strip().upper()
-    a = ctx.model.airports.where(ident=icao).first()
+    a = ctx.model.airports.get(icao)
 
     if not a:
         return {"found": False, "pretty": f"Airport {icao} not found."}
@@ -514,54 +551,93 @@ def get_airport_details(
     }
 
 
-def get_border_crossing_airports(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
-    """List all airports that are official border crossing points (with customs). Optionally filter by country."""
-    airports_query = ctx.model.airports.border_crossings()
+def get_border_crossing_airports(
+    ctx: ToolContext,
+    country: Optional[str] = None,
+    max_results: int = 10,
+    filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
+) -> Dict[str, Any]:
+    """
+    List airports that are official border crossing points (with customs).
 
-    if country:
-        airports_query = airports_query.by_country(country.upper())
+    Optionally filter by country and apply additional filters.
+    Results are sorted by GA friendliness score.
 
-    airports_list = airports_query.all()
+    **By default, large commercial airports are excluded** (not suitable for GA).
+    """
+    # Get all border crossing airports (point_of_entry=True)
+    airports_list = [
+        a for a in ctx.model.airports.values()
+        if getattr(a, 'point_of_entry', False)
+        and (not country or (a.iso_country or '').upper() == country.upper())
+    ]
 
+    # Build effective filters (always exclude large airports unless explicitly included)
+    effective_filters: Dict[str, Any] = {}
+    if not include_large_airports:
+        effective_filters["exclude_large_airports"] = True
+    if filters:
+        effective_filters.update(filters)
+
+    # Apply filters using FilterEngine
+    if effective_filters:
+        filter_engine = FilterEngine(context=ctx)
+        airports_list = filter_engine.apply(airports_list, effective_filters)
+
+    # Extract persona_id from kwargs (injected by ToolRunner)
+    persona_id = kwargs.pop("_persona_id", None)
+
+    # Apply priority sorting using PriorityEngine
+    priority_engine = PriorityEngine(context=ctx)
+    priority_context = _build_priority_context(persona_id=persona_id)
+    sorted_airports = priority_engine.apply(
+        airports_list,
+        strategy=priority_strategy,
+        context=priority_context,
+        max_results=100  # Get more for grouping, will limit for LLM
+    )
+
+    # Group by country for display
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     all_airports: List[Dict[str, Any]] = []
-    for a in airports_list:
+    for a in sorted_airports:
         data = _airport_summary(a)
         country_code = data["country"] or "Unknown"
         grouped.setdefault(country_code, []).append(data)
         all_airports.append(data)
 
+    # Build pretty output
     pretty_lines = [
         f"**Border Crossing Airports{' in ' + country.upper() if country else ''}:**\n"
     ]
     for cc, arr in grouped.items():
         pretty_lines.append(f"**{cc}:**")
-        for item in arr:
+        for item in arr[:max_results]:  # Limit per country in pretty output
             label = item["ident"] + " - " + (item["name"] or "")
             city = item.get("municipality")
             pretty_lines.append(f"- {label}" + (f" ({city})" if city else ""))
+        if len(arr) > max_results:
+            pretty_lines.append(f"  ... and {len(arr) - max_results} more")
         pretty_lines.append("")
 
-    # Limit data sent to LLM: max 10 airports per country, max 5 countries (top 50 total)
-    # Keep full data for visualization on map
-    grouped_for_llm = {}
-    airports_for_llm = []
-    for cc, arr in list(grouped.items())[:5]:  # Max 5 countries
-        limited_arr = arr[:10]  # Max 10 per country
-        grouped_for_llm[cc] = limited_arr
-        airports_for_llm.extend(limited_arr)
+    # Limit data sent to LLM
+    airports_for_llm = all_airports[:max_results]
 
     # Generate filter profile for UI synchronization
-    filter_profile = {"point_of_entry": True}  # Border crossing filter
+    filter_profile: Dict[str, Any] = {"point_of_entry": True}
     if country:
         filter_profile["country"] = country.upper()
+    if filters:
+        filter_profile.update(filters)
 
     return {
         "count": len(all_airports),
-        "by_country": grouped_for_llm,  # Limited for LLM
         "airports": airports_for_llm,  # Limited for LLM
         "pretty": "\n".join(pretty_lines),
-        "filter_profile": filter_profile,  # Filter settings for UI sync
+        "filter_profile": filter_profile,
         "visualization": {
             "type": "markers",
             "data": all_airports,  # Show ALL border crossing airports on map
@@ -573,7 +649,10 @@ def get_border_crossing_airports(ctx: ToolContext, country: Optional[str] = None
 
 def get_airport_statistics(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
     """Get statistical information about airports, such as counts with customs, fuel types, or procedures. Optionally filter by country."""
-    airports = ctx.model.airports.by_country(country.upper()).all() if country else ctx.model.airports.all()
+    if country:
+        airports = [a for a in ctx.model.airports.values() if (a.iso_country or '').upper() == country.upper()]
+    else:
+        airports = list(ctx.model.airports.values())
     total = len(airports)
 
     stats = {
@@ -804,7 +883,7 @@ def _find_nearest_airport_in_db(
     icao = icao_or_location.strip().upper()
 
     # First try direct ICAO lookup
-    airport = ctx.model.airports.where(ident=icao).first()
+    airport = ctx.model.airports.get(icao)
     if airport:
         return {
             "airport": airport,
@@ -829,7 +908,7 @@ def _find_nearest_airport_in_db(
     nearest_any = None
     nearest_any_distance = float('inf')
 
-    for apt in ctx.model.airports:
+    for apt in ctx.model.airports.values():
         if not getattr(apt, "navpoint", None):
             continue
         try:
@@ -882,6 +961,7 @@ def find_airports_near_location(
     filters: Optional[Dict[str, Any]] = None,
     include_large_airports: bool = False,
     priority_strategy: str = "persona_optimized",
+    max_hours_notice: Optional[int] = None,  # Filter by notification requirements
     # Optional pre-resolved center (bypasses geocoding) - used by REST API
     center_lat: Optional[float] = None,
     center_lon: Optional[float] = None,
@@ -897,11 +977,13 @@ def find_airports_near_location(
     - "airports around Lake Geneva" → use this tool with location_query="Lake Geneva"
     - "airports close to Zurich" → use this tool with location_query="Zurich"
     - "airports near 48.8584, 2.2945" → use this tool with location_query="48.8584, 2.2945"
+    - "airports near Vannes with less than 24h notice" → use with max_hours_notice=24
 
     Process:
     1) Geocodes the location via Geoapify to get coordinates (or uses pre-resolved center if provided)
     2) Computes distance from each airport to that point and filters by max_distance_nm
     3) Applies optional filters (fuel, customs, runway, etc.) and priority sorting
+    4) If max_hours_notice is set, filters to airports requiring at most that many hours notice
 
     **By default, large commercial airports are excluded** (not suitable for GA).
     Set include_large_airports=True only if user explicitly asks for large/commercial airports.
@@ -928,7 +1010,7 @@ def find_airports_near_location(
     # Compute distances to all airports and filter by radius
     candidate_airports: List[Airport] = []
     point_distances: Dict[str, float] = {}
-    for airport in ctx.model.airports:
+    for airport in ctx.model.airports.values():
         if not getattr(airport, "navpoint", None):
             continue
         try:
@@ -951,6 +1033,24 @@ def find_airports_near_location(
         filter_engine = FilterEngine(context=ctx)
         candidate_airports = filter_engine.apply(candidate_airports, effective_filters)
 
+    # Fetch notification info for all candidate airports (for filtering and enrichment)
+    notification_infos = {}
+    if ctx.notification_service and candidate_airports:
+        candidate_icaos = [a.ident for a in candidate_airports]
+        notification_infos = ctx.notification_service.get_notification_info_batch(candidate_icaos)
+
+    # Filter by notification requirements if max_hours_notice is specified
+    if max_hours_notice is not None and notification_infos:
+        filtered_by_notification = []
+        for airport in candidate_airports:
+            info = notification_infos.get(airport.ident)
+            if info and info.matches_criteria(max_hours_notice=max_hours_notice):
+                filtered_by_notification.append(airport)
+            elif info is None:
+                # No notification data - include by default (unknown requirements)
+                filtered_by_notification.append(airport)
+        candidate_airports = filtered_by_notification
+
     # Extract persona_id from kwargs (injected by ToolRunner)
     persona_id = kwargs.pop("_persona_id", None)
     
@@ -967,11 +1067,14 @@ def find_airports_near_location(
         max_results=100
     )
 
-    # Summaries with distance
+    # Summaries with distance and notification info
     airports: List[Dict[str, Any]] = []
     for a in sorted_airports:
         summary = _airport_summary(a)
         summary["distance_nm"] = round(point_distances.get(a.ident, 0.0), 2)
+        # Add notification info if available
+        if a.ident in notification_infos:
+            summary["notification"] = notification_infos[a.ident].to_summary_dict()
         airports.append(summary)
 
     total_count = len(airports)
@@ -993,6 +1096,8 @@ def find_airports_near_location(
         "location_query": location_query,
         "radius_nm": max_distance_nm
     }
+    if max_hours_notice is not None:
+        filter_profile["max_hours_notice"] = max_hours_notice
     if filters:
         # Legacy filters
         if filters.get("country"):
@@ -1062,22 +1167,150 @@ def find_airports_by_notification(
     max_hours_notice: Optional[int] = None,
     notification_type: Optional[str] = None,
     country: Optional[str] = None,
-    limit: int = 20,
-    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
+    filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    max_results: int = 20,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
 ) -> Dict[str, Any]:
-    """Find airports filtered by notification requirements. Use when user asks for airports with specific notice periods (e.g., '<24h notice') or notification types (H24, on_request)."""
-    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
-    kwargs.pop("_persona_id", None)
-    
+    """
+    Find airports filtered by notification requirements.
+
+    Use when user asks for airports with specific notice periods (e.g., '<24h notice')
+    or notification types (H24, on_request). Combines notification filtering with
+    standard airport filters and persona-based sorting.
+    """
     if not ctx.notification_service:
         return {
             "found": False,
             "error": "Notification service not available.",
             "pretty": "Notification service not available."
         }
-    return ctx.notification_service.find_airports_by_notification(
-        max_hours_notice, notification_type, country, limit
+
+    # 1. Get ICAOs with notification data (optionally filtered by country)
+    notification_icaos = ctx.notification_service.find_icaos_with_notifications(country)
+    if not notification_icaos:
+        return {
+            "found": False,
+            "count": 0,
+            "airports": [],
+            "pretty": f"No airports with notification data found{' in ' + country.upper() if country else ''}."
+        }
+
+    # 2. Get NotificationInfo objects for all candidates
+    notification_infos = ctx.notification_service.get_notification_info_batch(notification_icaos)
+
+    # 3. Filter by notification criteria (max_hours_notice, notification_type, min_easiness_score)
+    min_easiness_score = filters.pop("min_easiness_score", None) if filters else None
+    matching_icaos = []
+    for icao, info in notification_infos.items():
+        if info.matches_criteria(
+            max_hours_notice=max_hours_notice,
+            notification_type=notification_type,
+            min_easiness_score=min_easiness_score,
+        ):
+            matching_icaos.append(icao)
+
+    if not matching_icaos:
+        return {
+            "found": False,
+            "count": 0,
+            "airports": [],
+            "pretty": "No airports found matching the notification criteria."
+        }
+
+    # 4. Load Airport objects from airport database
+    matching_set = set(icao.upper() for icao in matching_icaos)
+    airports_list = [a for a in ctx.model.airports.values() if a.ident in matching_set]
+
+    # 5. Build effective filters (always exclude large airports unless explicitly included)
+    effective_filters: Dict[str, Any] = {}
+    if not include_large_airports:
+        effective_filters["exclude_large_airports"] = True
+    if filters:
+        effective_filters.update(filters)
+
+    # Apply filters using FilterEngine
+    if effective_filters:
+        filter_engine = FilterEngine(context=ctx)
+        airports_list = filter_engine.apply(airports_list, effective_filters)
+
+    if not airports_list:
+        return {
+            "found": False,
+            "count": 0,
+            "airports": [],
+            "pretty": "No airports found after applying filters."
+        }
+
+    # 6. Apply priority sorting using PriorityEngine
+    persona_id = kwargs.pop("_persona_id", None)
+    priority_engine = PriorityEngine(context=ctx)
+    priority_context = _build_priority_context(persona_id=persona_id)
+    sorted_airports = priority_engine.apply(
+        airports_list,
+        strategy=priority_strategy,
+        context=priority_context,
+        max_results=max_results * 2  # Get extra for detailed info
     )
+
+    # 7. Enrich results with notification info
+    airports_for_response: List[Dict[str, Any]] = []
+    for airport in sorted_airports[:max_results]:
+        data = _airport_summary(airport)
+        icao = data["ident"]
+        if icao in notification_infos:
+            info = notification_infos[icao]
+            data["notification"] = info.to_summary_dict()
+        airports_for_response.append(data)
+
+    # 8. Format pretty output
+    pretty_lines = ["**Airports by Notification Requirements**", ""]
+
+    filters_desc = []
+    if max_hours_notice:
+        filters_desc.append(f"≤{max_hours_notice}h notice")
+    if notification_type:
+        filters_desc.append(f"type={notification_type}")
+    if country:
+        filters_desc.append(f"country={country.upper()}")
+
+    if filters_desc:
+        pretty_lines.append(f"Filters: {', '.join(filters_desc)}")
+        pretty_lines.append("")
+
+    pretty_lines.append(f"Found **{len(airports_for_response)}** airports:")
+    pretty_lines.append("")
+
+    for apt in airports_for_response[:10]:
+        name = apt.get("name", "")
+        notif = apt.get("notification", {})
+        hours = notif.get("hours_notice")
+        ntype = notif.get("notification_type", "")
+
+        if notif.get("is_h24"):
+            notice_str = "No notice needed (H24)"
+        elif hours:
+            notice_str = f"{hours}h notice"
+        else:
+            notice_str = ntype or "Unknown"
+
+        pretty_lines.append(f"- **{apt['ident']}** ({name}): {notice_str}")
+
+    if len(airports_for_response) > 10:
+        pretty_lines.append(f"... and {len(airports_for_response) - 10} more")
+
+    return {
+        "found": True,
+        "count": len(airports_for_response),
+        "airports": airports_for_response,
+        "pretty": "\n".join(pretty_lines),
+        "visualization": {
+            "type": "markers",
+            "markers": airports_for_response,
+            "style": "customs"
+        }
+    }
 
 
 def _tool_description(func: Callable) -> str:
@@ -1139,6 +1372,11 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "object",
                             "description": "IMPORTANT: Use filters object to filter airports by characteristics mentioned in user's request. Examples: {'has_avgas': True} for AVGAS fuel, {'point_of_entry': True} for customs, {'has_hard_runway': True} for paved runways, {'has_procedures': True} for IFR, {'country': 'FR'} for country. ALWAYS include filters when user specifies characteristics.",
                         },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports (e.g., Heathrow, CDG, JFK). Default is False - large airports are excluded as they are not suitable for GA. Set to True ONLY if user explicitly asks for large/commercial/major airports.",
+                            "default": False,
+                        },
                         "priority_strategy": {
                             "type": "string",
                             "description": "Priority sorting strategy (e.g., persona_optimized).",
@@ -1187,6 +1425,10 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "description": "Priority sorting strategy (e.g., persona_optimized).",
                             "default": "persona_optimized",
                         },
+                        "max_hours_notice": {
+                            "type": "integer",
+                            "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h).",
+                        },
                     },
                     "required": ["location_query"],
                 },
@@ -1234,6 +1476,10 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "description": "Priority sorting strategy (e.g., persona_optimized).",
                             "default": "persona_optimized",
                         },
+                        "max_hours_notice": {
+                            "type": "integer",
+                            "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h). Use when user asks for airports with specific notification constraints.",
+                        },
                     },
                     "required": ["from_location", "to_location"],
                 },
@@ -1271,6 +1517,20 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         "country": {
                             "type": "string",
                             "description": "Optional ISO-2 country code (e.g., FR, DE).",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of airports to return. Default is 10.",
+                            "default": 10,
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Additional filters (fuel, runway, etc.) to apply on top of border crossing requirement.",
+                        },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports. Default is False - large airports are excluded as they are not suitable for GA.",
+                            "default": False,
                         },
                     },
                 },
@@ -1434,7 +1694,16 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "string",
                             "description": "ISO-2 country code (e.g., FR, DE, GB).",
                         },
-                        "limit": {
+                        "filters": {
+                            "type": "object",
+                            "description": "Additional airport filters. Examples: {'has_avgas': True} for AVGAS fuel, {'has_hard_runway': True} for paved runways, {'min_easiness_score': 60} for easy notification requirements.",
+                        },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports (e.g., Heathrow, CDG). Default is False - large airports are excluded as not suitable for GA.",
+                            "default": False,
+                        },
+                        "max_results": {
                             "type": "integer",
                             "description": "Maximum results to return.",
                             "default": 20,
