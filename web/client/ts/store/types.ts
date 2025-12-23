@@ -18,6 +18,18 @@ export interface GAFriendlySummary {
   notification_hassle?: string | null;
 }
 
+/**
+ * Notification info for an airport (from chatbot tool responses)
+ */
+export interface NotificationSummary {
+  notification_type?: string;  // 'h24', 'hours', 'on_request', etc.
+  hours_notice?: number | null;
+  is_h24?: boolean;
+  is_on_request?: boolean;
+  easiness_score?: number;  // 0-100
+  summary?: string;
+}
+
 export interface Airport {
   ident: string;
   name?: string;
@@ -38,6 +50,8 @@ export interface Airport {
   _closestSegment?: [string, string];
   // GA Friendliness data (populated when include_ga=true)
   ga?: GAFriendlySummary | null;
+  // Notification data (from chatbot tool responses)
+  notification?: NotificationSummary | null;
 }
 
 /**
@@ -66,7 +80,7 @@ export interface FilterConfig {
 /**
  * Legend mode types
  */
-export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance';
+export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance' | 'notification';
 
 /**
  * Relevance bucket types (quartile-based)

@@ -226,8 +226,13 @@ export class VisualizationEngine {
         color = this.getRelevanceColor(airport);
         radius = 7;
         break;
+
+      case 'notification':
+        color = this.getNotificationColor(airport);
+        radius = 7;
+        break;
     }
-    
+
     const icon = L.divIcon({
       className: 'airport-marker',
       html: `<div style="
@@ -295,6 +300,48 @@ export class VisualizationEngine {
       return getColor('third-quartile');
     } else {
       return getColor('bottom-quartile');
+    }
+  }
+
+  /**
+   * Get notification color based on hours notice required
+   * Green: H24 or ≤24h notice
+   * Yellow: 25-48h notice
+   * Red: >48h notice
+   * Gray: Unknown/no data
+   */
+  private getNotificationColor(airport: Airport): string {
+    const notification = airport.notification;
+
+    // No notification data
+    if (!notification) {
+      return '#95a5a6'; // Gray
+    }
+
+    // H24 - no notice required
+    if (notification.is_h24) {
+      return '#28a745'; // Green
+    }
+
+    // On request only - uncertain
+    if (notification.is_on_request && !notification.hours_notice) {
+      return '#6c757d'; // Dark gray
+    }
+
+    const hours = notification.hours_notice;
+
+    // No hours data
+    if (hours === null || hours === undefined) {
+      return '#95a5a6'; // Gray
+    }
+
+    // Color based on hours
+    if (hours <= 24) {
+      return '#28a745'; // Green - easy, ≤24h
+    } else if (hours <= 48) {
+      return '#ffc107'; // Yellow - moderate, 25-48h
+    } else {
+      return '#dc3545'; // Red - difficult, >48h
     }
   }
   

@@ -30,8 +30,12 @@ class NotificationType(str, Enum):
 
 class NotificationRule(BaseModel):
     """
-    Structured representation of a notification requirement.
-    
+    Structured representation of a notification requirement (used during parsing).
+
+    Note: This model is used for PARSING AIP text and computing HassleScore.
+    It is NOT stored in ga_notifications.db. For query-time access to notification
+    data, use NotificationInfo which wraps the simplified ga_notifications.db schema.
+
     Examples:
         - "PPR 24 HR" -> hours=24, notification_type=HOURS
         - "PN on last working day before 1500" -> notification_type=BUSINESS_DAY, specific_time="1500"
@@ -137,6 +141,245 @@ class ParsedNotificationRules(BaseModel):
                 summaries.append("O/R")
         
         return "; ".join(summaries) if summaries else "See detailed rules"
+
+
+class NotificationInfo:
+    """
+    Notification information for an airport with query and calculation methods.
+
+    This is the primary interface for working with notification data at QUERY TIME.
+    It wraps data from ga_notifications.db (simplified schema) and provides
+    convenient methods for filtering, scoring, and displaying notification requirements.
+
+    Note: This is separate from NotificationRule/ParsedNotificationRules which are
+    used during PARSING of AIP text. NotificationInfo works with already-parsed,
+    summarized data stored in ga_notifications.db.
+    """
+
+    def __init__(
+        self,
+        icao: str,
+        notification_type: str,
+        hours_notice: Optional[int] = None,
+        weekday_rules: Optional[Dict[str, Any]] = None,
+        summary: Optional[str] = None,
+        confidence: float = 1.0,
+        rule_type: str = "ppr",
+    ):
+        self.icao = icao
+        self.notification_type = notification_type  # "h24", "hours", "on_request", "business_day"
+        self.hours_notice = hours_notice
+        self.weekday_rules = weekday_rules or {}
+        self.summary = summary or ""
+        self.confidence = confidence
+        self.rule_type = rule_type
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "NotificationInfo":
+        """Create NotificationInfo from a database row."""
+        import json
+        weekday_rules = None
+        if row.get("weekday_rules"):
+            try:
+                weekday_rules = json.loads(row["weekday_rules"]) if isinstance(row["weekday_rules"], str) else row["weekday_rules"]
+            except (json.JSONDecodeError, TypeError):
+                weekday_rules = None
+
+        return cls(
+            icao=row["icao"],
+            notification_type=row.get("notification_type", "unknown"),
+            hours_notice=row.get("hours_notice"),
+            weekday_rules=weekday_rules,
+            summary=row.get("summary", ""),
+            confidence=row.get("confidence", 1.0),
+            rule_type=row.get("rule_type", "ppr"),
+        )
+
+    def is_h24(self) -> bool:
+        """Check if no prior notice is required (H24 availability)."""
+        return self.notification_type == "h24"
+
+    def is_on_request(self) -> bool:
+        """Check if notification is on request / by arrangement."""
+        return self.notification_type == "on_request"
+
+    def get_notice_for_day(self, day: str) -> Optional[int]:
+        """
+        Get hours notice required to arrive on a given day.
+
+        Args:
+            day: Day name (e.g., "Saturday", "Monday", "Friday")
+
+        Returns:
+            Hours notice required, or None if H24/unknown
+        """
+        if self.is_h24():
+            return 0
+
+        if self.is_on_request():
+            return None  # Unknown, depends on arrangement
+
+        day_lower = day.lower()
+
+        # Check weekday-specific rules
+        if self.weekday_rules:
+            # Try to match day patterns like "Mon-Fri", "Sat-Sun", etc.
+            day_map = {
+                "monday": ["mon", "weekday", "mon-fri"],
+                "tuesday": ["tue", "weekday", "mon-fri"],
+                "wednesday": ["wed", "weekday", "mon-fri"],
+                "thursday": ["thu", "weekday", "mon-fri"],
+                "friday": ["fri", "weekday", "mon-fri"],
+                "saturday": ["sat", "weekend", "sat-sun"],
+                "sunday": ["sun", "weekend", "sat-sun"],
+            }
+
+            day_patterns = day_map.get(day_lower, [])
+
+            for pattern, rule_value in self.weekday_rules.items():
+                pattern_lower = pattern.lower().replace(" ", "")
+                for dp in day_patterns:
+                    if dp in pattern_lower:
+                        # Extract hours from rule value
+                        if isinstance(rule_value, int):
+                            return rule_value
+                        if isinstance(rule_value, str):
+                            # Parse strings like "24h notice", "48h", etc.
+                            import re
+                            match = re.search(r'(\d+)\s*h', rule_value.lower())
+                            if match:
+                                return int(match.group(1))
+
+        # Fall back to default hours_notice
+        return self.hours_notice
+
+    def get_max_notice_hours(self) -> Optional[int]:
+        """Get maximum hours notice required across all days."""
+        if self.is_h24():
+            return 0
+
+        if self.is_on_request():
+            return None
+
+        max_hours = self.hours_notice
+
+        # Check weekday rules for higher values
+        if self.weekday_rules:
+            import re
+            for rule_value in self.weekday_rules.values():
+                if isinstance(rule_value, int):
+                    if max_hours is None or rule_value > max_hours:
+                        max_hours = rule_value
+                elif isinstance(rule_value, str):
+                    match = re.search(r'(\d+)\s*h', rule_value.lower())
+                    if match:
+                        hours = int(match.group(1))
+                        if max_hours is None or hours > max_hours:
+                            max_hours = hours
+
+        return max_hours
+
+    def get_easiness_score(self) -> float:
+        """
+        Get easiness score from 0-100 (higher = easier to access).
+
+        Returns:
+            Score where 100 = H24 (no notice), 0 = very difficult (72h+ notice)
+        """
+        if self.is_h24():
+            return 100.0
+
+        if self.is_on_request():
+            return 70.0  # Generally easy, just need to call
+
+        max_hours = self.get_max_notice_hours()
+
+        if max_hours is None:
+            return 50.0  # Unknown, assume moderate
+
+        if max_hours == 0:
+            return 100.0
+        elif max_hours <= 2:
+            return 90.0
+        elif max_hours <= 12:
+            return 80.0
+        elif max_hours <= 24:
+            return 60.0
+        elif max_hours <= 48:
+            return 40.0
+        elif max_hours <= 72:
+            return 20.0
+        else:
+            return 10.0
+
+    def matches_criteria(
+        self,
+        max_hours_notice: Optional[int] = None,
+        notification_type: Optional[str] = None,
+        min_easiness_score: Optional[float] = None,
+    ) -> bool:
+        """
+        Check if this notification matches filter criteria.
+
+        Args:
+            max_hours_notice: Maximum hours notice allowed (e.g., 24 means ≤24h)
+            notification_type: Required notification type ("h24", "hours", etc.)
+            min_easiness_score: Minimum easiness score (0-100)
+
+        Returns:
+            True if matches all specified criteria
+        """
+        # Check notification type
+        if notification_type:
+            if self.notification_type != notification_type.lower():
+                return False
+
+        # Check hours notice
+        if max_hours_notice is not None:
+            if self.is_h24():
+                pass  # H24 always passes hours check
+            elif self.is_on_request():
+                pass  # On request typically passes (call ahead)
+            else:
+                max_required = self.get_max_notice_hours()
+                if max_required is not None and max_required > max_hours_notice:
+                    return False
+
+        # Check easiness score
+        if min_easiness_score is not None:
+            if self.get_easiness_score() < min_easiness_score:
+                return False
+
+        return True
+
+    def to_summary_dict(self) -> Dict[str, Any]:
+        """Get summary dict for API responses."""
+        return {
+            "notification_type": self.notification_type,
+            "hours_notice": self.hours_notice,
+            "summary": self.summary[:100] + "..." if len(self.summary) > 100 else self.summary,
+            "easiness_score": round(self.get_easiness_score(), 1),
+            "is_h24": self.is_h24(),
+        }
+
+    def to_detail_dict(self) -> Dict[str, Any]:
+        """Get full detail dict including raw data."""
+        return {
+            "icao": self.icao,
+            "notification_type": self.notification_type,
+            "hours_notice": self.hours_notice,
+            "weekday_rules": self.weekday_rules,
+            "summary": self.summary,
+            "confidence": self.confidence,
+            "rule_type": self.rule_type,
+            "easiness_score": round(self.get_easiness_score(), 1),
+            "max_notice_hours": self.get_max_notice_hours(),
+            "is_h24": self.is_h24(),
+            "is_on_request": self.is_on_request(),
+        }
+
+    def __repr__(self) -> str:
+        return f"NotificationInfo(icao={self.icao}, type={self.notification_type}, hours={self.hours_notice})"
 
 
 class HassleLevel(str, Enum):

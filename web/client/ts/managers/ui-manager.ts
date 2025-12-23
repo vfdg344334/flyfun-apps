@@ -859,6 +859,31 @@ export class UIManager {
         `).join('');
         break;
       }
+
+      case 'notification':
+        html = `
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #28a745;"></div>
+            <span>H24 / ≤24h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #ffc107;"></div>
+            <span>25-48h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #dc3545;"></div>
+            <span>>48h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #6c757d;"></div>
+            <span>On request</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #95a5a6;"></div>
+            <span>Unknown</span>
+          </div>
+        `;
+        break;
     }
 
     legendContent.innerHTML = html;

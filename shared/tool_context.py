@@ -132,7 +132,9 @@ class ToolContext:
         if load_notifications:
             try:
                 from shared.ga_notification_agent.service import NotificationService
-                notification_service = NotificationService()
+                ga_notifications_db = settings.ga_notifications_db
+                if ga_notifications_db and ga_notifications_db.exists():
+                    notification_service = NotificationService(db_path=str(ga_notifications_db))
             except Exception:
                 pass  # Service is optional
 
