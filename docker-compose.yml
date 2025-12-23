@@ -15,8 +15,8 @@ services:
       dockerfile: web/Dockerfile
     image: flyfun-web-server:latest
     container_name: flyfun-web-server
-    ports:
-      - "${WEB_PORT:-8000}:8000"
+    expose:
+      - "8000"  # Only accessible within Docker network (Caddy handles external traffic)
     # Load environment variables from .env file
     # This is more standard, maintainable, and secure than listing all variables explicitly
     # Variables in .env are automatically loaded into the container
@@ -30,7 +30,7 @@ services:
       - AIRPORTS_DB=/app/data/airports.db
       - RULES_JSON=/app/data/rules.json
       - GA_NOTIFICATIONS_DB=/app/data/ga_notifications.db
-      - GA_META_DB=/app/out/ga_meta.sqlite
+      - GA_PERSONA_DB=/app/data/ga_persona.db
       # Vector DB for RAG (AviationAgentSettings)
       # Note: "chromadb:8000" uses Docker's internal network (service name + container port)
       - VECTOR_DB_URL=http://chromadb:8000
@@ -39,7 +39,7 @@ services:
     volumes:
       # Data files (read-only)
       - ${DATA_DIR:-./data}:/app/data:ro
-      # Output files (writable) - includes ga_meta.sqlite and rules_vector_db
+      # Output files (writable) - includes rules_vector_db
       - ${OUTPUT_DIR:-./out}:/app/out:rw
       # Logs (writable)
       - ${LOGS_DIR:-./logs}:/app/logs:rw
@@ -50,6 +50,7 @@ services:
     restart: unless-stopped
     networks:
       - flyfun-network
+      - shared-services  # For Caddy reverse proxy
     depends_on:
       chromadb:
         condition: service_healthy
@@ -129,3 +130,5 @@ services:
 networks:
   flyfun-network:
     driver: bridge
+  shared-services:
+    external: true  # Created by shared-infra

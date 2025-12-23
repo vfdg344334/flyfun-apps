@@ -5,7 +5,7 @@
 
       
       {
-        "name": "Web Server (dev.env)",
+        "name": "Web Server (.env)",
         "type": "debugpy",
         "request": "launch",
         "program": "${workspaceFolder}/web/server/main.py",
@@ -15,7 +15,7 @@
         "env": {"LOG_TO_STDERR": "1"}
       },
       {
-        "name": "MCP Server (dev.env)",
+        "name": "MCP Server (.env)",
         "type": "debugpy",
         "request": "launch",
         "program": "${workspaceFolder}/mcp_server/main.py",
