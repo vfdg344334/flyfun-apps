@@ -401,16 +401,20 @@ class GAFriendlinessService:
             
         except Exception as e:
             logger.error(f"Error getting GA summary for {icao}: {e}")
+            
+            # Try to get notification summary even if GA stats failed
+            notification_summary = _get_notification_summary(icao)
+            
             return {
                 "icao": icao.upper(),
-                "has_data": False,
+                "has_data": notification_summary is not None,
                 "score": None,
                 "features": None,
                 "review_count": 0,
                 "last_review_utc": None,
                 "tags": None,
                 "summary_text": None,
-                "notification_summary": None,
+                "notification_summary": notification_summary,
                 "hassle_level": None,
                 "hotel_info": None,
                 "restaurant_info": None
