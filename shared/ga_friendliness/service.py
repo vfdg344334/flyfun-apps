@@ -105,7 +105,7 @@ class GAFriendlinessService:
         Initialize the service.
         
         Args:
-            db_path: Path to ga_meta.sqlite. If None, service is disabled.
+            db_path: Path to GA persona database. If None, service is disabled.
             readonly: If True, open database in read-only mode (default for web API).
         """
         self.db_path = db_path

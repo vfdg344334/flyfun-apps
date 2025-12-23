@@ -1,5 +1,5 @@
 """
-SQLite schema and connection management for ga_meta.sqlite.
+SQLite schema and connection management for GA persona database.
 
 Handles schema creation, versioning, and migrations.
 """
@@ -34,7 +34,7 @@ def get_schema_version(conn: sqlite3.Connection) -> Optional[str]:
 
 def create_schema(conn: sqlite3.Connection) -> None:
     """
-    Create all tables in ga_meta.sqlite and set schema version.
+    Create all tables in GA persona database and set schema version.
     
     Tables:
         - ga_airfield_stats (main query table)
@@ -315,7 +315,7 @@ def ensure_schema_version(conn: sqlite3.Connection) -> None:
 
 def get_connection(db_path: Path, readonly: bool = False) -> sqlite3.Connection:
     """
-    Get a connection to ga_meta.sqlite.
+    Get a connection to GA persona database.
     
     Creates the database and schema if it doesn't exist (unless readonly=True).
     Ensures schema is at current version.
@@ -362,12 +362,12 @@ def attach_euro_aip(
     ATTACH euro_aip.sqlite for joint queries.
     
     Usage:
-        conn = get_connection(ga_meta_path)
+        conn = get_connection(ga_persona_path)
         attach_euro_aip(conn, euro_aip_path)
         # Now can query: SELECT * FROM aip.airport JOIN ga_airfield_stats ...
     
     Args:
-        conn: SQLite connection to ga_meta.sqlite
+        conn: SQLite connection to GA persona database
         euro_aip_path: Path to euro_aip.sqlite
         alias: Alias for attached database (default: 'aip')
     """

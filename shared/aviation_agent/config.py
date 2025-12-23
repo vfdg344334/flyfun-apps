@@ -76,11 +76,11 @@ def _default_ga_notifications_db() -> Path:
 
 def _default_ga_meta_db() -> Optional[Path]:
     """
-    Get ga_meta.sqlite path from GA_META_DB environment variable.
+    Get GA persona database path from GA_PERSONA_DB environment variable.
     
     Returns None if not set (service is optional).
     """
-    env_value = os.environ.get("GA_META_DB")
+    env_value = os.environ.get("GA_PERSONA_DB")
     if env_value:
         return Path(env_value)
     return None
@@ -102,7 +102,7 @@ def get_ga_meta_db_path() -> Optional[str]:
     """
     Get path to GA meta database as a string.
     
-    Returns None if GA_META_DB environment variable is not set (service is optional).
+    Returns None if GA_PERSONA_DB environment variable is not set (service is optional).
     
     Returns:
         Path to the database as a string, or None if not configured

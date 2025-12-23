@@ -1,5 +1,5 @@
 """
-Storage operations for ga_meta.sqlite with transaction support.
+Storage operations for GA persona database with transaction support.
 
 Provides all CRUD operations for the GA friendliness database.
 """
@@ -58,7 +58,7 @@ def parse_timestamp(timestamp_str: str) -> datetime:
 
 class GAMetaStorage(StorageInterface):
     """
-    Handles all database operations for ga_meta.sqlite.
+    Handles all database operations for GA persona database.
     
     Supports:
         - Transaction management (context manager)
