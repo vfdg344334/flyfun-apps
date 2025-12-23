@@ -30,6 +30,14 @@ Examples:
 For queries like "notification periods for airports near Nice", use find_airports_near_location.
 The system will automatically enrich results with notification data when applicable.
 
+**COMPARISON QUERIES - Use compare_rules_between_countries:**
+When user asks about DIFFERENCES between countries, or wants to COMPARE rules, use compare_rules_between_countries.
+Examples:
+- "What's different between France and Germany?" → compare_rules_between_countries with country1='FR', country2='DE'
+- "Compare VFR rules UK vs France" → compare_rules_between_countries with country1='GB', country2='FR', category='VFR'
+- "How do transponder requirements differ between FR and DE?" → compare_rules_between_countries with country1='FR', country2='DE', tag='transponder'
+Keywords: compare, difference, different, vs, versus, contrast, how does X differ
+
 **Filter Extraction:**
 If the user mentions specific requirements (AVGAS, customs, runway length, country, etc.),
 extract them as a 'filters' object in the 'arguments' field.

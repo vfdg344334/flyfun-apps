@@ -10,6 +10,18 @@
   {
     "question": "route from LFPG to LEMD with AVGAS",
     "answer": "{\"selected_tool\": \"find_airports_near_route\", \"arguments\": {\"from_location\": \"LFPG\", \"to_location\": \"LEMD\", \"filters\": {\"has_avgas\": true}}, \"answer_style\": \"narrative_markdown\"}"
+  },
+  {
+    "question": "What's the difference between France and Germany for flight plans?",
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tag\": \"flight_plan\"}, \"answer_style\": \"narrative_markdown\"}"
+  },
+  {
+    "question": "Compare VFR rules between UK and France",
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"GB\", \"country2\": \"FR\", \"category\": \"VFR\"}, \"answer_style\": \"narrative_markdown\"}"
+  },
+  {
+    "question": "How do transponder requirements differ between France and Germany?",
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tag\": \"transponder\"}, \"answer_style\": \"narrative_markdown\"}"
   }
 ]
 

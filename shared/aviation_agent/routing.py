@@ -143,12 +143,21 @@ DATABASE_KEYWORDS = [
     "route", "distance", "navigation", "map",
     # Notification queries for specific airports go to DATABASE
     "notification", "notify", "notice", "h24", "<24h", "less than 24",
+    # Comparison queries use compare_rules_between_countries tool
+    "compare", "comparison", "difference", "differences", "different",
+    "vs", "versus", "contrast",
 ]
 
 # Keywords that indicate notification queries - when combined with ICAO codes, route to DATABASE
 NOTIFICATION_KEYWORDS = [
     "notification", "notify", "customs", "notice", "when should i",
     "how much notice", "how early", "prior notice", "h24", "24h",
+]
+
+# Keywords that indicate comparison queries - always route to DATABASE for compare_rules_between_countries
+COMPARISON_KEYWORDS = [
+    "compare", "comparison", "difference", "differences", "different",
+    "differ", "vs", "versus", "contrast",
 ]
 
 
@@ -359,11 +368,24 @@ class QueryRouter:
         # Extract countries first
         countries = self.country_extractor.extract(query, conversation)
         
-        # PRIORITY: Check for ICAO code + notification keywords → DATABASE
+        # PRIORITY 1: Check for comparison keywords + multiple countries → DATABASE
+        # Comparison queries should use compare_rules_between_countries tool
+        comparison_score = self._keyword_score(query, COMPARISON_KEYWORDS)
+
+        if comparison_score >= 1 and len(countries) >= 2:
+            logger.info(f"Comparison query detected ({comparison_score} keywords, {len(countries)} countries) → forcing DATABASE path")
+            return RouterDecision(
+                path="database",
+                countries=countries,
+                confidence=0.95,
+                reasoning=f"Comparison keywords detected ({comparison_score}) with countries {countries} → use compare_rules_between_countries tool"
+            )
+
+        # PRIORITY 2: Check for ICAO code + notification keywords → DATABASE
         # This overrides all other routing for specific airport notification queries
         has_icao = bool(re.search(r'\b[A-Z]{4}\b', query))
         notification_score = self._keyword_score(query, NOTIFICATION_KEYWORDS)
-        
+
         if has_icao and notification_score >= 1:
             logger.info(f"ICAO + notification detected → forcing DATABASE path")
             return RouterDecision(
@@ -372,7 +394,7 @@ class QueryRouter:
                 confidence=0.95,
                 reasoning=f"ICAO code with notification keywords ({notification_score}) → use notification tool"
             )
-        
+
         # Fast keyword pre-filter
         rules_score = self._keyword_score(query, RULES_KEYWORDS)
         db_score = self._keyword_score(query, DATABASE_KEYWORDS)
