@@ -300,19 +300,19 @@ class TestAnswerComparer:
         assert result.question_id == "test-q1"
         assert len(result.outliers) > 0
 
-    def test_compare_countries_with_tag(self, mock_chromadb_client, rules_manager):
-        """Should filter by tag when comparing countries."""
+    def test_compare_countries_with_tags(self, mock_chromadb_client, rules_manager):
+        """Should filter by tags when comparing countries."""
         comparer = AnswerComparer(mock_chromadb_client, rules_manager)
 
         result = comparer.compare_countries(
             countries=["FR", "GB"],
-            tag="vfr",
+            tags=["vfr"],
             max_questions=10,
             min_difference=0.0,
         )
 
         assert isinstance(result, ComparisonResult)
-        assert result.tag == "vfr"
+        assert result.tags == ["vfr"]
         assert result.countries == ["FR", "GB"]
 
 
@@ -377,7 +377,7 @@ class TestRulesComparisonService:
         # Mock compare_countries
         comparer.compare_countries.return_value = ComparisonResult(
             countries=["FR", "DE"],
-            tag="vfr",
+            tags=["vfr"],
             category=None,
             differences=[
                 AnswerDifference(
@@ -420,7 +420,7 @@ class TestRulesComparisonService:
 
         result = service.compare_countries(
             countries=["FR", "DE"],
-            tag="vfr",
+            tags=["vfr"],
             synthesize=True,
         )
 
@@ -428,7 +428,7 @@ class TestRulesComparisonService:
         assert isinstance(result.synthesis, str)
         assert len(result.synthesis) > 0
         assert result.countries == ["FR", "DE"]
-        assert result.tag == "vfr"
+        assert result.tags == ["vfr"]
 
     def test_compare_countries_without_synthesis(self, mock_answer_comparer):
         """Should skip synthesis when not requested."""

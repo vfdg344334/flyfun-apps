@@ -14,6 +14,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def normalize_tag(tag: str) -> str:
+    """Normalize tag names: lowercase and replace spaces with underscores."""
+    return tag.lower().strip().replace(" ", "_")
+
+
 class RulesManager:
     """Manages aviation rules data for multiple countries."""
 
@@ -100,7 +105,11 @@ class RulesManager:
             question_raw = question.get('question_raw', "")
             question_prefix = question.get('question_prefix', "")
             category = question.get('category') or "General"
-            tags = question.get('tags') or []
+            # Normalize tags: lowercase and replace spaces with underscores
+            # IMPORTANT: If you add new tags to the rules data, also update the tag list in:
+            #   configs/aviation_agent/prompts/planner_v1.md
+            raw_tags = question.get('tags') or []
+            tags = [normalize_tag(t) for t in raw_tags]
             answers_by_country = question.get('answers_by_country') or {}
 
             question_info = {
@@ -492,7 +501,7 @@ class RulesManager:
         Get question IDs that have a specific tag.
 
         Args:
-            tag: Tag name to filter by
+            tag: Tag name to filter by (will be normalized)
 
         Returns:
             List of question IDs
@@ -501,8 +510,31 @@ class RulesManager:
             self.load_rules()
         if not self.loaded:
             return []
-        question_ids = self.rules_index.get('tags', {}).get(tag, set())
+        # Normalize input tag to match indexed tags
+        normalized_tag = normalize_tag(tag)
+        question_ids = self.rules_index.get('tags', {}).get(normalized_tag, set())
         return sorted(question_ids)
+
+    def get_questions_by_tags(self, tags: List[str]) -> List[str]:
+        """
+        Get question IDs that have any of the specified tags (union).
+
+        Args:
+            tags: List of tag names to filter by (each will be normalized)
+
+        Returns:
+            List of question IDs matching any of the tags
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+
+        question_id_set: Set[str] = set()
+        for tag in tags:
+            normalized_tag = normalize_tag(tag)
+            question_id_set.update(self.rules_index.get('tags', {}).get(normalized_tag, set()))
+        return sorted(question_id_set)
 
     def get_questions_by_category(self, category: str) -> List[str]:
         """

@@ -1,0 +1,42 @@
+[
+  {
+    "countries": ["FR", "DE"],
+    "tags": ["flight_plan"],
+    "description": "Compare flight plan rules between France and Germany"
+  },
+  {
+    "countries": ["GB", "FR"],
+    "tags": ["transponder"],
+    "description": "Compare transponder requirements between UK and France"
+  },
+  {
+    "countries": ["DE", "FR"],
+    "tags": ["airspace"],
+    "description": "Compare airspace rules between Germany and France"
+  },
+  {
+    "countries": ["GB", "DE"],
+    "tags": ["permission"],
+    "description": "Compare permission requirements between UK and Germany"
+  },
+  {
+    "countries": ["FR", "DE", "GB"],
+    "tags": ["procedure"],
+    "description": "Compare procedures across France, Germany, and UK"
+  },
+  {
+    "countries": ["FR", "DE"],
+    "tags": ["flight_plan", "transponder"],
+    "description": "Compare flight plan AND transponder rules between France and Germany (multiple tags)"
+  },
+  {
+    "countries": ["FR", "DE"],
+    "category": "VFR",
+    "description": "Compare all VFR rules between France and Germany (category filter)"
+  },
+  {
+    "countries": ["GB", "FR"],
+    "category": "IFR",
+    "description": "Compare all IFR rules between UK and France (category filter)"
+  }
+]

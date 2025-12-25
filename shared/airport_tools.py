@@ -976,13 +976,13 @@ def compare_rules_between_countries(
     country1: str,
     country2: str,
     category: Optional[str] = None,
-    tag: Optional[str] = None,
+    tags: Optional[List[str]] = None,
     use_embeddings: bool = True,
 ) -> Dict[str, Any]:
     """
     Compare aviation rules and regulations between two countries (iso-2 code eg FR,GB)
     and highlight differences in answers. Can be filtered by category like IFR/VFR,
-    airspace, etc. or by tag like flight_plan, customs, etc.
+    airspace, etc. or by tags like flight_plan, transponder, etc.
 
     This tool returns DATA only - synthesis is done by the formatter node.
     Returns a _tool_type="comparison" marker for formatter routing.
@@ -996,7 +996,7 @@ def compare_rules_between_countries(
             result = ctx.comparison_service.compare_countries(
                 countries=countries,
                 category=category,
-                tag=tag,
+                tags=tags,
                 synthesize=False,  # Never synthesize in tool - formatter does this
             )
 
@@ -1018,7 +1018,7 @@ def compare_rules_between_countries(
                 "found": True,
                 "countries": countries,
                 "category": category,
-                "tag": tag,
+                "tags": tags,
                 "total_questions": result.total_questions,
                 "questions_analyzed": result.questions_analyzed,
                 "filtered_by_embedding": result.filtered_by_embedding,
@@ -1073,14 +1073,14 @@ def _compare_rules_between_countries_tool(
     country1: str,
     country2: str,
     category: Optional[str] = None,
-    tag: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Wrapper that adds a human readable summary field expected by UI clients.
     Used as the actual handler in the tool registry.
     """
     result = compare_rules_between_countries(
-        ctx, country1, country2, category=category, tag=tag
+        ctx, country1, country2, category=category, tags=tags
     )
     if result.get("formatted_summary") and "pretty" not in result:
         result["pretty"] = result["formatted_summary"]
@@ -1345,9 +1345,10 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "string",
                             "description": "Optional category filter (e.g., VFR, IFR, Customs).",
                         },
-                        "tag": {
-                            "type": "string",
-                            "description": "Optional tag filter (e.g., flight_plan, airspace, transponder).",
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of tags to filter (e.g., ['flight_plan', 'transponder']).",
                         },
                     },
                     "required": ["country1", "country2"],

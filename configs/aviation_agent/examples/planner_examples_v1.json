@@ -13,7 +13,7 @@
   },
   {
     "question": "What's the difference between France and Germany for flight plans?",
-    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tag\": \"flight_plan\"}, \"answer_style\": \"narrative_markdown\"}"
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tags\": [\"flight_plan\"]}, \"answer_style\": \"narrative_markdown\"}"
   },
   {
     "question": "Compare VFR rules between UK and France",
@@ -21,7 +21,11 @@
   },
   {
     "question": "How do transponder requirements differ between France and Germany?",
-    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tag\": \"transponder\"}, \"answer_style\": \"narrative_markdown\"}"
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"FR\", \"country2\": \"DE\", \"tags\": [\"transponder\"]}, \"answer_style\": \"narrative_markdown\"}"
+  },
+  {
+    "question": "Compare flight plan and transponder rules between UK and Germany",
+    "answer": "{\"selected_tool\": \"compare_rules_between_countries\", \"arguments\": {\"country1\": \"GB\", \"country2\": \"DE\", \"tags\": [\"flight_plan\", \"transponder\"]}, \"answer_style\": \"narrative_markdown\"}"
   }
 ]
 

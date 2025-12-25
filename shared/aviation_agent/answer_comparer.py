@@ -60,7 +60,7 @@ class ComparisonResult:
     """Result of a cross-country comparison."""
 
     countries: List[str]
-    tag: Optional[str]
+    tags: Optional[List[str]]
     category: Optional[str]
     differences: List[AnswerDifference]
     total_questions: int
@@ -459,20 +459,20 @@ class AnswerComparer:
     def compare_countries(
         self,
         countries: List[str],
-        tag: Optional[str] = None,
+        tags: Optional[List[str]] = None,
         category: Optional[str] = None,
         max_questions: int = 15,
         min_difference: float = 0.1,
         send_all_threshold: int = 10,
     ) -> ComparisonResult:
         """
-        Compare rules between countries, optionally filtered by tag or category.
+        Compare rules between countries, optionally filtered by tags or category.
 
         This is the main entry point for cross-country comparison.
 
         Args:
             countries: List of country codes to compare
-            tag: Optional tag to filter questions
+            tags: Optional list of tags to filter questions (union of all tag matches)
             category: Optional category to filter questions
             max_questions: Maximum questions to include
             min_difference: Minimum semantic difference threshold
@@ -485,7 +485,7 @@ class AnswerComparer:
             logger.error("RulesManager required for compare_countries")
             return ComparisonResult(
                 countries=countries,
-                tag=tag,
+                tags=tags,
                 category=category,
                 differences=[],
                 total_questions=0,
@@ -497,8 +497,8 @@ class AnswerComparer:
             self.rules_manager.load_rules()
 
         # Get question IDs based on filters
-        if tag:
-            question_ids = self.rules_manager.get_questions_by_tag(tag)
+        if tags:
+            question_ids = self.rules_manager.get_questions_by_tags(tags)
         elif category:
             question_ids = self.rules_manager.get_questions_by_category(category)
         else:
@@ -526,7 +526,7 @@ class AnswerComparer:
 
         return ComparisonResult(
             countries=countries,
-            tag=tag,
+            tags=tags,
             category=category,
             differences=differences,
             total_questions=total_questions,
