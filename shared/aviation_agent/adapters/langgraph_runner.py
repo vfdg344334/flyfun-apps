@@ -83,8 +83,6 @@ def build_agent(
     settings: Optional[AviationAgentSettings] = None,
     planner_llm: Optional[Runnable] = None,
     formatter_llm: Optional[Runnable] = None,
-    router_llm: Optional[Runnable] = None,
-    rules_llm: Optional[Runnable] = None,
 ):
     """
     Build the aviation agent graph.
@@ -93,10 +91,8 @@ def build_agent(
         settings: AviationAgentSettings instance (uses default if None)
         planner_llm: LLM for planning (testing only - uses behavior_config in production)
         formatter_llm: LLM for formatting (testing only - uses behavior_config in production)
-        router_llm: LLM for routing (testing only - uses behavior_config in production)
-        rules_llm: LLM for rules synthesis (testing only - uses behavior_config in production)
 
-    Feature flags like routing and next_query_prediction are controlled via
+    Feature flags like next_query_prediction are controlled via
     behavior_config JSON files, not function parameters.
     """
     settings = settings or get_settings()
@@ -129,36 +125,6 @@ def build_agent(
         request_timeout=behavior_config.llms.formatter.request_timeout,
     )
 
-    # Router LLM (optional - only needed if routing is enabled)
-    router_model = behavior_config.llms.router.model if behavior_config.llms.router else None
-    if router_llm is None and router_model:
-        router_llm = _resolve_llm(
-            None,
-            router_model,
-            role="router",
-            config_name=settings.agent_config_name,
-            temperature=behavior_config.llms.router.temperature,
-            streaming=behavior_config.llms.router.streaming,
-            max_retries=behavior_config.llms.router.max_retries,
-            request_timeout=behavior_config.llms.router.request_timeout,
-        )
-
-    # Rules LLM (defaults to formatter LLM if not specified)
-    if rules_llm is None:
-        if behavior_config.llms.rules and behavior_config.llms.rules.model:
-            rules_llm = _resolve_llm(
-                None,
-                behavior_config.llms.rules.model,
-                role="rules",
-                config_name=settings.agent_config_name,
-                temperature=behavior_config.llms.rules.temperature,
-                streaming=behavior_config.llms.rules.streaming,
-                max_retries=behavior_config.llms.rules.max_retries,
-                request_timeout=behavior_config.llms.rules.request_timeout,
-            )
-        else:
-            rules_llm = formatter_llm  # Default to formatter LLM for rules
-
     tool_context = settings.build_tool_context()
     tool_client = AviationToolClient(tool_context)
     tool_runner = ToolRunner(tool_client)
@@ -179,8 +145,6 @@ def build_agent(
         planner,
         tool_runner,
         formatter_llm,
-        router_llm=router_llm,
-        rules_llm=rules_llm,
         behavior_config=behavior_config,
         checkpointer=checkpointer,
     )
