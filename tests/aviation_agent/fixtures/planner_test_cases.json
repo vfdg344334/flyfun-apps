@@ -48,12 +48,15 @@
   },
   {
     "question": "Search for airports in Germany",
-    "expected_tool": ["search_airports", "find_airports_near_location"],
-    "expected_arguments": [
-      {"query": "Germany"},
-      {"location_query": "Germany"}
-    ],
-    "description": "Country-based airport search - either search or location tool is valid"
+    "expected_tool": "search_airports",
+    "expected_arguments": {"query": "Germany"},
+    "description": "Country-based airport search - use search_airports (NOT find_airports_near_location)"
+  },
+  {
+    "question": "Show me airports in France",
+    "expected_tool": "search_airports",
+    "expected_arguments": {"query": "France"},
+    "description": "Country query should use search_airports"
   },
 
   {
