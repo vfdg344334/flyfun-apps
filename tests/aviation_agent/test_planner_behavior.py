@@ -116,9 +116,18 @@ def test_planner_selects_correct_tool(
     This is a behavioral/integration test that requires a live LLM.
     """
     question = test_case["question"]
-    expected_tool = test_case["expected_tool"]
-    expected_args = test_case.get("expected_arguments", {})
+    expected_tool_raw = test_case["expected_tool"]
+    expected_args_raw = test_case.get("expected_arguments", {})
     description = test_case.get("description", "")
+
+    # Normalize to lists for multiple valid choices
+    # expected_tool can be string or array, expected_arguments must match
+    if isinstance(expected_tool_raw, list):
+        expected_tools = expected_tool_raw
+        expected_args_list = expected_args_raw  # Should be array of same size
+    else:
+        expected_tools = [expected_tool_raw]
+        expected_args_list = [expected_args_raw]
 
     # Build planner with live LLM
     planner = build_planner_runnable(
@@ -130,12 +139,19 @@ def test_planner_selects_correct_tool(
     messages = [HumanMessage(content=question)]
     plan = planner.invoke({"messages": messages})
 
-    # Determine if tool and args match
-    tool_match = plan.selected_tool == expected_tool
-
-    # Check args match
-    args_match = True
+    # Determine if tool matches any valid option
     plan_args = plan.arguments or {}
+    tool_match = False
+    matched_index = -1
+    for i, valid_tool in enumerate(expected_tools):
+        if plan.selected_tool == valid_tool:
+            tool_match = True
+            matched_index = i
+            break
+
+    # Check args match for the matched tool (or first if no match)
+    expected_args = expected_args_list[matched_index] if matched_index >= 0 else expected_args_list[0]
+    args_match = True
     for key, expected_value in expected_args.items():
         if key not in plan_args:
             args_match = False
@@ -154,7 +170,7 @@ def test_planner_selects_correct_tool(
         "question": question,
         "description": description,
         "status": "PASS" if (tool_match and args_match) else "FAIL",
-        "expected_tool": expected_tool,
+        "expected_tool": json.dumps(expected_tools),
         "actual_tool": plan.selected_tool,
         "tool_match": "YES" if tool_match else "NO",
         "expected_args": json.dumps(expected_args),
@@ -165,15 +181,15 @@ def test_planner_selects_correct_tool(
     # Print actual results for visibility
     print(f"\n{'='*60}")
     print(f"Question: {question}")
-    print(f"Expected Tool: {expected_tool}")
-    print(f"Actual Tool:   {plan.selected_tool}")
+    print(f"Expected Tool(s): {expected_tools}")
+    print(f"Actual Tool:      {plan.selected_tool}")
     print(f"Expected Args: {json.dumps(expected_args, indent=2)}")
     print(f"Actual Args:   {json.dumps(plan.arguments, indent=2)}")
     print(f"{'='*60}")
 
     # Assertions
-    assert plan.selected_tool == expected_tool, (
-        f"Expected tool '{expected_tool}' but got '{plan.selected_tool}'. "
+    assert plan.selected_tool in expected_tools, (
+        f"Expected one of {expected_tools} but got '{plan.selected_tool}'. "
         f"Description: {description}"
     )
 
@@ -216,6 +232,14 @@ def test_planner_selects_correct_tool(
                         f"Expected '{key}' = '{expected_value}' (case-insensitive), "
                         f"got '{plan_value}'"
                     )
+            elif key == "tags" and isinstance(expected_value, list) and isinstance(plan_value, list):
+                # For tags, check that all expected tags are present (superset OK)
+                # This allows planner to add extra relevant tags
+                expected_set = set(expected_value)
+                actual_set = set(plan_value)
+                assert expected_set.issubset(actual_set), (
+                    f"Expected tags {expected_value} to be subset of actual tags {plan_value}"
+                )
             else:
                 assert plan_value == expected_value, (
                     f"Expected '{key}' = {expected_value}, got {plan_value}"

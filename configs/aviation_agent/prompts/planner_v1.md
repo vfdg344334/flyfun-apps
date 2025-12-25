@@ -10,8 +10,12 @@ country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fe
 
 **Tag Extraction (for compare_rules_between_countries):**
 When comparing rules between countries, extract 'tags' array to focus on specific topics.
-Available tags: airspace, flight_plan, transponder, permission, procedure, clearance,
-air_traffic_service, airfield, international, uncontrolled, join, penetration, semicircle.
-Example: "Compare flight plans and transponder rules" → tags: ["flight_plan", "transponder"]
+ONLY use tags from this list (do not invent new tags):
+airspace, flight_plan, transponder, permission, procedure, clearance, air_traffic_service, airfield, international, uncontrolled, join, penetration, semicircle.
+Examples:
+- "Compare flight plans and transponder rules" → tags: ["flight_plan", "transponder"]
+- "IFR/VFR transition differences" → tags: ["procedure", "airspace"]
+- "Visual circuit joining" → tags: ["procedure", "join"]
+- "PPR, slots, military airfields" → tags: ["airfield", "permission"]
 
 Pick the tool that can produce the most authoritative answer for the pilot.
