@@ -7,36 +7,18 @@ This module provides the core tool functions used by both the MCP server and
 the internal aviation chatbot agent. Tools are organized into two main categories:
 
 AIRPORT TOOLS (Section 5):
-    Search & Discovery:
     - search_airports: Search by ICAO, name, city, or country
     - find_airports_near_location: Find airports near a geographic point
     - find_airports_near_route: Find airports along a flight route
     - get_airport_details: Get comprehensive airport information
-
-    Border & Statistics (internal use):
-    - get_border_crossing_airports: List customs/border entry points
-    - get_airport_statistics: Aggregate statistics by country
-
-    Notification Requirements:
     - get_notification_for_airport: Customs notification requirements
-    - find_airports_by_notification: Search by notification criteria
 
 RULES TOOLS (Section 6):
-    Country Rules:
     - list_rules_for_country: List all rules for a country
-    - list_rule_countries: List available countries in rules database
-
-    Comparison:
     - compare_rules_between_countries: Compare rules between two countries
-
-    Metadata:
-    - get_answers_for_questions: Get answers for specific question IDs
-    - list_rule_categories_and_tags: List available categories and tags
 
 TOOL REGISTRY (Section 7):
     - get_shared_tool_specs(): Returns the tool manifest for registration
-    - Tools with expose_to_llm=True are available to the aviation agent
-    - Tools with expose_to_llm=False are internal or MCP-only
 
 Usage:
     from shared.airport_tools import get_shared_tool_specs
@@ -907,94 +889,6 @@ def get_airport_details(
     }
 
 
-# -----------------------------------------------------------------------------
-# Border & Statistics (Internal - expose_to_llm=False)
-# -----------------------------------------------------------------------------
-
-def get_border_crossing_airports(
-    ctx: ToolContext,
-    country: Optional[str] = None,
-    max_results: int = 10,
-    filters: Optional[Dict[str, Any]] = None,
-    include_large_airports: bool = False,
-    priority_strategy: str = "persona_optimized",
-    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
-) -> Dict[str, Any]:
-    """
-    List airports that are official border crossing points (with customs).
-
-    Optionally filter by country and apply additional filters.
-    Results are sorted by GA friendliness score.
-
-    **By default, large commercial airports are excluded** (not suitable for GA).
-
-    Note: This tool has expose_to_llm=False. Use search_airports with
-    point_of_entry filter instead for LLM queries.
-    """
-    # Get all border crossing airports (point_of_entry=True)
-    airports_list = [
-        a for a in ctx.model.airports
-        if getattr(a, 'point_of_entry', False)
-        and (not country or (a.iso_country or '').upper() == country.upper())
-    ]
-
-    # Filter and sort using common pipeline
-    persona_id = kwargs.pop("_persona_id", None)
-    result = _filter_and_sort_airports(
-        ctx=ctx,
-        airports=airports_list,
-        filters=filters,
-        include_large_airports=include_large_airports,
-        priority_strategy=priority_strategy,
-        max_results=100,  # Get more for grouping
-        persona_id=persona_id,
-    )
-
-    # Group by country for display
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    all_airports: List[Dict[str, Any]] = []
-    for a in result.airports:
-        data = _airport_summary(a)
-        country_code = data["country"] or "Unknown"
-        grouped.setdefault(country_code, []).append(data)
-        all_airports.append(data)
-
-    # Build pretty output
-    pretty_lines = [
-        f"**Border Crossing Airports{' in ' + country.upper() if country else ''}:**\n"
-    ]
-    for cc, arr in grouped.items():
-        pretty_lines.append(f"**{cc}:**")
-        for item in arr[:max_results]:  # Limit per country in pretty output
-            label = item["ident"] + " - " + (item["name"] or "")
-            city = item.get("municipality")
-            pretty_lines.append(f"- {label}" + (f" ({city})" if city else ""))
-        if len(arr) > max_results:
-            pretty_lines.append(f"  ... and {len(arr) - max_results} more")
-        pretty_lines.append("")
-
-    # Limit data sent to LLM
-    airports_for_llm = all_airports[:max_results]
-
-    # Generate filter profile for UI synchronization
-    filter_profile: Dict[str, Any] = {"point_of_entry": True}
-    if country:
-        filter_profile["country"] = country.upper()
-    if filters:
-        filter_profile.update(filters)
-
-    return {
-        "count": len(all_airports),
-        "airports": airports_for_llm,  # Limited for LLM
-        "pretty": "\n".join(pretty_lines),
-        "filter_profile": filter_profile,
-        "visualization": {
-            "type": "markers",
-            "data": all_airports,  # Show ALL border crossing airports on map
-            "markers": airports_for_llm,  # Highlight only airports mentioned by LLM
-            "style": "customs"
-        }
-    }
 
 # -----------------------------------------------------------------------------
 # Notification Requirements
@@ -1023,150 +917,6 @@ def get_notification_for_airport(
             "pretty": f"Notification service not available. Cannot look up {icao.upper()}."
         }
     return ctx.notification_service.get_notification_for_airport(icao, day_of_week)
-
-
-def find_airports_by_notification(
-    ctx: ToolContext,
-    max_hours_notice: Optional[int] = None,
-    notification_type: Optional[str] = None,
-    country: Optional[str] = None,
-    filters: Optional[Dict[str, Any]] = None,
-    include_large_airports: bool = False,
-    priority_strategy: str = "persona_optimized",
-    max_results: int = 20,
-    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
-) -> Dict[str, Any]:
-    """
-    Find airports filtered by notification requirements.
-
-    Use when user asks for airports with specific notice periods (e.g., '<24h notice')
-    or notification types (H24, on_request). Combines notification filtering with
-    standard airport filters and persona-based sorting.
-
-    Note: This tool has expose_to_llm=False. Use find_airports_near_location/route
-    with max_hours_notice filter instead for LLM queries.
-    """
-    if not ctx.notification_service:
-        return {
-            "found": False,
-            "error": "Notification service not available.",
-            "pretty": "Notification service not available."
-        }
-
-    # 1. Get ICAOs with notification data (optionally filtered by country)
-    notification_icaos = ctx.notification_service.find_icaos_with_notifications(country)
-    if not notification_icaos:
-        return {
-            "found": False,
-            "count": 0,
-            "airports": [],
-            "pretty": f"No airports with notification data found{' in ' + country.upper() if country else ''}."
-        }
-
-    # 2. Get NotificationInfo objects for all candidates
-    notification_infos = ctx.notification_service.get_notification_info_batch(notification_icaos)
-
-    # 3. Filter by notification criteria (max_hours_notice, notification_type, min_easiness_score)
-    min_easiness_score = filters.pop("min_easiness_score", None) if filters else None
-    matching_icaos = []
-    for icao, info in notification_infos.items():
-        if info.matches_criteria(
-            max_hours_notice=max_hours_notice,
-            notification_type=notification_type,
-            min_easiness_score=min_easiness_score,
-        ):
-            matching_icaos.append(icao)
-
-    if not matching_icaos:
-        return {
-            "found": False,
-            "count": 0,
-            "airports": [],
-            "pretty": "No airports found matching the notification criteria."
-        }
-
-    # 4. Load Airport objects from airport database
-    matching_set = set(icao.upper() for icao in matching_icaos)
-    airports_list = [a for a in ctx.model.airports if a.ident in matching_set]
-
-    # 5. Filter and sort using common pipeline (skip notification filter - already done above)
-    persona_id = kwargs.pop("_persona_id", None)
-    result = _filter_and_sort_airports(
-        ctx=ctx,
-        airports=airports_list,
-        filters=filters,
-        include_large_airports=include_large_airports,
-        priority_strategy=priority_strategy,
-        max_results=max_results * 2,  # Get extra for detailed info
-        persona_id=persona_id,
-        # max_hours_notice=None - already filtered above
-    )
-
-    if not result.airports:
-        return {
-            "found": False,
-            "count": 0,
-            "airports": [],
-            "pretty": "No airports found after applying filters."
-        }
-
-    # 6. Enrich results with notification info
-    airports_for_response: List[Dict[str, Any]] = []
-    for airport in result.airports[:max_results]:
-        data = _airport_summary(airport)
-        icao = data["ident"]
-        if icao in notification_infos:
-            info = notification_infos[icao]
-            data["notification"] = info.to_summary_dict()
-        airports_for_response.append(data)
-
-    # 8. Format pretty output
-    pretty_lines = ["**Airports by Notification Requirements**", ""]
-
-    filters_desc = []
-    if max_hours_notice:
-        filters_desc.append(f"≤{max_hours_notice}h notice")
-    if notification_type:
-        filters_desc.append(f"type={notification_type}")
-    if country:
-        filters_desc.append(f"country={country.upper()}")
-
-    if filters_desc:
-        pretty_lines.append(f"Filters: {', '.join(filters_desc)}")
-        pretty_lines.append("")
-
-    pretty_lines.append(f"Found **{len(airports_for_response)}** airports:")
-    pretty_lines.append("")
-
-    for apt in airports_for_response[:10]:
-        name = apt.get("name", "")
-        notif = apt.get("notification", {})
-        hours = notif.get("hours_notice")
-        ntype = notif.get("notification_type", "")
-
-        if notif.get("is_h24"):
-            notice_str = "No notice needed (H24)"
-        elif hours:
-            notice_str = f"{hours}h notice"
-        else:
-            notice_str = ntype or "Unknown"
-
-        pretty_lines.append(f"- **{apt['ident']}** ({name}): {notice_str}")
-
-    if len(airports_for_response) > 10:
-        pretty_lines.append(f"... and {len(airports_for_response) - 10} more")
-
-    return {
-        "found": True,
-        "count": len(airports_for_response),
-        "airports": airports_for_response,
-        "pretty": "\n".join(pretty_lines),
-        "visualization": {
-            "type": "markers",
-            "markers": airports_for_response,
-            "style": "customs"
-        }
-    }
 
 
 # =============================================================================
@@ -1215,13 +965,6 @@ def list_rules_for_country(
         "formatted_text": formatted_text,
         "categories": categories
     }
-
-
-def list_rule_countries(ctx: ToolContext) -> Dict[str, Any]:
-    """List available countries (ISO-2 codes) present in the aviation rules store."""
-    rules_manager = ctx.ensure_rules_manager()
-    countries = rules_manager.get_available_countries()
-    return {"count": len(countries), "items": countries}
 
 
 # -----------------------------------------------------------------------------
@@ -1344,63 +1087,6 @@ def _compare_rules_between_countries_tool(
     return result
 
 
-# -----------------------------------------------------------------------------
-# Metadata
-# -----------------------------------------------------------------------------
-
-def get_answers_for_questions(ctx: ToolContext, question_ids: List[str]) -> Dict[str, Any]:
-    """
-    Get rule answers for specific question IDs, including per-country responses,
-    categories, and tags.
-    """
-    rules_manager = ctx.ensure_rules_manager()
-    items: List[Dict[str, Any]] = []
-    for qid in question_ids or []:
-        question = rules_manager.question_map.get(qid)
-        if not question:
-            continue
-        items.append({
-            "question_id": qid,
-            "question_text": question.get("question_text"),
-            "category": question.get("category"),
-            "tags": question.get("tags") or [],
-            "answers_by_country": question.get("answers_by_country", {})
-        })
-
-    pretty_lines: List[str] = []
-    for item in items:
-        pretty_lines.append(f"**{item['question_text']}**")
-        answers = item.get("answers_by_country") or {}
-        for cc, ans in sorted(answers.items()):
-            pretty_lines.append(f"- {cc}: {ans.get('answer_html') or '(no answer)'}")
-        pretty_lines.append("")
-
-    return {
-        "count": len(items),
-        "items": items,
-        "pretty": "\n".join(pretty_lines)
-    }
-
-
-def list_rule_categories_and_tags(ctx: ToolContext) -> Dict[str, Any]:
-    """List available aviation rule categories and tags from the rules store."""
-    rules_manager = ctx.ensure_rules_manager()
-    categories = sorted(rules_manager.rules_index.get("categories", {}).keys())
-    tags = sorted(rules_manager.rules_index.get("tags", {}).keys())
-    by_category = rules_manager.rules_index.get("categories", {})
-    by_tag = rules_manager.rules_index.get("tags", {})
-
-
-    return {
-        "categories": categories,
-        "tags": tags,
-        "counts": {
-            "by_category": {c: len(by_category.get(c, [])) for c in categories},
-            "by_tag": {t: len(by_tag.get(t, [])) for t in tags},
-        },
-    }
-
-
 # =============================================================================
 # SECTION 7: TOOL REGISTRY
 # =============================================================================
@@ -1409,31 +1095,18 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
     """
     Create the ordered manifest of shared tools.
 
-    This registry defines all tools available to the aviation agent and MCP server.
-    Tools are organized by category:
+    All tools have expose_to_llm=True and are available to the aviation agent and MCP server.
 
-    AIRPORT SEARCH & DISCOVERY (expose_to_llm=True):
+    AIRPORT TOOLS:
     - search_airports
     - find_airports_near_location
     - find_airports_near_route
     - get_airport_details
-
-    AIRPORT INTERNAL (expose_to_llm=False):
-    - get_border_crossing_airports (use search_airports with point_of_entry filter)
-    - get_airport_statistics (rarely useful for pilots)
-    - find_airports_by_notification (use near_location/route with max_hours_notice)
-
-    NOTIFICATION (expose_to_llm=True):
     - get_notification_for_airport
 
-    RULES (expose_to_llm=True):
+    RULES TOOLS:
     - list_rules_for_country
     - compare_rules_between_countries
-
-    RULES INTERNAL (expose_to_llm=False):
-    - get_answers_for_questions
-    - list_rule_categories_and_tags
-    - list_rule_countries
     """
     return OrderedDict([
         # -----------------------------------------------------------------
@@ -1595,61 +1268,6 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
             },
         ),
         # -----------------------------------------------------------------
-        # AIRPORT INTERNAL (expose_to_llm=False)
-        # -----------------------------------------------------------------
-        (
-            "get_border_crossing_airports",
-            {
-                "name": "get_border_crossing_airports",
-                "handler": get_border_crossing_airports,
-                "description": _get_tool_description(get_border_crossing_airports, "get_border_crossing_airports"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "country": {
-                            "type": "string",
-                            "description": "Optional ISO-2 country code (e.g., FR, DE).",
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Maximum number of airports to return. Default is 10.",
-                            "default": 10,
-                        },
-                        "filters": {
-                            "type": "object",
-                            "description": "Additional filters (fuel, runway, etc.) to apply on top of border crossing requirement.",
-                        },
-                        "include_large_airports": {
-                            "type": "boolean",
-                            "description": "Include large commercial airports. Default is False - large airports are excluded as they are not suitable for GA.",
-                            "default": False,
-                        },
-                    },
-                },
-                # Not exposed to LLM - use search_airports with point_of_entry filter instead
-                "expose_to_llm": False,
-            },
-        ),
-        (
-            "get_airport_statistics",
-            {
-                "name": "get_airport_statistics",
-                "handler": get_airport_statistics,
-                "description": _get_tool_description(get_airport_statistics, "get_airport_statistics"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "country": {
-                            "type": "string",
-                            "description": "Optional ISO-2 country code to filter stats.",
-                        },
-                    },
-                },
-                # Not exposed to LLM - rarely useful for pilots
-                "expose_to_llm": False,
-            },
-        ),
-        # -----------------------------------------------------------------
         # NOTIFICATION
         # -----------------------------------------------------------------
         (
@@ -1673,47 +1291,6 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                     "required": ["icao"],
                 },
                 "expose_to_llm": True,
-            },
-        ),
-        (
-            "find_airports_by_notification",
-            {
-                "name": "find_airports_by_notification",
-                "handler": find_airports_by_notification,
-                "description": _get_tool_description(find_airports_by_notification, "find_airports_by_notification"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "max_hours_notice": {
-                            "type": "integer",
-                            "description": "Maximum hours notice required (e.g., 24 for less than 24h).",
-                        },
-                        "notification_type": {
-                            "type": "string",
-                            "description": "Type filter: 'h24', 'hours', 'on_request', 'business_day'.",
-                        },
-                        "country": {
-                            "type": "string",
-                            "description": "ISO-2 country code (e.g., FR, DE, GB).",
-                        },
-                        "filters": {
-                            "type": "object",
-                            "description": "Additional airport filters. Examples: {'has_avgas': True} for AVGAS fuel, {'has_hard_runway': True} for paved runways, {'min_easiness_score': 60} for easy notification requirements.",
-                        },
-                        "include_large_airports": {
-                            "type": "boolean",
-                            "description": "Include large commercial airports (e.g., Heathrow, CDG). Default is False - large airports are excluded as not suitable for GA.",
-                            "default": False,
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Maximum results to return.",
-                            "default": 20,
-                        },
-                    },
-                },
-                # Not exposed to LLM - use find_airports_near_location/route with max_hours_notice filter
-                "expose_to_llm": False,
             },
         ),
         # -----------------------------------------------------------------
@@ -1776,49 +1353,6 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                     "required": ["country1", "country2"],
                 },
                 "expose_to_llm": True,
-            },
-        ),
-        # -----------------------------------------------------------------
-        # RULES INTERNAL (expose_to_llm=False)
-        # -----------------------------------------------------------------
-        (
-            "get_answers_for_questions",
-            {
-                "name": "get_answers_for_questions",
-                "handler": get_answers_for_questions,
-                "description": _get_tool_description(get_answers_for_questions, "get_answers_for_questions"),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of predefined question IDs.",
-                        },
-                    },
-                    "required": ["question_ids"],
-                },
-                "expose_to_llm": False,
-            },
-        ),
-        (
-            "list_rule_categories_and_tags",
-            {
-                "name": "list_rule_categories_and_tags",
-                "handler": list_rule_categories_and_tags,
-                "description": _get_tool_description(list_rule_categories_and_tags, "list_rule_categories_and_tags"),
-                "parameters": {"type": "object", "properties": {}},
-                "expose_to_llm": False,
-            },
-        ),
-        (
-            "list_rule_countries",
-            {
-                "name": "list_rule_countries",
-                "handler": list_rule_countries,
-                "description": _get_tool_description(list_rule_countries, "list_rule_countries"),
-                "parameters": {"type": "object", "properties": {}},
-                "expose_to_llm": False,
             },
         ),
     ])

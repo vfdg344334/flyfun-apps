@@ -34,12 +34,9 @@ from shared.airport_tools import (
     find_airports_near_route as shared_find_airports_near_route,
     find_airports_near_location as shared_find_airports_near_location,
     get_airport_details as shared_get_airport_details,
+    get_notification_for_airport as shared_get_notification_for_airport,
     list_rules_for_country as shared_list_rules_for_country,
     compare_rules_between_countries as shared_compare_rules_between_countries,
-    get_answers_for_questions as shared_get_answers_for_questions,
-    list_rule_categories_and_tags as shared_list_rule_categories_and_tags,
-    list_rule_countries as shared_list_rule_countries,
-    get_notification_for_airport as shared_get_notification_for_airport,
 )
 from shared.tool_context import ToolContext
 
@@ -170,6 +167,37 @@ def get_airport_details(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
     return shared_get_airport_details(context, icao_code)
 
 
+@mcp.tool(name="find_airports_near_location", description=_desc(shared_find_airports_near_location))
+def find_airports_near_location(
+    location_query: str,
+    max_distance_nm: float = 50.0,
+    max_results: int = 10,
+    filters: Optional[Dict[str, Any]] = None,
+    priority_strategy: str = "cost_optimized",
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    context = _require_tool_context()
+    result = shared_find_airports_near_location(
+        context,
+        location_query,
+        max_distance_nm=max_distance_nm,
+        max_results=max_results,
+        filters=filters,
+        priority_strategy=priority_strategy,
+    )
+    return result
+
+
+@mcp.tool(name="get_notification_for_airport", description=_desc(shared_get_notification_for_airport))
+def get_notification_for_airport(
+    icao: str,
+    day_of_week: Optional[str] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    context = _require_tool_context()
+    return shared_get_notification_for_airport(context, icao, day_of_week)
+
+
 @mcp.tool(name="list_rules_for_country", description=_desc(shared_list_rules_for_country))
 def list_rules_for_country(country: str,
                            category: Optional[str] = None,
@@ -213,24 +241,6 @@ def compare_rules_between_countries(country_a: str,
         "total_differences": result.get("total_differences"),
         "pretty": result.get("formatted_summary"),
     }
-
-
-@mcp.tool(name="get_answers_for_questions", description=_desc(shared_get_answers_for_questions))
-def get_answers_for_questions(question_ids: List[str], ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_answers_for_questions(context, question_ids)
-
-
-@mcp.tool(name="list_rule_categories_and_tags", description=_desc(shared_list_rule_categories_and_tags))
-def list_rule_categories_and_tags(ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_list_rule_categories_and_tags(context)
-
-
-@mcp.tool(name="list_rule_countries", description=_desc(shared_list_rule_countries))
-def list_rule_countries(ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_list_rule_countries(context)
 
 
 if __name__ == "__main__":

@@ -206,8 +206,6 @@ class NextQueryPredictor:
             suggestions.extend(self._fuel_suggestions(context))
         elif context.tool_used in ["list_rules_for_country", "compare_rules_between_countries"]:
             suggestions.extend(self._rules_tool_suggestions(context))
-        elif context.tool_used == "get_border_crossing_airports":
-            suggestions.extend(self._border_crossing_suggestions(context))
 
         # Rank and return top suggestions
         ranked = self._rank_suggestions(suggestions)
@@ -480,7 +478,7 @@ class NextQueryPredictor:
             country = context.countries_mentioned[0]
             suggestions.append(SuggestedQuery(
                 query_text=f"Which airports have customs in {country}?",
-                tool_name="get_border_crossing_airports",
+                tool_name="search_airports",
                 category="route",
                 priority=5
             ))
@@ -502,30 +500,6 @@ class NextQueryPredictor:
                 category="rules",
                 priority=3
             ))
-
-        return suggestions
-
-    def _border_crossing_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
-        """Suggestions after viewing border crossing airports."""
-        suggestions = []
-
-        # Suggest customs rules
-        if context.countries_mentioned:
-            country = context.countries_mentioned[0]
-            suggestions.append(SuggestedQuery(
-                query_text=f"What are the customs procedures for {country}?",
-                tool_name="list_rules_for_country",
-                category="rules",
-                priority=5
-            ))
-
-        # Suggest general rules
-        suggestions.append(SuggestedQuery(
-            query_text="What documents do I need for international flights?",
-            tool_name="list_rules_for_country",
-            category="rules",
-            priority=4
-        ))
 
         return suggestions
 

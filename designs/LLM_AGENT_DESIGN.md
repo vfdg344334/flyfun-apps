@@ -616,17 +616,6 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 | `list_rules_for_country` | `country_code` | `category`, `tags` | `rules` | `rules`, `formatted_text`, `categories` |
 | `compare_rules_between_countries` | `country1`, `country2` | `category`, `tag` | `rules` | `differences`, `rules_context`, `_tool_type`, `total_differences`, `filtered_by_embedding` |
 
-**Internal Tools (not exposed to LLM):**
-
-| Tool | Purpose |
-| --- | --- |
-| `get_border_crossing_airports` | List customs airports (use `search_airports` with `point_of_entry` filter instead) |
-| `get_airport_statistics` | Aggregate counts (rarely useful for pilots) |
-| `find_airports_by_notification` | Filter by notification (use `find_airports_near_*` with `max_hours_notice` instead) |
-| `get_answers_for_questions` | Fetch answers by question ID (internal) |
-| `list_rule_categories_and_tags` | List available categories/tags (internal) |
-| `list_rule_countries` | List countries with rules (internal) |
-
 ### Documentation Workflow
 
 1. **Tool manifest** - Tools are defined in `shared/airport_tools.py` as the single source of truth.

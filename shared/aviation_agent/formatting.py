@@ -134,8 +134,6 @@ def build_ui_payload(
 
     elif plan.selected_tool in {
         "get_airport_details",
-        "get_border_crossing_airports",
-        "get_airport_statistics",
         "get_airport_pricing",
         "get_pilot_reviews",
         "get_fuel_prices",
@@ -150,9 +148,6 @@ def build_ui_payload(
     elif plan.selected_tool in {
         "list_rules_for_country",
         "compare_rules_between_countries",
-        "get_answers_for_questions",
-        "list_rule_categories_and_tags",
-        "list_rule_countries",
     }:
         base_payload["region"] = plan.arguments.get("region") or plan.arguments.get("country_code")
         base_payload["topic"] = plan.arguments.get("topic") or plan.arguments.get("category")
@@ -182,22 +177,16 @@ def _determine_kind(tool_name: str) -> str | None:
     
     if tool_name in {
         "get_airport_details",
-        "get_border_crossing_airports",
-        "get_airport_statistics",
         "get_airport_pricing",
         "get_pilot_reviews",
         "get_fuel_prices",
         "get_notification_for_airport",
-        "find_airports_by_notification",
     }:
         return "airport"
     
     if tool_name in {
         "list_rules_for_country",
         "compare_rules_between_countries",
-        "get_answers_for_questions",
-        "list_rule_categories_and_tags",
-        "list_rule_countries",
     }:
         return "rules"
     

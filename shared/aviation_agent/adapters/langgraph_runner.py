@@ -161,7 +161,9 @@ def build_agent(
 
     tool_client = AviationToolClient(settings.build_tool_context())
     tool_runner = ToolRunner(tool_client)
-    planner = build_planner_runnable(planner_llm, tuple(tool_client.tools.values()))
+    # Only expose LLM-visible tools to planner (filter out internal/MCP-only tools)
+    llm_tools = tuple(t for t in tool_client.tools.values() if t.expose_to_llm)
+    planner = build_planner_runnable(planner_llm, llm_tools)
 
     # Create checkpointer for conversation memory (from settings, not behavior config)
     checkpointer = get_checkpointer(settings)

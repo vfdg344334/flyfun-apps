@@ -31,14 +31,6 @@
     "description": "Direct airport details query"
   },
   {
-    "question": "Show me customs airports in France",
-    "expected_tool": "get_border_crossing_airports",
-    "expected_arguments": {
-      "country": "FR"
-    },
-    "description": "Border crossing query by country"
-  },
-  {
     "question": "What are the aviation rules for France?",
     "expected_tool": "list_rules_for_country",
     "expected_arguments": {

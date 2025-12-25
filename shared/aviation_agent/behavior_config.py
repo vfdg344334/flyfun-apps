@@ -124,15 +124,12 @@ class ToolsConfig(BaseModel):
     find_airports_near_location: Optional[str] = None
     find_airports_near_route: Optional[str] = None
     get_airport_details: Optional[str] = None
-    get_border_crossing_airports: Optional[str] = None
-    get_airport_statistics: Optional[str] = None
     get_airport_pricing: Optional[str] = None
     get_pilot_reviews: Optional[str] = None
     get_fuel_prices: Optional[str] = None
     list_rules_for_country: Optional[str] = None
     compare_rules_between_countries: Optional[str] = None
     get_notification_for_airport: Optional[str] = None
-    find_airports_by_notification: Optional[str] = None
 
 
 class AgentBehaviorConfig(BaseModel):

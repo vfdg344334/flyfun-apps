@@ -96,7 +96,8 @@ New test cases appended to `tests/aviation_agent/fixtures/planner_test_cases.jso
    - Near location (near X, around X) → `find_airports_near_location`
    - Airport details (details for ICAO) → `get_airport_details`
    - Country search (airports in X) → `search_airports`
-   - Customs by country → `get_border_crossing_airports`
+   - Customs airports → `search_airports` with `filters: {point_of_entry: true}`
+   - Notification requirements → `get_notification_for_airport`
    - Rules questions → `list_rules_for_country` or `compare_rules_between_countries`
 
 2. **Argument Extraction Patterns:**

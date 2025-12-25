@@ -490,8 +490,9 @@ class TestNextQueryPredictor:
 
         suggestions = predictor.predict_next_queries(context, max_suggestions=10)
 
-        border_suggestions = [s for s in suggestions if s.tool_name == "get_border_crossing_airports"]
-        assert len(border_suggestions) > 0
+        # Should suggest searching for customs airports
+        customs_suggestions = [s for s in suggestions if "customs" in s.query_text.lower()]
+        assert len(customs_suggestions) > 0
 
     def test_max_suggestions_respected(self, predictor):
         """Respects max_suggestions limit."""
