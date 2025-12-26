@@ -38,6 +38,12 @@ export class LLMIntegration {
     this.apiAdapter = apiAdapter;
     this.uiManager = uiManager;
     this.visualizationEngine = visualizationEngine;
+
+    // Listen for clear-llm-highlights event (from UI manager when user initiates new search or clears filters)
+    window.addEventListener('clear-llm-highlights', (() => {
+      console.log('🔵 clear-llm-highlights event received');
+      this.clearLLMHighlights();
+    }) as EventListener);
   }
   
   /**
@@ -471,6 +477,9 @@ export class LLMIntegration {
       radiusNm: radiusNm
     });
 
+    // Update search radius in store (single source of truth)
+    store.getState().setFilters({ search_radius_nm: radiusNm });
+
     // Apply filter profile if provided (before triggering search)
     const filterProfile = viz.filter_profile;
     if (filterProfile) {
@@ -481,13 +490,12 @@ export class LLMIntegration {
     store.getState().setSearchQuery(pointData.label || '');
 
     // Trigger locate search via event (uses normal search flow to load ALL airports)
-    // This will show all airports within radius, with highlights on recommended airports
+    // Radius is read from store.filters.search_radius_nm
     window.dispatchEvent(new CustomEvent('trigger-locate', {
       detail: {
         lat: pointData.lat,
         lon: pointLon,
-        label: pointData.label,
-        radiusNm: radiusNm
+        label: pointData.label
       }
     }));
 

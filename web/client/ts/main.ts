@@ -387,12 +387,14 @@ class Application {
     }) as EventListener);
 
     // Trigger locate event (from LLM integration for point_with_markers)
-    window.addEventListener('trigger-locate', (async (e: CustomEvent<{ lat: number; lon: number; label?: string; radiusNm: number }>) => {
-      const { lat, lon, label, radiusNm } = e.detail;
+    window.addEventListener('trigger-locate', (async (e: CustomEvent<{ lat: number; lon: number; label?: string }>) => {
+      const { lat, lon, label } = e.detail;
+      const state = this.store.getState();
+      // Read radius from store (single source of truth)
+      const radiusNm = state.filters.search_radius_nm;
       console.log('🔵 trigger-locate event received:', { lat, lon, label, radiusNm });
 
       try {
-        const state = this.store.getState();
         const response = await this.apiAdapter.locateAirportsByCenter(
           { lat, lon, label: label || 'Location' },
           radiusNm,

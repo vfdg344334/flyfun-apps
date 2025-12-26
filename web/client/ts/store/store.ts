@@ -44,7 +44,9 @@ const initialState: AppState = {
     min_runway_length_ft: null,
     max_landing_fee: null,
     limit: 1000,
-    offset: 0
+    offset: 0,
+    search_radius_nm: 50,
+    enroute_distance_max_nm: null
   },
   
   visualization: {

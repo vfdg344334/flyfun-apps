@@ -142,6 +142,7 @@ Client-side filtering is performed in `filterAirports()` function in `store.ts`.
 **Current Implementation:**
 - Country filter
 - Boolean filters (has_procedures, has_aip_data, has_hard_runway, point_of_entry)
+- Distance parameters (search_radius_nm, enroute_distance_max_nm) for route/locate searches
 - Additional filters (has_avgas, has_jet_a, runway length, landing fee) are applied on the backend via API
 
 **Future Enhancement:**
@@ -427,6 +428,29 @@ Filter checkbox toggled
 ```
 
 This ensures filters work correctly with route searches by re-running the API call with updated filters.
+
+## Distance Input Updates
+
+Distance values (`search_radius_nm` and `enroute_distance_max_nm`) are stored in the Zustand store as part of `FilterConfig`, following the single source of truth principle.
+
+When distance inputs are changed:
+
+```
+Distance input changed
+  → handleFilterChange({ search_radius_nm: value }) updates store
+  → Detects active route/locate state
+  → If route active (not chatbot selection): applyFilters() → applyRouteSearch()
+  → If locate active: applyFilters() → applyLocateWithCenter()
+  → Search functions read distance from store.filters.search_radius_nm
+  → Store updates → Map updates reactively
+```
+
+**Key Details:**
+- Distance values stored in `filters.search_radius_nm` (default: 50) and `filters.enroute_distance_max_nm` (default: null)
+- All search functions read distance from store, not DOM
+- UI inputs sync bidirectionally with store via `updateFilterControls()`
+- Uses `change` event (fires on blur or Enter) not `input` (which fires on every keystroke)
+- `clearFilters()` resets distance to defaults (50nm, null)
 
 ## GA Friendliness State Management
 

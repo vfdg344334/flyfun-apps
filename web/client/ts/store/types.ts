@@ -73,8 +73,9 @@ export interface FilterConfig {
   max_landing_fee: number | null;
   limit: number;
   offset: number;
-  // Route-specific filters (not part of standard FilterConfig but used in API)
-  enroute_distance_max_nm?: number;
+  // Search radius/distance parameters (used for route corridor and locate radius)
+  search_radius_nm: number;
+  enroute_distance_max_nm: number | null;
 }
 
 /**

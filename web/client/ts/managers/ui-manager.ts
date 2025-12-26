@@ -575,6 +575,25 @@ export class UIManager {
       });
     }
 
+    // Distance inputs - update store and re-run search if route/locate is active
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance) {
+      routeDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = parseFloat(target.value) || 50;
+        handleFilterChange({ search_radius_nm: value });
+      });
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      enrouteDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = target.value ? parseFloat(target.value) : null;
+        handleFilterChange({ enroute_distance_max_nm: value });
+      });
+    }
+
     // Search input
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
@@ -727,6 +746,21 @@ export class UIManager {
       const activeFilterDiv = document.getElementById('active-aip-filter');
       if (activeFilterDiv) {
         activeFilterDiv.style.display = 'none';
+      }
+    }
+
+    // Update distance inputs
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance && routeDistance.value !== String(filters.search_radius_nm)) {
+      routeDistance.value = String(filters.search_radius_nm);
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      const currentValue = enrouteDistance.value;
+      const newValue = filters.enroute_distance_max_nm ? String(filters.enroute_distance_max_nm) : '';
+      if (currentValue !== newValue) {
+        enrouteDistance.value = newValue;
       }
     }
   }
@@ -1042,22 +1076,14 @@ export class UIManager {
     if (!route.airports || route.airports.length < 1) return;
 
     const state = this.store.getState();
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
-
-    const enrouteInput = document.getElementById('enroute-distance') as HTMLInputElement;
-    const enrouteMaxNm = enrouteInput ? parseFloat(enrouteInput.value) || undefined : undefined;
+    // Read distance values from store (single source of truth)
+    const distanceNm = state.filters.search_radius_nm;
 
     try {
-      const filters: Partial<FilterConfig> = { ...state.filters };
-      if (enrouteMaxNm) {
-        filters.enroute_distance_max_nm = enrouteMaxNm;
-      }
-
       const response = await this.apiAdapter.searchAirportsNearRoute(
         route.airports,
         distanceNm,
-        filters
+        state.filters
       );
 
       // Extract airports from response
@@ -1092,8 +1118,8 @@ export class UIManager {
     if (!locate.center) return;
 
     const state = this.store.getState();
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || locate.radiusNm : locate.radiusNm;
+    // Read radius from store (single source of truth)
+    const radiusNm = state.filters.search_radius_nm;
 
     try {
       const response = await this.apiAdapter.locateAirportsByCenter(
@@ -1105,7 +1131,7 @@ export class UIManager {
       if (response.airports) {
         this.store.getState().setAirports(response.airports);
 
-        // Update locate state
+        // Update locate state with current radius
         this.store.getState().setLocate({
           ...locate,
           radiusNm
@@ -1131,6 +1157,9 @@ export class UIManager {
       return;
     }
 
+    // Clear LLM highlights when user initiates a new search
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
+
     // Check if this is a route search (4-letter ICAO codes)
     const routeAirports = this.parseRouteFromQuery(query);
 
@@ -1138,7 +1167,10 @@ export class UIManager {
       // Route search
       await this.handleRouteSearch(routeAirports);
     } else {
-      // Text search
+      // Text search - clear route and locate state since this is a new search
+      this.store.getState().setRoute(null);
+      this.store.getState().setLocate(null);
+
       this.store.getState().setLoading(true);
       this.store.getState().setError(null);
 
@@ -1175,14 +1207,16 @@ export class UIManager {
    * Handle route search
    */
   private async handleRouteSearch(routeAirports: string[]): Promise<void> {
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
+    // Clear locate state when starting a new route search
+    this.store.getState().setLocate(null);
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
 
     try {
       const state = this.store.getState();
+      // Read distance from store (single source of truth)
+      const distanceNm = state.filters.search_radius_nm;
 
       // Get original route airport coordinates for route line
       const originalRouteAirports = await this.getRouteAirportCoordinates(routeAirports);
@@ -1249,11 +1283,10 @@ export class UIManager {
    * Handle locate
    */
   private async handleLocate(): Promise<void> {
-    const searchInput = document.getElementById('search-input') as HTMLInputElement;
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-
-    const query = searchInput ? searchInput.value.trim() : '';
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || 50.0 : 50.0;
+    const state = this.store.getState();
+    // Read values from store (single source of truth)
+    const query = state.ui.searchQuery.trim();
+    const radiusNm = state.filters.search_radius_nm;
 
     if (!query) {
       this.store.getState().setError('Enter a place in the search box to locate near.');
@@ -1264,7 +1297,6 @@ export class UIManager {
     this.store.getState().setError(null);
 
     try {
-      const state = this.store.getState();
       const response = await this.apiAdapter.locateAirports(query, radiusNm, state.filters);
 
       if (response.airports) {
@@ -1292,6 +1324,9 @@ export class UIManager {
    * Clear filters
    */
   private clearFilters(): void {
+    // Clear LLM highlights when user clears filters
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
+
     this.store.getState().clearFilters();
     this.store.getState().setRoute(null);
     this.store.getState().setLocate(null);
