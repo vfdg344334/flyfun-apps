@@ -278,7 +278,7 @@ def _build_agent_graph(
             )
             
             # Process the answer and build UI payload
-            from .formatting import build_ui_payload, _extract_icao_codes, _enhance_visualization
+            from .formatting import build_ui_payload
             
             # Handle different return types from the chain
             if isinstance(chain_result, str):
@@ -289,27 +289,16 @@ def _build_agent_graph(
                 answer = str(chain_result).strip()
             
             # Build UI payload with suggested queries
+            # Visualization comes entirely from tool result - no modification based on answer text
             suggested_queries = state.get("suggested_queries")
             try:
                 ui_payload = build_ui_payload(plan, tool_result, suggested_queries) if plan else None
             except Exception as e:
                 logger.error(f"Failed to build UI payload: {e}", exc_info=True)
                 ui_payload = None
-
-            # Optional: Enhance visualization with ICAOs from answer
-            mentioned_icaos = []
-            logger.info(f"📍 FORMATTER: ui_payload kind={ui_payload.get('kind') if ui_payload else None}, answer length={len(answer) if answer else 0}, plan tool={plan.selected_tool if plan else None}")
-            if ui_payload and ui_payload.get("kind") in ["route", "airport"]:
-                mentioned_icaos = _extract_icao_codes(answer)
-                logger.info(f"📍 FORMATTER: Extracted {len(mentioned_icaos)} ICAO codes from answer: {mentioned_icaos[:10]}...")
-                if mentioned_icaos:
-                    ui_payload = _enhance_visualization(ui_payload, mentioned_icaos, tool_result)
-                    logger.info(f"📍 FORMATTER: Enhanced visualization applied")
             
             # Generate simple formatting reasoning
             formatting_reasoning = f"Formatted answer using {plan.answer_style if plan else 'default'} style."
-            if mentioned_icaos:
-                formatting_reasoning += f" Mentioned {len(mentioned_icaos)} airports."
             
             # Combine planning and formatting reasoning
             thinking_parts = []

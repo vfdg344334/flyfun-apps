@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 
 from langchain_core.messages import BaseMessage
@@ -98,10 +97,10 @@ def build_ui_payload(
     suggested_queries: List[dict] | None = None
 ) -> Dict[str, Any] | None:
     """
-    Build UI payload using hybrid approach:
+    Build UI payload with flattened fields for convenient access.
     - Flatten commonly-used fields (filters, visualization, airports) for convenience
-    - Keep mcp_raw for everything else and as authoritative source
     - Include suggested_queries for next query prediction
+    - Include kind-specific metadata (departure, destination, icao, region, topic)
     """
     if not tool_result:
         return None
@@ -111,10 +110,9 @@ def build_ui_payload(
     if not kind:
         return None
 
-    # Base payload with kind and mcp_raw (authoritative source)
+    # Base payload with kind
     base_payload: Dict[str, Any] = {
         "kind": kind,
-        "mcp_raw": tool_result,
     }
 
     # Add kind-specific metadata
@@ -184,89 +182,4 @@ def _determine_kind(tool_name: str) -> str | None:
     
     return None
 
-
-def _extract_icao_codes(text: str) -> List[str]:
-    """Extract ICAO airport codes (4 uppercase letters) from text."""
-    if not text:
-        return []
-    
-    pattern = r'\b([A-Z]{4})\b'
-    matches = re.findall(pattern, text)
-    
-    # Deduplicate while preserving order
-    seen = set()
-    icao_codes = []
-    for code in matches:
-        if code not in seen:
-            seen.add(code)
-            icao_codes.append(code)
-    
-    return icao_codes
-
-
-def _enhance_visualization(
-    ui_payload: Dict[str, Any],
-    mentioned_icaos: List[str],
-    tool_result: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Filter visualization markers to only show airports mentioned in the LLM's answer.
-
-    This implements the same logic as the old chatbot_service.py:
-    - Extract ICAO codes from LLM's answer
-    - Filter markers to only include those ICAOs
-    - Always include route endpoints (from/to airports)
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    if not ui_payload or not mentioned_icaos:
-        return ui_payload
-
-    # Get existing visualization
-    visualization = ui_payload.get("visualization") or ui_payload.get("mcp_raw", {}).get("visualization")
-    if not visualization or not isinstance(visualization, dict):
-        return ui_payload
-
-    # Make a copy to avoid mutating original
-    visualization = dict(visualization)
-
-    # Get route endpoints - these should ALWAYS be included
-    route_icaos = set()
-    if "route" in visualization and isinstance(visualization["route"], dict):
-        route = visualization["route"]
-        if route.get("from", {}).get("icao"):
-            route_icaos.add(route["from"]["icao"])
-        if route.get("to", {}).get("icao"):
-            route_icaos.add(route["to"]["icao"])
-
-    # Build set of ICAOs to show (mentioned + route endpoints)
-    icaos_to_show = set(mentioned_icaos) | route_icaos
-
-    logger.info(f"📍 VISUALIZATION: Filtering to {len(icaos_to_show)} airports mentioned in answer: {sorted(icaos_to_show)}")
-
-    # Filter markers to only include mentioned airports
-    if "markers" in visualization:
-        original_count = len(visualization.get("markers", []))
-        filtered_markers = []
-        for marker in visualization.get("markers", []):
-            if isinstance(marker, dict):
-                # Check both 'ident' and 'icao' fields
-                icao = marker.get("ident") or marker.get("icao")
-                if icao and icao in icaos_to_show:
-                    filtered_markers.append(marker)
-
-        visualization["markers"] = filtered_markers
-        logger.info(f"📍 VISUALIZATION: Filtered markers from {original_count} to {len(filtered_markers)}")
-
-    # Update ui_payload with filtered visualization
-    ui_payload = dict(ui_payload)  # Copy
-    ui_payload["visualization"] = visualization
-
-    # Also update mcp_raw if it exists
-    if "mcp_raw" in ui_payload and isinstance(ui_payload["mcp_raw"], dict):
-        ui_payload["mcp_raw"] = dict(ui_payload["mcp_raw"])
-        ui_payload["mcp_raw"]["visualization"] = visualization
-
-    return ui_payload
 

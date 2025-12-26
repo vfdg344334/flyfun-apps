@@ -11,7 +11,8 @@ def test_ui_payload_route_kind():
     )
     payload = build_ui_payload(plan, {"airports": [], "pretty": "demo"})
     assert payload["kind"] == "route"
-    assert payload["mcp_raw"]["pretty"] == "demo"
+    assert payload["departure"] == "EGTF"
+    assert payload["destination"] == "LSGS"
 
 
 def test_ui_payload_none_when_no_tool_result():

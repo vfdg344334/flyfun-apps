@@ -45,11 +45,8 @@ struct ChatVisualizationPayload: Sendable {
             self.kind = .unknown
         }
         
-        // Parse visualization
+        // Parse visualization (flattened at top level)
         if let vizDict = dict["visualization"] as? [String: Any] {
-            self.visualization = VisualizationData(from: vizDict)
-        } else if let mcpRaw = dict["mcp_raw"] as? [String: Any],
-                  let vizDict = mcpRaw["visualization"] as? [String: Any] {
             self.visualization = VisualizationData(from: vizDict)
         } else {
             self.visualization = nil
