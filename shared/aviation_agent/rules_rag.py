@@ -113,9 +113,24 @@ class QueryReformulator:
         if self.llm is None:
             try:
                 from langchain_openai import ChatOpenAI
-                model = os.getenv("ROUTER_MODEL", "gpt-4o-mini")
-                self.llm = ChatOpenAI(model=model, temperature=0)
-                logger.debug(f"Initialized reformulation LLM: {model}")
+                # Try to get model from behavior_config, fallback to env var, then default
+                try:
+                    from .config import get_settings, get_behavior_config
+                    settings = get_settings()
+                    behavior_config = get_behavior_config(settings.agent_config_name)
+                    # Use formatter model for reformulation (or planner if formatter not set)
+                    model = (
+                        behavior_config.llms.formatter.model or
+                        behavior_config.llms.planner.model or
+                        "gpt-4o-mini"  # Default if no config
+                    )
+                    temperature = behavior_config.llms.formatter.temperature
+                except Exception:
+                    # Fallback to default (config loading failed)
+                    model = "gpt-4o-mini"
+                    temperature = 0.0
+                self.llm = ChatOpenAI(model=model, temperature=temperature)
+                logger.debug(f"Initialized reformulation LLM: {model} (temperature={temperature})")
             except ImportError:
                 logger.warning(
                     "Query reformulation requires langchain-openai. "

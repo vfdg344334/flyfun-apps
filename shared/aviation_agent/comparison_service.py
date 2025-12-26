@@ -384,10 +384,29 @@ def create_comparison_service(
         # Create LLM if not provided
         if llm is None:
             from langchain_openai import ChatOpenAI
-            import os
 
-            model = os.getenv("COMPARISON_MODEL", "gpt-4o")
-            temperature = config.synthesis_temperature if config else 0.0
+            # Try to get model from behavior_config, fallback to config, then default
+            try:
+                from .config import get_settings, get_behavior_config
+                settings = get_settings()
+                behavior_config = get_behavior_config(settings.agent_config_name)
+                # Use comparison synthesis model if set, otherwise formatter model
+                model = (
+                    (config.synthesis_model if config and config.synthesis_model else None) or
+                    behavior_config.llms.formatter.model or
+                    "gpt-4o"  # Default if no config
+                )
+                temperature = (
+                    config.synthesis_temperature if config else
+                    behavior_config.llms.formatter.temperature
+                )
+            except Exception:
+                # Fallback to default (config loading failed)
+                model = (
+                    (config.synthesis_model if config and config.synthesis_model else None) or
+                    "gpt-4o"
+                )
+                temperature = config.synthesis_temperature if config else 0.0
             llm = ChatOpenAI(model=model, temperature=temperature)
 
         return RulesComparisonService(

@@ -14,8 +14,9 @@ AIRPORT TOOLS (Section 5):
     - get_notification_for_airport: Customs notification requirements
 
 RULES TOOLS (Section 6):
-    - list_rules_for_country: List all rules for a country
-    - compare_rules_between_countries: Compare rules between two countries
+    - answer_rules_question: Answer specific questions about rules for a country (RAG-based)
+    - browse_rules: Browse/list rules by category and tags with pagination
+    - compare_rules_between_countries: Compare rules between two or more countries
 
 TOOL REGISTRY (Section 7):
     - get_shared_tool_specs(): Returns the tool manifest for registration
@@ -1198,7 +1199,8 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
     - get_notification_for_airport
 
     RULES TOOLS:
-    - list_rules_for_country
+    - answer_rules_question
+    - browse_rules
     - compare_rules_between_countries
     """
     return OrderedDict([

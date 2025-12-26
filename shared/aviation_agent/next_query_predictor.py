@@ -200,11 +200,7 @@ class NextQueryPredictor:
             suggestions.extend(self._search_tool_suggestions(context))
         elif context.tool_used == "get_airport_details":
             suggestions.extend(self._airport_details_suggestions(context))
-        elif context.tool_used == "get_airport_pricing":
-            suggestions.extend(self._pricing_suggestions(context))
-        elif context.tool_used == "get_fuel_prices":
-            suggestions.extend(self._fuel_suggestions(context))
-        elif context.tool_used in ["list_rules_for_country", "compare_rules_between_countries"]:
+        elif context.tool_used in ["answer_rules_question", "browse_rules", "compare_rules_between_countries"]:
             suggestions.extend(self._rules_tool_suggestions(context))
 
         # Rank and return top suggestions
@@ -242,10 +238,11 @@ class NextQueryPredictor:
                 priority=3
             ))
 
+            # Pricing tool removed - suggest airport details instead
             suggestions.append(SuggestedQuery(
-                query_text=f"What are the landing fees at {icao}?",
-                tool_name="get_airport_pricing",
-                category="pricing",
+                query_text=f"Tell me more about {icao}",
+                tool_name="get_airport_details",
+                category="details",
                 priority=3
             ))
 
@@ -284,7 +281,7 @@ class NextQueryPredictor:
                     for question in questions[:max_count]:
                         suggestions.append(SuggestedQuery(
                             query_text=question,
-                            tool_name="list_rules_for_country",
+                            tool_name="answer_rules_question",
                             category="rules",
                             priority=priority
                         ))
@@ -292,13 +289,13 @@ class NextQueryPredictor:
             # Fallback to generic questions if rules.json not loaded
             suggestions.append(SuggestedQuery(
                 query_text="What are the customs rules for countries along this route?",
-                tool_name="list_rules_for_country",
+                tool_name="answer_rules_question",
                 category="rules",
                 priority=4
             ))
             suggestions.append(SuggestedQuery(
                 query_text="Do I need to file a flight plan for this route?",
-                tool_name="list_rules_for_country",
+                tool_name="answer_rules_question",
                 category="rules",
                 priority=4
             ))
@@ -333,7 +330,7 @@ class NextQueryPredictor:
             country = context.countries_mentioned[0]
             suggestions.append(SuggestedQuery(
                 query_text=f"What are the landing requirements for {country}?",
-                tool_name="list_rules_for_country",
+                tool_name="answer_rules_question",
                 category="rules",
                 priority=4
             ))
@@ -358,7 +355,7 @@ class NextQueryPredictor:
             country = context.countries_mentioned[0]
             suggestions.append(SuggestedQuery(
                 query_text=f"What are the VFR rules for {country}?",
-                tool_name="list_rules_for_country",
+                tool_name="answer_rules_question",
                 category="rules",
                 priority=4
             ))
@@ -373,26 +370,10 @@ class NextQueryPredictor:
         if not icao:
             return suggestions
 
-        # Suggest pricing
+        # Suggest notification requirements
         suggestions.append(SuggestedQuery(
-            query_text=f"What are the landing fees at {icao}?",
-            tool_name="get_airport_pricing",
-            category="pricing",
-            priority=5
-        ))
-
-        # Suggest fuel prices
-        suggestions.append(SuggestedQuery(
-            query_text=f"What are the fuel prices at {icao}?",
-            tool_name="get_fuel_prices",
-            category="pricing",
-            priority=4
-        ))
-
-        # Suggest pilot reviews
-        suggestions.append(SuggestedQuery(
-            query_text=f"Show me pilot reviews for {icao}",
-            tool_name="get_pilot_reviews",
+            query_text=f"What are the notification requirements for {icao}?",
+            tool_name="get_notification_for_airport",
             category="details",
             priority=4
         ))
@@ -402,72 +383,13 @@ class NextQueryPredictor:
             country = context.countries_mentioned[0]
             suggestions.append(SuggestedQuery(
                 query_text=f"What are the customs rules for {country}?",
-                tool_name="list_rules_for_country",
+                tool_name="answer_rules_question",
                 category="rules",
                 priority=3
             ))
 
         return suggestions
 
-    def _pricing_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
-        """Suggestions after viewing pricing."""
-        suggestions = []
-
-        icao = context.tool_arguments.get("icao_code")
-        if not icao:
-            return suggestions
-
-        # Suggest fuel prices
-        suggestions.append(SuggestedQuery(
-            query_text=f"What are the fuel prices at {icao}?",
-            tool_name="get_fuel_prices",
-            category="pricing",
-            priority=5
-        ))
-
-        # Suggest airport details
-        suggestions.append(SuggestedQuery(
-            query_text=f"Show me full details for {icao}",
-            tool_name="get_airport_details",
-            category="details",
-            priority=4
-        ))
-
-        # Suggest pilot reviews
-        suggestions.append(SuggestedQuery(
-            query_text=f"What do pilots say about {icao}?",
-            tool_name="get_pilot_reviews",
-            category="details",
-            priority=3
-        ))
-
-        return suggestions
-
-    def _fuel_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
-        """Suggestions after viewing fuel prices."""
-        suggestions = []
-
-        icao = context.tool_arguments.get("icao_code")
-        if not icao:
-            return suggestions
-
-        # Suggest landing fees
-        suggestions.append(SuggestedQuery(
-            query_text=f"What are the landing fees at {icao}?",
-            tool_name="get_airport_pricing",
-            category="pricing",
-            priority=5
-        ))
-
-        # Suggest airport details
-        suggestions.append(SuggestedQuery(
-            query_text=f"Show me procedures at {icao}",
-            tool_name="get_airport_details",
-            category="details",
-            priority=4
-        ))
-
-        return suggestions
 
     def _rules_tool_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
         """Suggestions after viewing rules."""
@@ -487,7 +409,7 @@ class NextQueryPredictor:
             if "vfr" not in context.user_query.lower():
                 suggestions.append(SuggestedQuery(
                     query_text=f"What are the VFR weather minimums for {country}?",
-                    tool_name="list_rules_for_country",
+                    tool_name="answer_rules_question",
                     category="rules",
                     priority=4
                 ))

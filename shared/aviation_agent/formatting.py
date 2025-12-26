@@ -134,19 +134,13 @@ def build_ui_payload(
 
     elif plan.selected_tool in {
         "get_airport_details",
-        "get_airport_pricing",
-        "get_pilot_reviews",
-        "get_fuel_prices",
+        "get_notification_for_airport",
     }:
         base_payload["icao"] = plan.arguments.get("icao") or plan.arguments.get("icao_code")
-        # For search_airports, also extract icao from first airport if available
-        if plan.selected_tool == "search_airports" and tool_result.get("airports"):
-            airports = tool_result.get("airports", [])
-            if airports and isinstance(airports[0], dict):
-                base_payload["icao"] = airports[0].get("ident") or base_payload.get("icao")
 
     elif plan.selected_tool in {
-        "list_rules_for_country",
+        "answer_rules_question",
+        "browse_rules",
         "compare_rules_between_countries",
     }:
         base_payload["region"] = plan.arguments.get("region") or plan.arguments.get("country_code")
@@ -177,15 +171,13 @@ def _determine_kind(tool_name: str) -> str | None:
     
     if tool_name in {
         "get_airport_details",
-        "get_airport_pricing",
-        "get_pilot_reviews",
-        "get_fuel_prices",
         "get_notification_for_airport",
     }:
         return "airport"
     
     if tool_name in {
-        "list_rules_for_country",
+        "answer_rules_question",
+        "browse_rules",
         "compare_rules_between_countries",
     }:
         return "rules"

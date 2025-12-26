@@ -116,9 +116,10 @@ class ComparisonConfig(BaseModel):
 class PromptsConfig(BaseModel):
     planner: str  # Path to prompt file, e.g., "prompts/planner_v1.md"
     formatter: str
-    rules_agent: str
-    router: str
     comparison_synthesis: Optional[str] = None  # Optional: for cross-country comparison
+    # Deprecated (kept for backwards compatibility with existing config files)
+    rules_agent: Optional[str] = None  # DEPRECATED: rules_agent was removed
+    router: Optional[str] = None  # DEPRECATED: routing was removed
 
 
 class ExamplesConfig(BaseModel):
@@ -131,12 +132,10 @@ class ToolsConfig(BaseModel):
     find_airports_near_location: Optional[str] = None
     find_airports_near_route: Optional[str] = None
     get_airport_details: Optional[str] = None
-    get_airport_pricing: Optional[str] = None
-    get_pilot_reviews: Optional[str] = None
-    get_fuel_prices: Optional[str] = None
-    list_rules_for_country: Optional[str] = None
-    compare_rules_between_countries: Optional[str] = None
     get_notification_for_airport: Optional[str] = None
+    answer_rules_question: Optional[str] = None
+    browse_rules: Optional[str] = None
+    compare_rules_between_countries: Optional[str] = None
 
 
 class AgentBehaviorConfig(BaseModel):
@@ -304,8 +303,6 @@ class AgentBehaviorConfig(BaseModel):
             prompts=PromptsConfig(
                 planner="prompts/planner_v1.md",
                 formatter="prompts/formatter_v1.md",
-                rules_agent="prompts/rules_agent_v1.md",
-                router="prompts/router_v1.md",
             ),
             examples=ExamplesConfig(
                 planner="examples/planner_examples_v1.json",
