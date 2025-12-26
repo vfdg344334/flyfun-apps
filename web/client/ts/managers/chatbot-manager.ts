@@ -337,39 +337,51 @@ export class ChatbotManager {
               break;
 
             case 'ui_payload':
-              // UI payload contains visualization and filter_profile
+              // UI payload contains visualization and filters (flattened from filter_profile)
+              // Merge filters into visualization so handleVisualization can access it
+              // Note: build_ui_payload outputs "filters" not "filter_profile"
+              if (eventData.filters) {
+                filterProfile = eventData.filters;
+              }
+
               if (eventData.visualization) {
                 visualization = eventData.visualization;
+                // Merge filter_profile into visualization for unified handling
+                if (filterProfile) {
+                  visualization.filter_profile = filterProfile;
+                }
                 console.log('ChatbotManager: Received ui_payload with visualization', visualization);
                 // Create a wrapper container for visualization indicator and feedback buttons
                 const vizWrapper = document.createElement('div');
                 vizWrapper.className = 'message-visualization-wrapper';
-                
+
                 // Add visualization indicator
                 const vizDiv = document.createElement('div');
                 vizDiv.className = 'message-visualization-indicator';
                 vizDiv.innerHTML = '<small><i class="fas fa-map-marked-alt"></i> Results shown on map</small>';
                 vizWrapper.appendChild(vizDiv);
-                
+
                 // Set insert point for feedback buttons inside the wrapper
                 feedbackInsertPoint = vizDiv;
-                
+
                 messageDiv.appendChild(vizWrapper);
 
                 // Apply visualization immediately (don't wait for 'done' event)
+                // Note: handleVisualization now handles filter_profile internally for markers
                 if (!visualizationApplied) {
                   this.llmIntegration.handleVisualization(visualization);
                   visualizationApplied = true;
+                  // Mark filter profile as applied since handleVisualization handles it for markers
+                  if (visualization.type === 'markers' && filterProfile) {
+                    filterProfileApplied = true;
+                  }
                 }
               }
 
-              if (eventData.filter_profile) {
-                filterProfile = eventData.filter_profile;
-                // Apply filter profile immediately
-                if (!filterProfileApplied) {
-                  this.llmIntegration.applyFilterProfile(filterProfile);
-                  filterProfileApplied = true;
-                }
+              // Apply filter profile for non-markers visualizations (route, point, etc.)
+              if (filterProfile && !filterProfileApplied) {
+                this.llmIntegration.applyFilterProfile(filterProfile);
+                filterProfileApplied = true;
               }
 
               // Handle show_rules for RAG responses - display country rules in right panel

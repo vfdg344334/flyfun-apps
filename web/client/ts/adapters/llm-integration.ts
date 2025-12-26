@@ -99,75 +99,131 @@ export class LLMIntegration {
   }
   
   /**
+   * Check if filter profile has meaningful filters (not just search_query or empty)
+   * Meaningful filters: country, point_of_entry, has_avgas, has_jet_a, has_procedures, etc.
+   */
+  private hasMeaningfulFilters(filterProfile: Record<string, unknown> | undefined): boolean {
+    if (!filterProfile || typeof filterProfile !== 'object') {
+      return false;
+    }
+
+    // List of filter keys that would trigger loading all matching airports
+    const meaningfulFilterKeys = [
+      'country',
+      'point_of_entry',
+      'has_avgas',
+      'has_jet_a',
+      'has_procedures',
+      'has_aip_data',
+      'has_hard_runway',
+      'min_runway_length_ft',
+      'max_runway_length_ft',
+      'max_landing_fee',
+    ];
+
+    return meaningfulFilterKeys.some(key => {
+      const value = filterProfile[key];
+      // Check if the value is truthy (for booleans) or non-empty (for strings/numbers)
+      return value !== undefined && value !== null && value !== '' && value !== false;
+    });
+  }
+
+  /**
+   * Add blue highlights for airports returned by the tool
+   */
+  private addAirportHighlights(airports: Airport[], label: string = 'Mentioned in chat'): number {
+    const store = this.store as any;
+    let highlightCount = 0;
+
+    airports.forEach((airport: any) => {
+      if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
+        store.getState().highlightPoint({
+          id: `llm-airport-${airport.ident}`,
+          type: 'airport' as const,
+          lat: airport.latitude_deg,
+          lng: airport.longitude_deg,
+          color: '#007bff',
+          radius: 15,
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>${label}</em>`,
+          country: airport.iso_country || airport.country
+        });
+        highlightCount++;
+      }
+    });
+
+    return highlightCount;
+  }
+
+  /**
    * Handle markers visualization
+   *
+   * Two modes:
+   * 1. With meaningful filters (country, point_of_entry, etc.):
+   *    - Apply filters to store → Load ALL matching airports via API → Highlight specific ones
+   * 2. Without meaningful filters (just airport list):
+   *    - Show returned airports → Fit bounds → Highlight them
    */
   private handleMarkers(viz: Visualization): boolean {
-    const allAirports = viz.data || viz.markers || [];
-    const highlightAirports = (viz as any).markers || allAirports; // Airports to highlight (subset)
-    const style = (viz as any).style; // Get style field (e.g., "customs")
+    // Airports returned by the tool (these will be highlighted)
+    const toolAirports = viz.data || viz.markers || [];
+    const filterProfile = viz.filter_profile as Record<string, unknown> | undefined;
 
-    if (!Array.isArray(allAirports) || allAirports.length === 0) {
+    if (!Array.isArray(toolAirports) || toolAirports.length === 0) {
       console.error('LLMIntegration: markers visualization missing valid airports array', viz);
       return false;
     }
 
+    const hasMeaningfulFilters = this.hasMeaningfulFilters(filterProfile);
+
     console.log('LLMIntegration: Handling markers visualization', {
       type: viz.type,
-      style: style,
-      totalAirportCount: allAirports.length,
-      highlightAirportCount: highlightAirports.length,
-      allAirports: allAirports.slice(0, 3).map((a: any) => a.ident), // Log first 3 ICAOs
-      highlightAirports: highlightAirports.slice(0, 3).map((a: any) => a.ident)
+      toolAirportCount: toolAirports.length,
+      hasMeaningfulFilters,
+      filterProfile,
+      toolAirports: toolAirports.slice(0, 3).map((a: any) => a.ident)
     });
 
-    // Clear old LLM highlights if we're adding new ones
-    if (style === 'customs') {
-      this.clearLLMHighlights();
-    }
+    // Clear old LLM highlights
+    this.clearLLMHighlights();
 
-    // Update store with ALL airports - this should trigger the map update via store subscription
     const store = this.store as any;
-    store.getState().setAirports(allAirports);
 
-    console.log('LLMIntegration: Set airports in store', {
-      storeAirportCount: store.getState().airports.length,
-      storeFilteredCount: store.getState().filteredAirports.length
-    });
+    if (hasMeaningfulFilters) {
+      // MODE 1: Has meaningful filters
+      // Apply filters → Load ALL matching airports → Highlight specific ones
 
-    // Add blue highlights for customs/border crossing airports (only for highlighted subset)
-    if (style === 'customs') {
-      let highlightCount = 0;
-      highlightAirports.forEach((airport: any) => {
-        if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
-          store.getState().highlightPoint({
-            id: `llm-airport-${airport.ident}`,
-            type: 'airport' as const,
-            lat: airport.latitude_deg,
-            lng: airport.longitude_deg,
-            color: '#007bff',
-            radius: 15,
-            popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Border Crossing Point</em>`,
-            country: airport.iso_country || airport.country
-          });
-          highlightCount++;
-        }
-      });
-      console.log(`✅ Added blue highlights for ${highlightCount} border crossing airports (from ${highlightAirports.length} LLM-mentioned airports)`);
-    }
+      console.log('🔵 Mode: Filters - applying filters and loading all matching airports');
 
-    // Fit bounds will be handled automatically by updateMarkers via store subscription
-    // But we can also fit bounds here as a backup after a delay
-    if (this.visualizationEngine && allAirports.length > 0) {
-      setTimeout(() => {
-        this.visualizationEngine.fitBounds();
-        console.log('LLMIntegration: Fitted map bounds to show all airports');
-      }, 300); // Delay to ensure markers are rendered via store subscription
-    }
+      // 1. Apply filter profile to store (updates UI filter controls)
+      this.applyFilterProfile(filterProfile!);
 
-    // Apply filter profile if provided
-    const filterProfile = viz.filter_profile as Partial<FilterConfig> | undefined;
-    if (filterProfile) {
-      this.applyFilterProfile(filterProfile);
+      // 2. Add blue highlights for the specific airports from the tool
+      const highlightCount = this.addAirportHighlights(toolAirports, 'Recommended by assistant');
+      console.log(`✅ Added blue highlights for ${highlightCount} recommended airports`);
+
+      // 3. Dispatch event to load ALL airports matching the filters
+      window.dispatchEvent(new CustomEvent('trigger-filter-refresh'));
+
+    } else {
+      // MODE 2: No meaningful filters (just airport list)
+      // Show returned airports → Fit bounds → Highlight them
+
+      console.log('🔵 Mode: No filters - showing returned airports directly');
+
+      // 1. Set airports in store (shows only these airports)
+      store.getState().setAirports(toolAirports);
+
+      // 2. Add blue highlights for all returned airports
+      const highlightCount = this.addAirportHighlights(toolAirports, 'Search result');
+      console.log(`✅ Added blue highlights for ${highlightCount} airports`);
+
+      // 3. Fit bounds to show all airports
+      if (this.visualizationEngine && toolAirports.length > 0) {
+        setTimeout(() => {
+          this.visualizationEngine.fitBounds();
+          console.log('LLMIntegration: Fitted map bounds to show all airports');
+        }, 100);
+      }
     }
 
     return true;

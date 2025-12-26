@@ -408,6 +408,36 @@ class Application {
       }
     }) as EventListener);
 
+    // Trigger filter refresh event (from LLM integration for markers with filters)
+    // Loads ALL airports matching current store filters
+    window.addEventListener('trigger-filter-refresh', (async () => {
+      console.log('🔵 trigger-filter-refresh event received');
+
+      try {
+        const state = this.store.getState();
+        const filters = state.filters;
+
+        console.log('🔵 Loading airports with filters:', filters);
+
+        // Load airports with current filters (high limit to get all matching)
+        const response = await this.apiAdapter.getAirports({ ...filters, limit: 500 });
+
+        if (response.data) {
+          this.store.getState().setAirports(response.data);
+          console.log(`✅ Loaded ${response.data.length} airports matching filters`);
+
+          // Fit bounds to show all airports
+          if (this.visualizationEngine && response.data.length > 0) {
+            setTimeout(() => {
+              this.visualizationEngine.fitBounds();
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error('Error in trigger-filter-refresh:', error);
+      }
+    }) as EventListener);
+
     // Relevance tab listener and Persona selector listener moved to UIManager
 
 
