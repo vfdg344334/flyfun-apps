@@ -57,7 +57,10 @@ def _build_agent_graph(
     predictor = None
     if behavior_config.next_query_prediction.enabled:
         tool_context_settings = get_tool_context_settings()
-        predictor = NextQueryPredictor(rules_json_path=tool_context_settings.rules_json)
+        predictor = NextQueryPredictor(
+            rules_json_path=tool_context_settings.rules_json,
+            config=behavior_config.next_query_prediction
+        )
         logger.info("✓ Next query predictor enabled")
 
     graph = StateGraph(AgentState)

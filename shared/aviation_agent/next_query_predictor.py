@@ -15,11 +15,48 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .planning import AviationPlan
 
+if TYPE_CHECKING:
+    from .behavior_config import NextQueryPredictionConfig, ToolSuggestionTemplates
+
 logger = logging.getLogger(__name__)
+
+# Constants for suggestion categories
+class SuggestionCategory:
+    """Constants for suggestion categories."""
+    RULES = "rules"
+    ROUTE = "route"
+    DETAILS = "details"
+    PRICING = "pricing"
+
+# Constants for tool names
+class ToolName:
+    """Constants for tool names."""
+    FIND_AIRPORTS_NEAR_ROUTE = "find_airports_near_route"
+    FIND_AIRPORTS_NEAR_LOCATION = "find_airports_near_location"
+    SEARCH_AIRPORTS = "search_airports"
+    GET_AIRPORT_DETAILS = "get_airport_details"
+    GET_NOTIFICATION_FOR_AIRPORT = "get_notification_for_airport"
+    ANSWER_RULES_QUESTION = "answer_rules_question"
+    BROWSE_RULES = "browse_rules"
+    COMPARE_RULES_BETWEEN_COUNTRIES = "compare_rules_between_countries"
+
+# Constants for filter names
+class FilterName:
+    """Constants for filter names."""
+    HAS_AVGAS = "has_avgas"
+    POINT_OF_ENTRY = "point_of_entry"
+    HAS_HARD_RUNWAY = "has_hard_runway"
+
+# Priority constants
+PRIORITY_HIGH = 5
+PRIORITY_MEDIUM_HIGH = 4
+PRIORITY_MEDIUM = 3
+PRIORITY_LOW = 2
+PRIORITY_VERY_LOW = 1
 
 
 @dataclass
@@ -98,15 +135,22 @@ def extract_context_from_plan(
 class NextQueryPredictor:
     """Predicts relevant follow-up queries based on current context."""
 
-    def __init__(self, rules_json_path: Optional[Path] = None):
+    def __init__(
+        self,
+        rules_json_path: Optional[Path] = None,
+        config: Optional["NextQueryPredictionConfig"] = None
+    ):
         """
         Initialize predictor with rule-based templates.
 
         Args:
             rules_json_path: Optional path to rules.json for loading actual rule questions
+            config: Optional NextQueryPredictionConfig with templates. If not provided, uses hard-coded defaults.
         """
         self.rules_by_category: Dict[str, List[str]] = {}
         self.rules_by_country: Dict[str, List[str]] = {}
+        self.config = config
+        self.templates: Dict[str, "ToolSuggestionTemplates"] = {}
 
         # Load rules.json if provided
         if rules_json_path:
@@ -122,6 +166,14 @@ class NextQueryPredictor:
 
         if not self.rules_by_category:
             logger.info("NextQueryPredictor initialized (rule-based, no rules.json loaded)")
+        
+        # Load templates from file if config provided
+        if self.config and self.config.templates_path:
+            self._load_templates(self.config.templates_path)
+            if self.templates:
+                logger.info(f"NextQueryPredictor initialized with {len(self.templates)} tool templates from {self.config.templates_path}")
+            else:
+                logger.warning(f"NextQueryPredictor: No templates loaded from {self.config.templates_path}, will use hard-coded defaults")
 
     def _load_rules(self, rules_json_path: Path):
         """Load rule questions from rules.json."""
@@ -174,6 +226,44 @@ class NextQueryPredictor:
         except Exception as e:
             logger.warning(f"Failed to load rules.json: {e}")
 
+    def _load_templates(self, templates_path: str):
+        """Load suggestion templates from JSON file."""
+        from .behavior_config import ToolSuggestionTemplates
+        from .config import PROJECT_ROOT
+        
+        try:
+            # Resolve path relative to configs/ directory
+            templates_file = PROJECT_ROOT / "configs" / templates_path
+            
+            logger.info(f"NextQueryPredictor: Loading templates from {templates_file}")
+            
+            if not templates_file.exists():
+                logger.warning(f"NextQueryPredictor: templates file not found at {templates_file}")
+                logger.warning(f"NextQueryPredictor: PROJECT_ROOT={PROJECT_ROOT}, templates_path={templates_path}")
+                return
+            
+            with open(templates_file, 'r', encoding='utf-8') as f:
+                templates_data = json.load(f)
+            
+            # Parse templates
+            templates_dict = templates_data.get("templates", {})
+            if not templates_dict:
+                logger.warning(f"NextQueryPredictor: No 'templates' key found in {templates_file}")
+                return
+            
+            for tool_name, tool_templates_data in templates_dict.items():
+                try:
+                    self.templates[tool_name] = ToolSuggestionTemplates(**tool_templates_data)
+                except Exception as e:
+                    logger.error(f"NextQueryPredictor: Failed to parse templates for {tool_name}: {e}")
+                    continue
+            
+            logger.info(f"NextQueryPredictor: Successfully loaded templates for {len(self.templates)} tools from {templates_file}")
+        except json.JSONDecodeError as e:
+            logger.error(f"NextQueryPredictor: Invalid JSON in templates file {templates_path}: {e}")
+        except Exception as e:
+            logger.error(f"NextQueryPredictor: Failed to load templates from {templates_path}: {e}", exc_info=True)
+
     def predict_next_queries(
         self,
         context: QueryContext,
@@ -192,67 +282,176 @@ class NextQueryPredictor:
         suggestions = []
 
         # Apply tool-specific templates
-        if context.tool_used == "find_airports_near_route":
+        if context.tool_used == ToolName.FIND_AIRPORTS_NEAR_ROUTE:
             suggestions.extend(self._route_tool_suggestions(context))
-        elif context.tool_used == "find_airports_near_location":
+        elif context.tool_used == ToolName.FIND_AIRPORTS_NEAR_LOCATION:
             suggestions.extend(self._location_tool_suggestions(context))
-        elif context.tool_used == "search_airports":
+        elif context.tool_used == ToolName.SEARCH_AIRPORTS:
             suggestions.extend(self._search_tool_suggestions(context))
-        elif context.tool_used == "get_airport_details":
+        elif context.tool_used == ToolName.GET_AIRPORT_DETAILS:
             suggestions.extend(self._airport_details_suggestions(context))
-        elif context.tool_used in ["answer_rules_question", "browse_rules", "compare_rules_between_countries"]:
+        elif context.tool_used in [ToolName.ANSWER_RULES_QUESTION, ToolName.BROWSE_RULES, ToolName.COMPARE_RULES_BETWEEN_COUNTRIES]:
             suggestions.extend(self._rules_tool_suggestions(context))
 
         # Rank and return top suggestions
         ranked = self._rank_suggestions(suggestions)
         return ranked[:max_suggestions]
 
+    def _suggest_filter_based_queries(
+        self,
+        context: QueryContext,
+        filter_suggestions: List[Dict[str, Any]]
+    ) -> List[SuggestedQuery]:
+        """
+        Generate suggestions based on missing filters.
+        
+        Args:
+            context: Query context
+            filter_suggestions: List of dicts with keys: filter, query_text, tool_name, category, priority
+            
+        Returns:
+            List of SuggestedQuery objects for filters not yet applied
+        """
+        suggestions = []
+        for filter_config in filter_suggestions:
+            filter_name = filter_config["filter"]
+            if not context.filters_applied.get(filter_name):
+                suggestions.append(SuggestedQuery(
+                    query_text=filter_config["query_text"],
+                    tool_name=filter_config["tool_name"],
+                    category=filter_config["category"],
+                    priority=filter_config["priority"]
+                ))
+        return suggestions
+
+    def _suggest_entity_based_queries(
+        self,
+        context: QueryContext,
+        entity_suggestions: List[Dict[str, Any]]
+    ) -> List[SuggestedQuery]:
+        """
+        Generate suggestions based on mentioned entities (ICAO codes, countries, locations).
+        
+        Args:
+            context: Query context
+            entity_suggestions: List of dicts with keys: entity_type, query_template, tool_name, category, priority
+                entity_type should be one of: "icao_codes", "countries", "locations"
+                
+        Returns:
+            List of SuggestedQuery objects for entities found in context
+        """
+        suggestions = []
+        for entity_config in entity_suggestions:
+            entity_type = entity_config["entity_type"]
+            entities = getattr(context, f"{entity_type}_mentioned", [])
+            
+            if entities:
+                # Extract template variable name
+                # "icao_codes" -> "icao", "countries" -> "country", "locations" -> "location"
+                var_name = entity_type.rstrip("s").replace("_codes", "").replace("_mentioned", "")
+                entity_value = entities[0]
+                
+                # Format template with entity value
+                query_text = entity_config["query_template"].format(**{var_name: entity_value})
+                
+                suggestions.append(SuggestedQuery(
+                    query_text=query_text,
+                    tool_name=entity_config["tool_name"],
+                    category=entity_config["category"],
+                    priority=entity_config["priority"]
+                ))
+        return suggestions
+
     def _route_tool_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
         """Suggestions for route planning queries."""
         suggestions = []
 
-        # Suggest adding filters if not already applied
-        if not context.filters_applied.get("has_avgas"):
-            suggestions.append(SuggestedQuery(
-                query_text="Show me airports with AVGAS along this route",
-                tool_name="find_airports_near_route",
-                category="route",
-                priority=4
-            ))
+        # Get templates from config or use defaults
+        templates = self._get_tool_templates(ToolName.FIND_AIRPORTS_NEAR_ROUTE)
 
-        if not context.filters_applied.get("point_of_entry"):
-            suggestions.append(SuggestedQuery(
-                query_text="Which airports have customs facilities on this route?",
-                tool_name="find_airports_near_route",
-                category="route",
-                priority=5
-            ))
+        # Filter-based suggestions
+        if templates.filters:
+            filter_suggestions = [
+                {
+                    "filter": f.filter,
+                    "query_text": f.query_template,
+                    "tool_name": f.tool_name,
+                    "category": f.category,
+                    "priority": f.priority
+                }
+                for f in templates.filters
+            ]
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            filter_suggestions = [
+                {
+                    "filter": FilterName.HAS_AVGAS,
+                    "query_text": "Show me airports with AVGAS along this route",
+                    "tool_name": ToolName.FIND_AIRPORTS_NEAR_ROUTE,
+                    "category": SuggestionCategory.ROUTE,
+                    "priority": PRIORITY_MEDIUM_HIGH
+                },
+                {
+                    "filter": FilterName.POINT_OF_ENTRY,
+                    "query_text": "Which airports have customs facilities on this route?",
+                    "tool_name": ToolName.FIND_AIRPORTS_NEAR_ROUTE,
+                    "category": SuggestionCategory.ROUTE,
+                    "priority": PRIORITY_HIGH
+                }
+            ]
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
 
-        # Suggest airport details for first ICAO code
-        if context.icao_codes_mentioned:
-            icao = context.icao_codes_mentioned[0]
-            suggestions.append(SuggestedQuery(
-                query_text=f"What are the procedures at {icao}?",
-                tool_name="get_airport_details",
-                category="details",
-                priority=3
-            ))
-
-            # Pricing tool removed - suggest airport details instead
-            suggestions.append(SuggestedQuery(
-                query_text=f"Tell me more about {icao}",
-                tool_name="get_airport_details",
-                category="details",
-                priority=3
-            ))
+        # Entity-based suggestions (ICAO codes)
+        if templates.entities:
+            entity_suggestions = [
+                {
+                    "entity_type": e.entity_type,
+                    "query_template": e.query_template,
+                    "tool_name": e.tool_name,
+                    "category": e.category,
+                    "priority": e.priority
+                }
+                for e in templates.entities
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            entity_suggestions = [
+                {
+                    "entity_type": "icao_codes",
+                    "query_template": "What are the procedures at {icao}?",
+                    "tool_name": ToolName.GET_AIRPORT_DETAILS,
+                    "category": SuggestionCategory.DETAILS,
+                    "priority": PRIORITY_MEDIUM
+                },
+                {
+                    "entity_type": "icao_codes",
+                    "query_template": "Tell me more about {icao}",
+                    "tool_name": ToolName.GET_AIRPORT_DETAILS,
+                    "category": SuggestionCategory.DETAILS,
+                    "priority": PRIORITY_MEDIUM
+                }
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
 
         # ALWAYS suggest rules for route queries (not just cross-country)
         # Routes typically involve multiple countries or international flight
-        suggestions.extend(self._get_route_rule_suggestions(context))
+        suggestions.extend(self._get_route_rule_suggestions(context, templates))
 
         return suggestions
 
-    def _get_route_rule_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
+    def _get_tool_templates(self, tool_name: str) -> "ToolSuggestionTemplates":
+        """Get templates for a tool from loaded templates, or return empty templates."""
+        from .behavior_config import ToolSuggestionTemplates
+        
+        return self.templates.get(tool_name, ToolSuggestionTemplates())
+
+    def _get_route_rule_suggestions(
+        self,
+        context: QueryContext,
+        templates: Optional["ToolSuggestionTemplates"] = None
+    ) -> List[SuggestedQuery]:
         """
         Get rule suggestions for route queries.
 
@@ -260,45 +459,70 @@ class NextQueryPredictor:
         Works for ALL route queries, not just cross-country.
         """
         suggestions = []
+        
+        if templates is None:
+            templates = self._get_tool_templates(ToolName.FIND_AIRPORTS_NEAR_ROUTE)
 
         # If we have loaded rules from rules.json, use actual questions
         if self.rules_by_category:
-            # Define category priorities for route queries
-            # Each tuple: (category_name, priority, max_questions)
-            category_priorities = [
-                ('International', 5, 1),  # Most relevant for routes
-                ('VFR', 4, 1),            # Common for GA routes
-                ('Airspace', 4, 1),       # Important for route planning
-                ('Flight Rules', 4, 1),   # General flight planning
-                ('IFR', 3, 1),            # Relevant for some routes
-                ('Airfields', 3, 1),      # Airport-related rules
-            ]
+            # Use category priorities from config if available
+            if templates.rule_categories:
+                for cat_template in templates.rule_categories:
+                    questions = self.rules_by_category.get(cat_template.name, [])
+                    if questions:
+                        # Take first N questions from this category
+                        for question in questions[:cat_template.max_questions]:
+                            suggestions.append(SuggestedQuery(
+                                query_text=question,
+                                tool_name=ToolName.ANSWER_RULES_QUESTION,
+                                category=SuggestionCategory.RULES,
+                                priority=cat_template.priority
+                            ))
+            else:
+                # Fallback to hard-coded category priorities
+                category_priorities = [
+                    ('International', PRIORITY_HIGH, 1),
+                    ('VFR', PRIORITY_MEDIUM_HIGH, 1),
+                    ('Airspace', PRIORITY_MEDIUM_HIGH, 1),
+                    ('Flight Rules', PRIORITY_MEDIUM_HIGH, 1),
+                    ('IFR', PRIORITY_MEDIUM, 1),
+                    ('Airfields', PRIORITY_MEDIUM, 1),
+                ]
 
-            for category, priority, max_count in category_priorities:
-                questions = self.rules_by_category.get(category, [])
-                if questions:
-                    # Take first N questions from this category
-                    for question in questions[:max_count]:
-                        suggestions.append(SuggestedQuery(
-                            query_text=question,
-                            tool_name="answer_rules_question",
-                            category="rules",
-                            priority=priority
-                        ))
+                for category, priority, max_count in category_priorities:
+                    questions = self.rules_by_category.get(category, [])
+                    if questions:
+                        for question in questions[:max_count]:
+                            suggestions.append(SuggestedQuery(
+                                query_text=question,
+                                tool_name=ToolName.ANSWER_RULES_QUESTION,
+                                category=SuggestionCategory.RULES,
+                                priority=priority
+                            ))
         else:
-            # Fallback to generic questions if rules.json not loaded
-            suggestions.append(SuggestedQuery(
-                query_text="What are the customs rules for countries along this route?",
-                tool_name="answer_rules_question",
-                category="rules",
-                priority=4
-            ))
-            suggestions.append(SuggestedQuery(
-                query_text="Do I need to file a flight plan for this route?",
-                tool_name="answer_rules_question",
-                category="rules",
-                priority=4
-            ))
+            # Use fallback queries from config if available
+            if templates.fallback_queries:
+                for fallback_query in templates.fallback_queries:
+                    suggestions.append(SuggestedQuery(
+                        query_text=fallback_query,
+                        tool_name=ToolName.ANSWER_RULES_QUESTION,
+                        category=SuggestionCategory.RULES,
+                        priority=PRIORITY_MEDIUM_HIGH
+                    ))
+            else:
+                # Fallback to hard-coded generic questions
+                suggestions.append(SuggestedQuery(
+                    query_text="What are the customs rules for countries along this route?",
+                    tool_name=ToolName.ANSWER_RULES_QUESTION,
+                    category=SuggestionCategory.RULES,
+                    priority=PRIORITY_MEDIUM_HIGH
+                ))
+                suggestions.append(SuggestedQuery(
+                    query_text="Do I need to file a flight plan for this route?",
+                    tool_name=ToolName.ANSWER_RULES_QUESTION,
+                    category=SuggestionCategory.RULES,
+                    priority=PRIORITY_MEDIUM_HIGH
+                ))
 
         return suggestions
 
@@ -307,58 +531,126 @@ class NextQueryPredictor:
         suggestions = []
 
         location = context.tool_arguments.get("location_query", "this location")
+        templates = self._get_tool_templates(ToolName.FIND_AIRPORTS_NEAR_LOCATION)
 
-        # Suggest adding filters
-        if not context.filters_applied.get("has_hard_runway"):
-            suggestions.append(SuggestedQuery(
-                query_text=f"Show airports with hard runways near {location}",
-                tool_name="find_airports_near_location",
-                category="route",
-                priority=3
-            ))
+        # Filter-based suggestions
+        if templates.filters:
+            # Format templates with location variable
+            filter_suggestions = []
+            for f in templates.filters:
+                query_text = f.query_template.format(location=location) if "{location}" in f.query_template else f.query_template
+                filter_suggestions.append({
+                    "filter": f.filter,
+                    "query_text": query_text,
+                    "tool_name": f.tool_name,
+                    "category": f.category,
+                    "priority": f.priority
+                })
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            filter_suggestions = [
+                {
+                    "filter": FilterName.HAS_HARD_RUNWAY,
+                    "query_text": f"Show airports with hard runways near {location}",
+                    "tool_name": ToolName.FIND_AIRPORTS_NEAR_LOCATION,
+                    "category": SuggestionCategory.ROUTE,
+                    "priority": PRIORITY_MEDIUM
+                },
+                {
+                    "filter": FilterName.HAS_AVGAS,
+                    "query_text": f"Show airports with AVGAS near {location}",
+                    "tool_name": ToolName.FIND_AIRPORTS_NEAR_LOCATION,
+                    "category": SuggestionCategory.ROUTE,
+                    "priority": PRIORITY_MEDIUM_HIGH
+                }
+            ]
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
 
-        if not context.filters_applied.get("has_avgas"):
-            suggestions.append(SuggestedQuery(
-                query_text=f"Show airports with AVGAS near {location}",
-                tool_name="find_airports_near_location",
-                category="route",
-                priority=4
-            ))
-
-        # Suggest country rules if country mentioned
-        if context.countries_mentioned:
-            country = context.countries_mentioned[0]
-            suggestions.append(SuggestedQuery(
-                query_text=f"What are the landing requirements for {country}?",
-                tool_name="answer_rules_question",
-                category="rules",
-                priority=4
-            ))
+        # Entity-based suggestions (countries)
+        if templates.entities:
+            entity_suggestions = [
+                {
+                    "entity_type": e.entity_type,
+                    "query_template": e.query_template,
+                    "tool_name": e.tool_name,
+                    "category": e.category,
+                    "priority": e.priority
+                }
+                for e in templates.entities
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            entity_suggestions = [
+                {
+                    "entity_type": "countries",
+                    "query_template": "What are the landing requirements for {country}?",
+                    "tool_name": ToolName.ANSWER_RULES_QUESTION,
+                    "category": SuggestionCategory.RULES,
+                    "priority": PRIORITY_MEDIUM_HIGH
+                }
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
 
         return suggestions
 
     def _search_tool_suggestions(self, context: QueryContext) -> List[SuggestedQuery]:
         """Suggestions for airport search queries."""
         suggestions = []
+        templates = self._get_tool_templates(ToolName.SEARCH_AIRPORTS)
 
-        # Suggest adding filters
-        if not context.filters_applied.get("point_of_entry"):
-            suggestions.append(SuggestedQuery(
-                query_text="Show only airports with customs facilities",
-                tool_name="search_airports",
-                category="route",
-                priority=3
-            ))
+        # Filter-based suggestions
+        if templates.filters:
+            filter_suggestions = [
+                {
+                    "filter": f.filter,
+                    "query_text": f.query_template,
+                    "tool_name": f.tool_name,
+                    "category": f.category,
+                    "priority": f.priority
+                }
+                for f in templates.filters
+            ]
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            filter_suggestions = [
+                {
+                    "filter": FilterName.POINT_OF_ENTRY,
+                    "query_text": "Show only airports with customs facilities",
+                    "tool_name": ToolName.SEARCH_AIRPORTS,
+                    "category": SuggestionCategory.ROUTE,
+                    "priority": PRIORITY_MEDIUM
+                }
+            ]
+            suggestions.extend(self._suggest_filter_based_queries(context, filter_suggestions))
 
-        # Suggest country rules if country in filters
-        if context.countries_mentioned:
-            country = context.countries_mentioned[0]
-            suggestions.append(SuggestedQuery(
-                query_text=f"What are the VFR rules for {country}?",
-                tool_name="answer_rules_question",
-                category="rules",
-                priority=4
-            ))
+        # Entity-based suggestions (countries)
+        if templates.entities:
+            entity_suggestions = [
+                {
+                    "entity_type": e.entity_type,
+                    "query_template": e.query_template,
+                    "tool_name": e.tool_name,
+                    "category": e.category,
+                    "priority": e.priority
+                }
+                for e in templates.entities
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            entity_suggestions = [
+                {
+                    "entity_type": "countries",
+                    "query_template": "What are the VFR rules for {country}?",
+                    "tool_name": ToolName.ANSWER_RULES_QUESTION,
+                    "category": SuggestionCategory.RULES,
+                    "priority": PRIORITY_MEDIUM_HIGH
+                }
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
 
         return suggestions
 
@@ -370,23 +662,42 @@ class NextQueryPredictor:
         if not icao:
             return suggestions
 
-        # Suggest notification requirements
+        templates = self._get_tool_templates(ToolName.GET_AIRPORT_DETAILS)
+
+        # Suggest notification requirements (always shown for airport details)
+        # This is hard-coded as it's tool-specific, not template-based
         suggestions.append(SuggestedQuery(
             query_text=f"What are the notification requirements for {icao}?",
-            tool_name="get_notification_for_airport",
-            category="details",
-            priority=4
+            tool_name=ToolName.GET_NOTIFICATION_FOR_AIRPORT,
+            category=SuggestionCategory.DETAILS,
+            priority=PRIORITY_MEDIUM_HIGH
         ))
 
-        # Suggest country rules
-        if context.countries_mentioned:
-            country = context.countries_mentioned[0]
-            suggestions.append(SuggestedQuery(
-                query_text=f"What are the customs rules for {country}?",
-                tool_name="answer_rules_question",
-                category="rules",
-                priority=3
-            ))
+        # Entity-based suggestions (countries)
+        if templates.entities:
+            entity_suggestions = [
+                {
+                    "entity_type": e.entity_type,
+                    "query_template": e.query_template,
+                    "tool_name": e.tool_name,
+                    "category": e.category,
+                    "priority": e.priority
+                }
+                for e in templates.entities
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
+        else:
+            # Fallback to hard-coded defaults
+            entity_suggestions = [
+                {
+                    "entity_type": "countries",
+                    "query_template": "What are the customs rules for {country}?",
+                    "tool_name": ToolName.ANSWER_RULES_QUESTION,
+                    "category": SuggestionCategory.RULES,
+                    "priority": PRIORITY_MEDIUM
+                }
+            ]
+            suggestions.extend(self._suggest_entity_based_queries(context, entity_suggestions))
 
         return suggestions
 
@@ -395,32 +706,32 @@ class NextQueryPredictor:
         """Suggestions after viewing rules."""
         suggestions = []
 
-        # Suggest customs airports
+        # Entity-based suggestions (countries)
         if context.countries_mentioned:
             country = context.countries_mentioned[0]
             suggestions.append(SuggestedQuery(
                 query_text=f"Which airports have customs in {country}?",
-                tool_name="search_airports",
-                category="route",
-                priority=5
+                tool_name=ToolName.SEARCH_AIRPORTS,
+                category=SuggestionCategory.ROUTE,
+                priority=PRIORITY_HIGH
             ))
 
             # Suggest VFR rules if not already viewing them
             if "vfr" not in context.user_query.lower():
                 suggestions.append(SuggestedQuery(
                     query_text=f"What are the VFR weather minimums for {country}?",
-                    tool_name="answer_rules_question",
-                    category="rules",
-                    priority=4
+                    tool_name=ToolName.ANSWER_RULES_QUESTION,
+                    category=SuggestionCategory.RULES,
+                    priority=PRIORITY_MEDIUM_HIGH
                 ))
 
         # Suggest comparison if only one country
         if len(context.countries_mentioned) == 1:
             suggestions.append(SuggestedQuery(
                 query_text="Compare rules with neighboring countries",
-                tool_name="compare_rules_between_countries",
-                category="rules",
-                priority=3
+                tool_name=ToolName.COMPARE_RULES_BETWEEN_COUNTRIES,
+                category=SuggestionCategory.RULES,
+                priority=PRIORITY_MEDIUM
             ))
 
         return suggestions

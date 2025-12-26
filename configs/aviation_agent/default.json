@@ -46,7 +46,8 @@
   },
   "next_query_prediction": {
     "enabled": true,
-    "max_suggestions": 4
+    "max_suggestions": 4,
+    "templates_path": "next_query_predictor/default.json"
   },
   "comparison": {
     "enabled": true,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -66,9 +66,46 @@ class RerankingConfig(BaseModel):
     openai: Optional[OpenAIRerankingConfig] = OpenAIRerankingConfig()
 
 
+class FilterSuggestionTemplate(BaseModel):
+    """Template for filter-based suggestion."""
+    filter: str
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class EntitySuggestionTemplate(BaseModel):
+    """Template for entity-based suggestion."""
+    entity_type: str  # "icao_codes", "countries", "locations"
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class RuleCategoryTemplate(BaseModel):
+    """Template for rule category suggestions."""
+    name: str
+    priority: int
+    max_questions: int = 1
+
+
+class ToolSuggestionTemplates(BaseModel):
+    """Templates for suggestions for a specific tool."""
+    filters: List[FilterSuggestionTemplate] = []
+    entities: List[EntitySuggestionTemplate] = []
+    rule_categories: List[RuleCategoryTemplate] = []
+    fallback_queries: List[str] = []
+
+
 class NextQueryPredictionConfig(BaseModel):
     enabled: bool = True
     max_suggestions: int = Field(default=4, gt=0, le=20)
+    templates_path: Optional[str] = Field(
+        default="next_query_predictor/default.json",
+        description="Path to templates JSON file, relative to configs/ directory."
+    )
 
 
 class ComparisonConfig(BaseModel):

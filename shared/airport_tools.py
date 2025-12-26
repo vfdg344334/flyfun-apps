@@ -464,6 +464,44 @@ def search_airports(
     q = query.upper().strip()
     matches: List[Airport] = []
 
+    # Check if query contains multiple ICAO codes (space-separated 4-letter codes)
+    # Filter out common conjunctions like "and", "or", commas
+    parts = [p.strip(",") for p in q.split() if p.upper() not in ("AND", "OR", "&", ",")]
+    if len(parts) > 1 and all(len(p) == 4 and p.isalpha() for p in parts):
+        # Multiple ICAO codes - search for each
+        icao_set = set(parts)
+        for a in ctx.model.airports:
+            if a.ident in icao_set:
+                matches.append(a)
+                if len(matches) >= len(icao_set):
+                    break  # Found all requested airports
+
+        # Skip country detection and standard search
+        # Filter and sort using common pipeline
+        persona_id = kwargs.pop("_persona_id", None)
+        result = _filter_and_sort_airports(
+            ctx=ctx,
+            airports=matches,
+            filters=filters,
+            include_large_airports=True,  # Don't filter out large airports when explicitly requested
+            priority_strategy=priority_strategy,
+            max_results=max(max_results, len(icao_set)),  # Return at least as many as requested
+            persona_id=persona_id,
+        )
+
+        airport_summaries = [_airport_summary(a) for a in result.airports]
+        filter_profile = _build_filter_profile({"search_query": query}, filters)
+
+        return {
+            "count": len(airport_summaries),
+            "airports": airport_summaries,
+            "filter_profile": filter_profile,
+            "visualization": {
+                "type": "markers",
+                "data": airport_summaries
+            }
+        }
+
     # Country name to ISO-2 code mapping for common country searches
     country_name_map = {
         "GERMANY": "DE", "FRANCE": "FR", "UNITED KINGDOM": "GB", "UK": "GB",
@@ -481,9 +519,11 @@ def search_airports(
 
     # Check if query is a country name
     country_code = country_name_map.get(q)
+    detected_country = None  # Track if we detected a country for filter_profile
 
     if country_code:
         # Search by country code
+        detected_country = country_code
         for a in ctx.model.airports:
             if (a.iso_country or "").upper() == country_code:
                 matches.append(a)
@@ -519,7 +559,11 @@ def search_airports(
     airport_summaries = [_airport_summary(a) for a in result.airports]
 
     # Generate filter profile for UI synchronization
-    filter_profile = _build_filter_profile({"search_query": query}, filters)
+    # Include detected country so UI can sync the country filter dropdown
+    base_profile: Dict[str, Any] = {"search_query": query}
+    if detected_country:
+        base_profile["country"] = detected_country
+    filter_profile = _build_filter_profile(base_profile, filters)
 
     return {
         "count": len(airport_summaries),
