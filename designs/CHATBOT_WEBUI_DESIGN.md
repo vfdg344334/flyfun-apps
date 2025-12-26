@@ -467,11 +467,21 @@ const suggestedQueries = ui_payload.suggested_queries;
 
 The `LLMIntegration` class handles each visualization type as follows:
 
-1. **`markers`** - Display airports as markers
-   - Sets airports in store via `store.setAirports()`
-   - Applies filter profile if provided
-   - Adds blue highlights for customs airports (if `style='customs'`)
+1. **`markers`** - Display airports as markers (two modes)
+
+   **Mode 1: With meaningful filters** (country, point_of_entry, has_avgas, etc.):
+   - Clears old LLM highlights
+   - Applies filter profile to store (updates UI filter controls)
+   - Adds blue highlights for the specific airports returned by the tool
+   - Dispatches `trigger-filter-refresh` event to load ALL airports matching filters
+   - Result: Map shows all airports matching filters, with LLM recommendations highlighted in blue
+
+   **Mode 2: No meaningful filters** (just airport list):
+   - Clears old LLM highlights
+   - Sets airports in store directly (only shows returned airports)
+   - Adds blue highlights for all returned airports
    - Fits map bounds to show all airports
+   - Result: Map shows only the returned airports, all highlighted
 
 2. **`route_with_markers`** - Display route with airports
    - Clears old LLM highlights
@@ -513,7 +523,7 @@ When `show_rules` is present in `ui_payload`:
 
 | Tool | Visualization Type | UI Behavior |
 |------|-------------------|-------------|
-| `search_airports` | `markers` | Sets airports in store, displays markers, applies filters, fits bounds |
+| `search_airports` | `markers` | With filters: applies filters + loads ALL matching + highlights recommended. Without filters: shows returned airports + highlights all |
 | `find_airports_near_route` | `route_with_markers` | Highlights chat airports, triggers route search, shows route line |
 | `find_airports_near_location` | `point_with_markers` | Sets locate state, highlights recommended airports, triggers locate search |
 | `get_airport_details` | `marker_with_details` | Centers map, shows marker, opens details panel |
@@ -555,7 +565,8 @@ See `designs/UI_FILTER_STATE_DESIGN.md` for complete UI, filter, state managemen
 
 Each visualization type must map to specific store actions:
 
-- **`markers`** → `store.setAirports()` + optional `store.highlightPoint()`
+- **`markers`** (with filters) → `store.setFilters()` + `store.highlightPoint()` + trigger `trigger-filter-refresh` event
+- **`markers`** (without filters) → `store.setAirports()` + `store.highlightPoint()`
 - **`route_with_markers`** → `store.setSearchQuery()` + `store.highlightPoint()` + trigger `trigger-search` event
 - **`marker_with_details`** → `store.setSearchQuery()` + trigger `trigger-search` and `airport-click` events
 - **`point_with_markers`** → `store.setLocate()` + `store.highlightPoint()` + trigger `trigger-locate` event
@@ -577,6 +588,7 @@ Each visualization type must map to specific store actions:
 - Use custom events for cross-component actions:
   - `trigger-search` - Trigger search from any component
   - `trigger-locate` - Trigger locate search
+  - `trigger-filter-refresh` - Load all airports matching current store filters (for markers with filters)
   - `airport-click` - Open airport details panel
   - `show-country-rules` - Display rules panel
   - `reset-rules-panel` - Reset rules panel

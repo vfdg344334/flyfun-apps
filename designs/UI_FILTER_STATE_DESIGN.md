@@ -36,6 +36,7 @@ This document describes the architecture and design of the FlyFun Airport Explor
 3. **Events** (For Cross-Component Communication): Custom DOM events for loose coupling
    - `trigger-search` event - Allows any component to trigger a search (handled in `main.ts`)
    - `trigger-locate` event - Allows any component to trigger a locate search (handled in `main.ts`)
+   - `trigger-filter-refresh` event - Loads all airports matching current store filters (handled in `main.ts`)
    - `render-route` event - Allows route rendering from any component
    - `reset-rules-panel` event - Clears rules panel state
    - `show-country-rules` event - Displays country rules in Rules panel
@@ -270,11 +271,21 @@ Handles chatbot visualizations and filter profile application.
 
 The LLM can return these visualization types:
 
-1. **`markers`**: Display airports as markers
-   - Sets airports in store via `store.setAirports()`
-   - Applies filter profile if provided
+1. **`markers`**: Display airports as markers (two modes)
+
+   **Mode 1: With meaningful filters** (country, point_of_entry, has_avgas, etc.):
+   - Clears old LLM highlights
+   - Applies filter profile to store (updates UI filter controls)
+   - Adds blue highlights for the specific airports returned by the tool
+   - Dispatches `trigger-filter-refresh` event to load ALL airports matching filters
+   - Result: Map shows all airports matching filters, with LLM recommendations highlighted in blue
+
+   **Mode 2: No meaningful filters** (just airport list):
+   - Clears old LLM highlights
+   - Sets airports in store directly via `store.setAirports()`
+   - Adds blue highlights for all returned airports
    - Fits map bounds to show all airports
-   - Supports `style` field (e.g., "customs") for special highlighting
+   - Result: Map shows only the returned airports, all highlighted
 
 2. **`route_with_markers`**: Display route with airports
    - Clears old LLM highlights
