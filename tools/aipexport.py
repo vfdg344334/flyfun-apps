@@ -28,6 +28,7 @@ python tools/aipexport.py [AIRPORTS ...]
   [--worldairports --worldairports-db PATH --worldairports-filter {required,europe,all}]
   [--france-eaip DIR | --france-web [--eaip-date YYYY-MM-DD]]
   [--uk-eaip DIR | --uk-web]
+  [--norway-web]
   [--autorouter --autorouter-username USER --autorouter-password PASS]
   [--pointdepassage [--pointdepassage-journal FILE]]
   [--database-storage[=PATH]] [--json FILE] [--save-all-fields]
@@ -65,6 +66,7 @@ from euro_aip.sources import (
 )
 from euro_aip.sources.france_eaip_web import FranceEAIPWebSource
 from euro_aip.sources.uk_eaip_web import UKEAIPWebSource
+from euro_aip.sources.norway_eaip_web import NorwayEAIPWebSource
 from euro_aip.models import EuroAipModel, Airport
 from euro_aip.sources.base import SourceInterface
 from euro_aip.utils.field_standardization_service import FieldStandardizationService
@@ -138,7 +140,13 @@ class ModelBuilder:
                 cache_dir=str(self.cache_dir),
                 airac_date=self.args.airac_date
             )
-        
+
+        if getattr(self.args, 'norway_web', False):
+            self.sources['norway_eaip_web'] = NorwayEAIPWebSource(
+                cache_dir=str(self.cache_dir),
+                airac_date=self.args.airac_date
+            )
+
         if self.args.uk_eaip:
             self.sources['uk_eaip'] = UKEAIPSource(
                 cache_dir=str(self.cache_dir),
@@ -397,6 +405,7 @@ def main():
     parser.add_argument('--eaip-date', help='eAIP date (YYYY-MM-DD) for France web source (defaults to AIRAC date if not provided)', required=False)
     parser.add_argument('--uk-eaip', help='UK eAIP root directory')
     parser.add_argument('--uk-web', help='Enable UK eAIP web source (HTML index)', action='store_true')
+    parser.add_argument('--norway-web', help='Enable Norway eAIP web source (HTML index)', action='store_true')
     parser.add_argument('--airac-date', help='AIRAC effective date (YYYY-MM-DD) for web sources', required=False)
     
     parser.add_argument('--autorouter', help='Enable Autorouter source', action='store_true')
@@ -431,8 +440,9 @@ def main():
     
     # Validate that at least one source and one output format are specified
     sources_enabled = any([
-        args.database is not None, args.worldairports, args.france_eaip, getattr(args, 'france_web', False), 
-        args.uk_eaip, getattr(args, 'uk_web', False), args.autorouter, args.pointdepassage
+        args.database is not None, args.worldairports, args.france_eaip, getattr(args, 'france_web', False),
+        args.uk_eaip, getattr(args, 'uk_web', False), getattr(args, 'norway_web', False),
+        args.autorouter, args.pointdepassage
     ])
     
     outputs_enabled = bool(args.json) or args.database_storage is not None
@@ -446,7 +456,7 @@ def main():
         return
     
     # Handle AIRAC date for web sources
-    web_sources_enabled = getattr(args, 'france_web', False) or getattr(args, 'uk_web', False)
+    web_sources_enabled = getattr(args, 'france_web', False) or getattr(args, 'uk_web', False) or getattr(args, 'norway_web', False)
     if web_sources_enabled and not args.airac_date:
         # Calculate the current effective AIRAC date
         calculator = AIRACDateCalculator()
