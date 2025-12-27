@@ -90,9 +90,9 @@ volumes:
 
 ## Service Endpoints
 
-The Caddyfiles currently reference Docker service names:
-- **MCP Server**: `mcp-server:8001`
-- **Web Server**: `web-server:8000`
+The Caddyfiles need to be updated to use the Docker host IP/hostname:
+- **MCP Server**: Exposed on host port `8002` (container port 8000)
+- **Web Server**: Exposed on host port `8000` (container port 8000)
 
 ### Network Considerations
 
@@ -104,7 +104,7 @@ If your shared Caddy server can reach the Docker host, update the reverse_proxy 
 
 **In `sites-enabled/mcp.flyfun.aero.caddy`:**
 ```caddyfile
-reverse_proxy <docker-host-ip-or-hostname>:8001
+reverse_proxy <docker-host-ip-or-hostname>:8002
 ```
 
 **In `sites-enabled/maps.flyfun.aero.caddy`:**
@@ -126,8 +126,9 @@ If your shared Caddy server is also running in Docker and can join the `flyfun-n
 ### Port Mappings
 
 The docker-compose.yml exposes:
-- **MCP Server**: Port `8001` (configurable via `MCP_PORT` env var)
-- **Web Server**: Port `8000` (configurable via `WEB_PORT` env var)
+- **MCP Server**: Port `8002` on host → `8000` in container (configurable via `MCP_PORT` env var)
+- **Web Server**: Port `8000` on host → `8000` in container (configurable via `WEB_PORT` env var)
+- **ChromaDB**: Port `8001` on host → `8000` in container (configurable via `CHROMADB_PORT` env var)
 
 Ensure these ports are accessible from your shared infrastructure server (firewall rules, etc.).
 
@@ -153,6 +154,53 @@ When you update these Caddyfiles:
    - If using symlinks: `caddy reload` (picks up changes automatically)
    - If using copies: Copy new files and `caddy reload`
    - If using imports: `caddy reload` (if Caddy watches the directory)
+
+## Logging
+
+### Default Log Location
+
+Caddy logs to **stderr** by default. The behavior depends on how Caddy is run:
+
+- **Docker**: Logs go to stdout/stderr, captured by Docker. View with `docker logs <container-name>`
+- **systemd**: Logs go to journald. View with `journalctl -u caddy`
+- **Direct run**: Logs go to terminal stderr
+
+### Current Configuration
+
+The Caddyfiles explicitly configure logging to stdout with console format:
+
+```caddyfile
+log {
+    output stdout
+    format console
+}
+```
+
+This is ideal for Docker as logs are captured by the container runtime.
+
+### Customizing Logs
+
+To log to a file instead, update the `log` directive:
+
+```caddyfile
+log {
+    output file /var/log/caddy/access.log {
+        roll_size 100mb
+        roll_keep 10
+        roll_keep_for 720h
+    }
+    format json
+}
+```
+
+**Note**: Ensure Caddy has write permissions to the log directory.
+
+### Log Rotation
+
+Caddy automatically rotates log files when they reach 100 MB by default, keeping the last 10 files. Customize with:
+- `roll_size`: Maximum size before rotation (default: 100mb)
+- `roll_keep`: Number of rotated files to keep (default: 10)
+- `roll_keep_for`: How long to keep rotated files (default: 720h = 30 days)
 
 ## Testing
 

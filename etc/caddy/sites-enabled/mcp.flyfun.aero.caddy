@@ -32,7 +32,7 @@ https://mcp.flyfun.aero {
     handle /euro_aip* {
         # Rewrite URI: replace /euro_aip with /mcp, preserving any trailing path
         uri replace /euro_aip /mcp
-        reverse_proxy mcp-server:8001 {
+        reverse_proxy <docker-host-ip-or-hostname>:8002 {
             # Preserve host header
             header_up Host {host}
             # Forward original request info

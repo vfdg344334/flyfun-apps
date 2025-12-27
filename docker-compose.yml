@@ -71,7 +71,8 @@ services:
     container_name: flyfun-mcp-server
     ports:
       # Expose port for shared infrastructure Caddy server
-      - "${MCP_PORT:-8001}:8001"
+      # Host port 8002 maps to container port 8000
+      - "${MCP_PORT:-8002}:8000"
     # Load environment variables from .env file
     env_file:
       - .env
@@ -101,7 +102,7 @@ services:
       - chromadb
     # MCP servers typically use stdio, so no HTTP healthcheck
     # They're usually managed by the MCP client
-    # Note: MCP server binds to 0.0.0.0:8001 for access from shared Caddy server
+    # Note: MCP server binds to 0.0.0.0:8000 internally, exposed on host port 8002 for shared Caddy server
 
   # Caddy is run on a shared infrastructure server, not in this docker-compose
   # Caddyfiles are located at:
