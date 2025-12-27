@@ -522,8 +522,10 @@ export class UIManager {
       } else if (state.locate && state.locate.center) {
         // Active locate search - re-run with new filters
         this.applyFilters();
+      } else {
+        // Viewport mode - trigger a refresh with current viewport bounds
+        window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
-      // Otherwise, just client-side filtering is fine (normal mode)
     };
 
     const countrySelect = document.getElementById('country-filter');
@@ -652,7 +654,14 @@ export class UIManager {
     const applyFiltersBtn = document.getElementById('apply-filters');
     if (applyFiltersBtn) {
       applyFiltersBtn.addEventListener('click', () => {
-        this.applyFilters();
+        const state = this.store.getState();
+        // If route or locate is active, use the standard applyFilters
+        if ((state.route && state.route.airports) || (state.locate && state.locate.center)) {
+          this.applyFilters();
+        } else {
+          // Use viewport-based loading when in normal browse mode
+          window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
+        }
       });
     }
 
@@ -1152,8 +1161,10 @@ export class UIManager {
    */
   private async handleSearch(query: string): Promise<void> {
     if (!query.trim()) {
-      // Clear search
-      this.store.getState().setAirports([]);
+      // Clear search - reload airports in current viewport instead of clearing
+      this.store.getState().setRoute(null);
+      this.store.getState().setLocate(null);
+      window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       return;
     }
 
@@ -1331,7 +1342,10 @@ export class UIManager {
     this.store.getState().setRoute(null);
     this.store.getState().setLocate(null);
     this.store.getState().setSearchQuery('');
-    this.applyFilters();
+
+    // Use viewport-based loading instead of full filter reload
+    // This keeps the current map view and loads airports within it
+    window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
   }
 
   /**

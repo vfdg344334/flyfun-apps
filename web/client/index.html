@@ -1901,14 +1901,28 @@
 
                     if (!mapCollapseBtn || !mapExpandBtn || !mapColumnCol || !mapDataRow) return;
 
+                    // Helper function to resize map after panel toggle
+                    function resizeMap() {
+                        window.dispatchEvent(new CustomEvent('panel-resize'));
+                        if (window.leafletMap) {
+                            window.leafletMap.invalidateSize();
+                        }
+                    }
+
                     mapCollapseBtn.addEventListener('click', () => {
                         mapColumnCol.classList.add('map-collapsed');
                         mapDataRow.classList.add('map-collapsed');
+                        // Resize map after CSS transition
+                        setTimeout(resizeMap, 50);
+                        setTimeout(resizeMap, 350);
                     });
 
                     mapExpandBtn.addEventListener('click', () => {
                         mapColumnCol.classList.remove('map-collapsed');
                         mapDataRow.classList.remove('map-collapsed');
+                        // Resize map after CSS transition
+                        setTimeout(resizeMap, 50);
+                        setTimeout(resizeMap, 350);
                     });
                 })();
             </script>
@@ -2007,6 +2021,8 @@
                             resizeHandle.classList.remove('resizing');
                             document.body.style.cursor = '';
                             document.body.style.userSelect = '';
+                            // Dispatch panel-resize to update map viewport
+                            window.dispatchEvent(new CustomEvent('panel-resize'));
                         }
                     });
 
@@ -2043,6 +2059,8 @@
                         if (isResizing) {
                             isResizing = false;
                             resizeHandle.classList.remove('resizing');
+                            // Dispatch panel-resize to update map viewport
+                            window.dispatchEvent(new CustomEvent('panel-resize'));
                         }
                     });
                 })();

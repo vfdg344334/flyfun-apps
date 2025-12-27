@@ -128,7 +128,9 @@ async def get_airports(
     # GA Friendliness integration
     include_ga: bool = Query(True, description="Include GA friendliness scores (all personas pre-computed)"),
     # Notification data integration
-    include_notification: bool = Query(True, description="Include notification requirements for legend coloring")
+    include_notification: bool = Query(True, description="Include notification requirements for legend coloring"),
+    # Viewport-based filtering
+    bbox: Optional[str] = Query(None, description="Bounding box: north,south,east,west (decimal degrees)")
 ):
     """Get a list of airports with optional filtering."""
     if not model:
@@ -140,7 +142,28 @@ async def get_airports(
 
     # Start with queryable collection
     airports = model.airports
-    
+
+    # Apply bounding box filter if provided (viewport-based loading)
+    if bbox:
+        try:
+            parts = bbox.split(",")
+            if len(parts) != 4:
+                raise HTTPException(status_code=400, detail="bbox must have 4 values: north,south,east,west")
+            north, south, east, west = map(float, parts)
+
+            # Validate bounds
+            if south > north:
+                raise HTTPException(status_code=400, detail="bbox south must be <= north")
+
+            # Filter airports within bounding box
+            airports = airports.filter(lambda a:
+                a.navpoint is not None and
+                south <= a.navpoint.latitude <= north and
+                west <= a.navpoint.longitude <= east
+            )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bbox values must be valid numbers")
+
     # Apply filters using modern query API
     if country:
         airports = airports.by_country(country)

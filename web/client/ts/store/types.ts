@@ -254,6 +254,16 @@ export interface MapView {
 }
 
 /**
+ * Bounding box for viewport-based airport loading
+ */
+export interface BoundingBox {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
+/**
  * UI state
  */
 export interface UIState {

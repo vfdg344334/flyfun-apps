@@ -3,7 +3,7 @@
  * Uses Fetch API, transforms requests/responses to standard format
  */
 
-import type { Airport, FilterConfig, GAConfig, AirportGAScore, AirportGASummary, Persona } from '../store/types';
+import type { Airport, FilterConfig, GAConfig, AirportGAScore, AirportGASummary, Persona, BoundingBox } from '../store/types';
 
 /**
  * Standard API response format
@@ -114,15 +114,34 @@ export class APIAdapter {
     const params = this.transformFiltersToParams(filters);
     const queryString = params.toString();
     const endpoint = `/api/airports/${queryString ? '?' + queryString : ''}`;
-    
+
     const data = await this.request<Airport[]>(endpoint);
-    
+
     return {
       data: Array.isArray(data) ? data : [],
       count: Array.isArray(data) ? data.length : 0
     };
   }
-  
+
+  /**
+   * Get airports within a bounding box (viewport-based loading)
+   */
+  async getAirportsByBounds(
+    bounds: BoundingBox,
+    filters: Partial<FilterConfig> = {}
+  ): Promise<APIResponse<Airport[]>> {
+    const params = this.transformFiltersToParams(filters);
+    params.set('bbox', `${bounds.north},${bounds.south},${bounds.east},${bounds.west}`);
+
+    const endpoint = `/api/airports/?${params.toString()}`;
+    const data = await this.request<Airport[]>(endpoint);
+
+    return {
+      data: Array.isArray(data) ? data : [],
+      count: Array.isArray(data) ? data.length : 0
+    };
+  }
+
   /**
    * Search airports by query
    */

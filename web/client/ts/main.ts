@@ -10,7 +10,7 @@ import { UIManager } from './managers/ui-manager';
 import { LLMIntegration } from './adapters/llm-integration';
 import { ChatbotManager } from './managers/chatbot-manager';
 import { PersonaManager } from './managers/persona-manager';
-import type { AppState, RouteState, MapView, FilterConfig } from './store/types';
+import type { AppState, RouteState, MapView, FilterConfig, BoundingBox } from './store/types';
 
 // Global instances (for debugging/window access)
 declare global {
@@ -36,6 +36,7 @@ class Application {
   private personaManager: PersonaManager;
   private currentSelectedIcao: string | null = null;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
+  private isViewportLoading: boolean = false; // Flag to skip fitBounds during viewport loading
   private storeUnsubscribe?: () => void; // Store unsubscribe function
 
   constructor() {
@@ -190,14 +191,17 @@ class Application {
               airportsChanged,
               legendModeChanged,
               personaChanged,
-              selectedPersona: state.ga.selectedPersona
+              selectedPersona: state.ga.selectedPersona,
+              isViewportLoading: this.isViewportLoading
             });
 
-            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0;
+            // Only fit bounds when airports change from non-viewport sources (chatbot, search, etc.)
+            // Skip fitBounds during viewport-based loading to prevent zoom loops
+            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0 && !this.isViewportLoading;
             this.visualizationEngine.updateMarkers(
               state.filteredAirports,
               state.visualization.legendMode,
-              shouldFitBounds // Auto-fit bounds when airports change from chatbot
+              shouldFitBounds // Auto-fit bounds when airports change from chatbot/search
             );
 
             lastAirports = [...state.filteredAirports]; // Copy array for comparison
@@ -369,6 +373,21 @@ class Application {
     // Panel resize event (from collapse/expand buttons)
     window.addEventListener('panel-resize', () => {
       this.invalidateMapSize();
+      // After map size is recalculated, refresh airports for the new viewport
+      // Use a delay to ensure Leaflet has updated its bounds
+      setTimeout(() => {
+        const map = this.visualizationEngine.getMap();
+        if (map) {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }
+      }, 200);
     });
 
     // Render route event (from LLM integration)
@@ -440,6 +459,22 @@ class Application {
       }
     }) as EventListener);
 
+    // Trigger viewport refresh event (from filter changes in viewport mode)
+    // Reloads airports within current viewport bounds using updated filters
+    window.addEventListener('trigger-viewport-refresh', (() => {
+      const map = this.visualizationEngine.getMap();
+      if (!map) return;
+
+      const bounds = map.getBounds();
+      const bbox: BoundingBox = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        west: bounds.getWest()
+      };
+      this.fetchAirportsInViewport(bbox);
+    }) as EventListener);
+
     // Relevance tab listener and Persona selector listener moved to UIManager
 
 
@@ -507,12 +542,14 @@ class Application {
       }
     }) as EventListener);
 
-    // Map move/zoom events for URL sync
+    // Map move/zoom events for URL sync and viewport-based airport loading
     // Use a flag to prevent infinite loops
     const map = this.visualizationEngine.getMap();
     if (map) {
       // Debounce map view updates to prevent infinite loops
       let mapUpdateTimeout: number | null = null;
+      // Separate timeout for viewport loading (longer debounce)
+      let viewportLoadTimeout: number | null = null;
 
       map.on('moveend zoomend', () => {
         // Skip if we're updating from store (to prevent infinite loop)
@@ -520,7 +557,7 @@ class Application {
           return;
         }
 
-        // Debounce to prevent rapid-fire updates
+        // Debounce map view state updates (300ms)
         if (mapUpdateTimeout) {
           clearTimeout(mapUpdateTimeout);
         }
@@ -543,7 +580,22 @@ class Application {
             });
           }
         }, 300); // Debounce 300ms
-        // URL sync will be handled separately
+
+        // Debounce viewport-based airport loading (500ms)
+        if (viewportLoadTimeout) {
+          clearTimeout(viewportLoadTimeout);
+        }
+
+        viewportLoadTimeout = window.setTimeout(() => {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }, 500); // Debounce 500ms for API calls
       });
     }
   }
@@ -656,6 +708,36 @@ class Application {
         this.store.getState().setError('Error loading airports: ' + (error.message || 'Unknown error'));
         this.store.getState().setLoading(false);
       }
+    }
+  }
+
+  /**
+   * Fetch airports within the current viewport bounds
+   */
+  private async fetchAirportsInViewport(bbox: BoundingBox): Promise<void> {
+    const store = this.store as any;
+    const state = store.getState();
+
+    // Skip if route or locate is active (don't override those results)
+    if (state.route || state.locate) {
+      return;
+    }
+
+    try {
+      // Set flag to prevent fitBounds during viewport loading
+      this.isViewportLoading = true;
+      store.getState().setLoading(true);
+      const response = await this.apiAdapter.getAirportsByBounds(bbox, state.filters);
+      store.getState().setAirports(response.data);
+    } catch (error: any) {
+      console.error('Error loading airports in viewport:', error);
+      // Don't show error to user for viewport loading - just log it
+    } finally {
+      store.getState().setLoading(false);
+      // Reset flag after a short delay to ensure subscription has processed
+      setTimeout(() => {
+        this.isViewportLoading = false;
+      }, 100);
     }
   }
 
