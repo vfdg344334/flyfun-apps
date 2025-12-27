@@ -9,25 +9,16 @@ http://mcp.flyfun.aero {
 # HTTPS configuration
 https://mcp.flyfun.aero {
     # Automatic HTTPS with Let's Encrypt (Caddy handles this automatically)
-    # No need to specify certificate paths - Caddy manages them
     
-    # Security headers (replicating Apache2 config)
     header {
-        # Strict Transport Security
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        # X-Frame-Options
         X-Frame-Options "DENY"
-        # X-Content-Type-Options
         X-Content-Type-Options "nosniff"
-        # X-XSS-Protection
         X-XSS-Protection "1; mode=block"
-        # Cache-Control
         Cache-Control "public, max-age=3600"
     }
     
     # Reverse proxy to MCP server
-    # Proxy /euro_aip to /mcp on the MCP server (replicating Apache2 ProxyPass)
-    # Apache config: ProxyPass /euro_aip http://127.0.0.1:8001/mcp
     # This means: /euro_aip -> /mcp, /euro_aip/foo -> /mcp/foo
     handle /euro_aip* {
         # Rewrite URI: replace /euro_aip with /mcp, preserving any trailing path
@@ -35,10 +26,7 @@ https://mcp.flyfun.aero {
         reverse_proxy <docker-host-ip-or-hostname>:8002 {
             # Preserve host header
             header_up Host {host}
-            # Forward original request info
             header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
         }
     }
     
