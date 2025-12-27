@@ -3,42 +3,41 @@
 
 # HTTP to HTTPS redirect
 http://mcp.flyfun.aero {
-    redir https://mcp.flyfun.aero{uri} permanent
+	redir https://mcp.flyfun.aero{uri} permanent
 }
 
 # HTTPS configuration
 https://mcp.flyfun.aero {
-    # Automatic HTTPS with Let's Encrypt (Caddy handles this automatically)
-    
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        X-Frame-Options "DENY"
-        X-Content-Type-Options "nosniff"
-        X-XSS-Protection "1; mode=block"
-        Cache-Control "public, max-age=3600"
-    }
-    
-    # Reverse proxy to MCP server
-    # This means: /euro_aip -> /mcp, /euro_aip/foo -> /mcp/foo
-    handle /euro_aip* {
-        # Rewrite URI: replace /euro_aip with /mcp, preserving any trailing path
-        uri replace /euro_aip /mcp
-        reverse_proxy <docker-host-ip-or-hostname>:8002 {
-            # Preserve host header
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-        }
-    }
-    
-    # Block all other paths (replicating Apache2 LocationMatch)
-    handle {
-        respond "Not Found" 403
-    }
-    
-    # Logging (Caddy logs to stdout/stderr by default in Docker)
-    log {
-        output stdout
-        format console
-    }
-}
+	# Automatic HTTPS with Let's Encrypt (Caddy handles this automatically)
 
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		X-XSS-Protection "1; mode=block"
+		Cache-Control "public, max-age=3600"
+	}
+
+	# Reverse proxy to MCP server
+	# This means: /euro_aip -> /mcp, /euro_aip/foo -> /mcp/foo
+	handle /euro_aip* {
+		# Rewrite URI: replace /euro_aip with /mcp, preserving any trailing path
+		uri replace /euro_aip /mcp
+		reverse_proxy <docker-host-ip-or-hostname>:8002 {
+			# Preserve host header
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Block all other paths (replicating Apache2 LocationMatch)
+	handle {
+		respond "Not Found" 403
+	}
+
+	# Logging (Caddy logs to stdout/stderr by default in Docker)
+	log {
+		output stdout
+		format console
+	}
+}
