@@ -157,7 +157,32 @@
     --link-visited: #c4b5fd;
 }
 
-/* ===== Override Bootstrap's text-muted for dark mode ===== */
+/* ===== Override Bootstrap classes for dark mode ===== */
 [data-theme="dark"] .text-muted {
     color: var(--text-secondary) !important;
+}
+
+/* Form controls */
+[data-theme="dark"] .form-control,
+[data-theme="dark"] .form-select {
+    background-color: var(--input-bg);
+    color: var(--text-primary);
+    border-color: var(--input-border);
+}
+
+[data-theme="dark"] .form-control:focus,
+[data-theme="dark"] .form-select:focus {
+    background-color: var(--input-bg);
+    color: var(--text-primary);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(129, 140, 248, 0.25);
+}
+
+[data-theme="dark"] .form-control::placeholder {
+    color: var(--text-light);
+}
+
+/* Labels */
+[data-theme="dark"] label {
+    color: var(--text-primary);
 }
