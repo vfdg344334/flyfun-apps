@@ -177,3 +177,25 @@ Used git worktrees to run multiple AI agents in parallel on different components
 
 **7. Living documentation**
 Regular use of the AI to review and compare README files and design documents against the actual codebase, keeping documentation in sync with implementation changes. This ensures the design docs remain accurate context anchors rather than drifting into obsolescence.
+
+### Scale (as of December 2025)
+
+Using the approaches above, here's what was built in the first 7 weeks of development:
+
+| Language | Lines | Details |
+|----------|------:|---------|
+| **Python** | **34,869** | |
+| ↳ shared/ | 19,182 | Aviation agent, filtering, GA friendliness |
+| ↳ tests/ | 6,219 | Test suite |
+| ↳ tools/ | 4,979 | CLI utilities |
+| ↳ web/server/ | 3,340 | FastAPI backend |
+| ↳ mcp_server/ | 287 | MCP server |
+| **TypeScript** | **7,722** | Web frontend (web/client/ts/) |
+| **Swift** | **10,980** | iOS app |
+| **Design docs** | **16,383** | Architecture documentation |
+
+| Category | Lines |
+|----------|------:|
+| Source code | ~53,500 |
+| Documentation | ~16,400 |
+| **Total** | **~70,000** |
