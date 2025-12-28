@@ -35,7 +35,8 @@ from shared.airport_tools import (
     find_airports_near_location as shared_find_airports_near_location,
     get_airport_details as shared_get_airport_details,
     get_notification_for_airport as shared_get_notification_for_airport,
-    list_rules_for_country as shared_list_rules_for_country,
+    answer_rules_question as shared_answer_rules_question,
+    browse_rules as shared_browse_rules,
     compare_rules_between_countries as shared_compare_rules_between_countries,
 )
 from shared.tool_context import ToolContext
@@ -198,48 +199,51 @@ def get_notification_for_airport(
     return shared_get_notification_for_airport(context, icao, day_of_week)
 
 
-@mcp.tool(name="list_rules_for_country", description=_desc(shared_list_rules_for_country))
-def list_rules_for_country(country: str,
-                           category: Optional[str] = None,
-                           tags: Optional[List[str]] = None,
-                           include_unanswered: bool = False,
-                           search: Optional[str] = None,
-                           tags_mode: str = "any",
-                           ctx: Context = None) -> Dict[str, Any]:
+@mcp.tool(name="answer_rules_question", description=_desc(shared_answer_rules_question))
+def answer_rules_question(
+    country_code: str,
+    question: str,
+    tags: Optional[List[str]] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Answer a specific question about aviation rules for a country using RAG."""
     context = _require_tool_context()
-    if include_unanswered or tags_mode != "any":  # features not currently exposed via shared helper
-        raise ValueError("include_unanswered and tags_mode parameters are not supported in this implementation.")
-    result = shared_list_rules_for_country(context, country, category=category, tags=tags)
-    return result
+    return shared_answer_rules_question(context, country_code, question, tags=tags)
+
+
+@mcp.tool(name="browse_rules", description=_desc(shared_browse_rules))
+def browse_rules(
+    country_code: str,
+    tags: Optional[List[str]] = None,
+    offset: int = 0,
+    limit: int = 10,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Browse/list aviation rules for a country with pagination."""
+    context = _require_tool_context()
+    return shared_browse_rules(context, country_code, tags=tags, offset=offset, limit=limit)
 
 
 @mcp.tool(name="compare_rules_between_countries", description=_desc(shared_compare_rules_between_countries))
-def compare_rules_between_countries(country_a: str,
-                                    country_b: str,
-                                    category: Optional[str] = None,
-                                    tag: Optional[str] = None,
-                                    ctx: Context = None) -> Dict[str, Any]:
+def compare_rules_between_countries(
+    countries: List[str],
+    tags: Optional[List[str]] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Compare aviation rules between multiple countries."""
     context = _require_tool_context()
-    result = shared_compare_rules_between_countries(
-        context,
-        country1=country_a,
-        country2=country_b,
-        category=category,
-        tag=tag,
-    )
+    result = shared_compare_rules_between_countries(context, countries=countries, tags=tags)
     return {
         "found": result.get("found", False),
         "countries": result.get("countries", []),
-        "category": category,
-        "tag": tag,
+        "tags": tags,
         "total_questions": result.get("total_questions"),
         "questions_analyzed": result.get("questions_analyzed"),
         "filtered_by_embedding": result.get("filtered_by_embedding", False),
         "differences": result.get("differences", []),
-        "synthesis": result.get("synthesis"),
-        "formatted_summary": result.get("formatted_summary"),
         "total_differences": result.get("total_differences"),
-        "pretty": result.get("formatted_summary"),
+        "rules_context": result.get("rules_context"),
+        "message": result.get("message"),
     }
 
 
