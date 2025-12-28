@@ -159,3 +159,6 @@ Frequent reviews where one model critiques another's implementation. Claude woul
 
 **6. Parallel agents via git worktrees**
 Used git worktrees to run multiple AI agents in parallel on different components: one agent on the iOS app, another on the LLM agent, and a third on the web frontend. Each agent was given explicit rules to focus only on its assigned area and to produce request documents when needing functionality from another component (e.g., requesting a shared library feature). This mimics a team workflow and prevents agents from making conflicting changes.
+
+**7. Living documentation**
+Regular use of the AI to review and compare README files and design documents against the actual codebase, keeping documentation in sync with implementation changes. This ensures the design docs remain accurate context anchors rather than drifting into obsolescence.
