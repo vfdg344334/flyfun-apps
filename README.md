@@ -106,6 +106,10 @@ python main.py
 
 Add to Claude or ChatGPT via their MCP configuration using `mcp-flyfun.json`.
 
+### Docker deployment
+
+A full Docker Compose setup is provided for production deployment of the web server and MCP server. See `designs/DOCKER_DEPLOYMENT.md` for configuration and deployment instructions.
+
 ### 4. Build the iOS app
 
 Open `app/FlyFunEuroAIP/FlyFunEuroAIP.xcodeproj` in Xcode. See `designs/IOS_APP_DESIGN.md`.
@@ -158,7 +162,7 @@ Focus on maintaining high-value tests that the AI runs constantly during develop
 Frequent reviews where one model critiques another's implementation. Claude would produce review documents of Cursor's code, and vice-versa. This adversarial approach catches issues that a single model might miss and produces more robust designs.
 
 **6. Parallel agents via git worktrees**
-Used git worktrees to run multiple AI agents in parallel on different components: one agent on the iOS app, another on the LLM agent, and a third on the web frontend. Each agent was given explicit rules to focus only on its assigned area and to produce request documents when needing functionality from another component (e.g., requesting a shared library feature). This mimics a team workflow and prevents agents from making conflicting changes.
+Used git worktrees to run multiple AI agents in parallel on different components: for instance, one agent on the iOS app, another on the LLM agent, and a third on the web frontend. Each agent was given explicit rules to focus only on its assigned area and to produce request documents when needing functionality from another component (e.g., requesting a shared library feature). This mimics a team workflow and prevents agents from making conflicting changes.
 
 **7. Living documentation**
 Regular use of the AI to review and compare README files and design documents against the actual codebase, keeping documentation in sync with implementation changes. This ensures the design docs remain accurate context anchors rather than drifting into obsolescence.
