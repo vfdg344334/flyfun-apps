@@ -61,6 +61,17 @@ Key variables:
 
 See `env.sample` for the full list.
 
+## LLM Chatbot
+
+The web app includes an AI chatbot specialized in European airports and flying rules. This is an experiment in building a domain-specific assistant that can answer pilot questions accurately while also driving the UI dynamically.
+
+**Goals:**
+- **Specialized knowledge** – Answer questions about airport facilities, customs requirements, notification rules, and country-specific regulations across Europe.
+- **UI-driven by conversation** – The chatbot can update the map, apply filters, and display airport details based on the discussion—reducing the need for users to navigate complex UI controls. Ask "show me airports with AVGAS near Lyon" and the map responds.
+- **Continuous improvement** – Flexible configuration (`configs/aviation_agent/`) and behavior tests allow iterating on prompts, model selection, and agent logic to improve answer quality over time.
+
+See `designs/LLM_AGENT_DESIGN.md` for the LangGraph agent architecture and `designs/AVIATION_AGENT_CONFIGURATION_DESIGN.md` for tuning behavior.
+
 ## Getting Started
 
 **Note:** This repository uses Git LFS to store large binary files (`airports.db`). Install Git LFS before cloning.
@@ -162,7 +173,7 @@ Focus on maintaining high-value tests that the AI runs constantly during develop
 Frequent reviews where one model critiques another's implementation. Claude would produce review documents of Cursor's code, and vice-versa. This adversarial approach catches issues that a single model might miss and produces more robust designs.
 
 **6. Parallel agents via git worktrees**
-Used git worktrees to run multiple AI agents in parallel on different components: for instance, one agent on the iOS app, another on the LLM agent, and a third on the web frontend. Each agent was given explicit rules to focus only on its assigned area and to produce request documents when needing functionality from another component (e.g., requesting a shared library feature). This mimics a team workflow and prevents agents from making conflicting changes.
+Used git worktrees to run multiple AI agents in parallel on different components: for instance, one agent on the iOS app, another on the LLM agent, and a third on the web frontend. Each agent was given explicit rules to focus only on its assigned area and to produce request documents when needing functionality from another component (e.g., requesting a shared library feature). This mimics a team workflow and prevents agents from making conflicting changes. This provided significant development speed and scale.
 
 **7. Living documentation**
 Regular use of the AI to review and compare README files and design documents against the actual codebase, keeping documentation in sync with implementation changes. This ensures the design docs remain accurate context anchors rather than drifting into obsolescence.
