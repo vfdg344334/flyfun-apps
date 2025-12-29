@@ -293,7 +293,7 @@ def classify_facility(text: Optional[str]) -> str:
 
     Analyzes text descriptions from AIP to determine whether a facility
     (hotel, restaurant, etc.) is located at the airport, in the vicinity,
-    or not available.
+    not available, or unknown.
 
     Args:
         text: AIP text describing facility availability
@@ -301,15 +301,20 @@ def classify_facility(text: Optional[str]) -> str:
     Returns:
         "at_airport" - Facility is on-site at the airport
         "vicinity" - Facility is nearby/in vicinity
-        "none" - No facility or unknown
+        "none" - Explicit "no facility" in AIP
+        "unknown" - No data or unrecognized text
     """
     if not isinstance(text, str):
-        return "none"
+        return "unknown"
 
     s = text.strip()
 
-    # Empty or explicit "no" indicators
-    if not s or s.lower() in {"-", "nil"}:
+    # Empty string = no data
+    if not s:
+        return "unknown"
+
+    # Explicit "no" indicators
+    if s.lower() in {"-", "nil"}:
         return "none"
     if re.match(r"^\s*no\.?\s*$", s, re.IGNORECASE):
         return "none"
@@ -322,7 +327,8 @@ def classify_facility(text: Optional[str]) -> str:
     if PAT_VICINITY.search(s):
         return "vicinity"
 
-    return "none"
+    # Unrecognized text = unknown
+    return "unknown"
 
 
 def parse_hospitality_text_to_int(text: Optional[str]) -> int:
@@ -332,21 +338,31 @@ def parse_hospitality_text_to_int(text: Optional[str]) -> int:
     Converts textual descriptions of hotel/restaurant availability
     into a standardized integer encoding for storage in the database.
 
+    Integer Encoding Convention:
+        -1 = unknown (no data or unrecognized text)
+         0 = none (explicit "no" in AIP)
+         1 = vicinity (nearby but not on-site)
+         2 = at_airport (on-site facility)
+
+    Rationale: All known values are non-negative (>= 0), making filtering simpler:
+        >= 0 means "we have data for this airport"
+        >= 1 means "has facility (any location)"
+
     Args:
         text: AIP text describing hotel/restaurant availability
 
     Returns:
-        0 = unknown/none
-        1 = vicinity (nearby but not on-site)
-        2 = at_airport (on-site facility)
+        Integer encoding as described above
     """
     classification = classify_facility(text)
     if classification == "at_airport":
         return 2
     elif classification == "vicinity":
         return 1
-    else:
+    elif classification == "none":
         return 0
+    else:  # "unknown"
+        return -1
 
 
 # Default label score mappings

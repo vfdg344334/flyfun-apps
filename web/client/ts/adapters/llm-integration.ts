@@ -125,6 +125,8 @@ export class LLMIntegration {
       'min_runway_length_ft',
       'max_runway_length_ft',
       'max_landing_fee',
+      'hotel',
+      'restaurant',
     ];
 
     return meaningfulFilterKeys.some(key => {

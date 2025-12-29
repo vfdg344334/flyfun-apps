@@ -576,6 +576,96 @@ class GAMetaStorage(StorageInterface):
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to update fees for {icao}: {e}")
 
+    def upsert_aip_only(
+        self,
+        icao: str,
+        aip_ifr_available: int,
+        aip_night_available: int,
+        aip_hotel_info: Optional[int],
+        aip_restaurant_info: Optional[int],
+        aip_ops_ifr_score: Optional[float],
+        aip_hospitality_score: Optional[float],
+    ) -> bool:
+        """
+        Update or insert only AIP-derived fields for an airport.
+
+        Works for airports not yet in ga_airfield_stats (creates minimal entry).
+        Does not touch review-derived fields.
+
+        Args:
+            icao: Airport ICAO code
+            aip_ifr_available: IFR availability (0-2)
+            aip_night_available: Night ops availability (0-2)
+            aip_hotel_info: Hotel info (-1=unknown, 0=none, 1=vicinity, 2=at_airport)
+            aip_restaurant_info: Restaurant info (-1=unknown, 0=none, 1=vicinity, 2=at_airport)
+            aip_ops_ifr_score: Computed IFR score (0-1)
+            aip_hospitality_score: Computed hospitality score (0-1)
+
+        Returns:
+            True if inserted (new airport), False if updated (existing)
+        """
+        self._check_readonly()
+
+        with self._lock:
+            try:
+                conn = self._get_connection()
+
+                # Check if airport exists
+                cursor = conn.execute(
+                    "SELECT 1 FROM ga_airfield_stats WHERE icao = ?", (icao,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Update only AIP fields
+                    conn.execute("""
+                        UPDATE ga_airfield_stats SET
+                            aip_ifr_available = ?,
+                            aip_night_available = ?,
+                            aip_hotel_info = ?,
+                            aip_restaurant_info = ?,
+                            aip_ops_ifr_score = ?,
+                            aip_hospitality_score = ?
+                        WHERE icao = ?
+                    """, (
+                        aip_ifr_available,
+                        aip_night_available,
+                        aip_hotel_info,
+                        aip_restaurant_info,
+                        aip_ops_ifr_score,
+                        aip_hospitality_score,
+                        icao,
+                    ))
+                else:
+                    # Insert minimal entry with only AIP fields
+                    conn.execute("""
+                        INSERT INTO ga_airfield_stats (
+                            icao,
+                            aip_ifr_available,
+                            aip_night_available,
+                            aip_hotel_info,
+                            aip_restaurant_info,
+                            aip_ops_ifr_score,
+                            aip_hospitality_score
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        icao,
+                        aip_ifr_available,
+                        aip_night_available,
+                        aip_hotel_info,
+                        aip_restaurant_info,
+                        aip_ops_ifr_score,
+                        aip_hospitality_score,
+                    ))
+
+                if not self._in_transaction:
+                    conn.commit()
+
+                return not exists
+
+            except sqlite3.Error as e:
+                raise StorageError(f"Failed to upsert AIP data for {icao}: {e}")
+
     # --- Resume Support ---
 
     def get_last_successful_icao(self) -> Optional[str]:

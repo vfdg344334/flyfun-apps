@@ -27,8 +27,29 @@ This document describes the design for enhanced AIP (Aeronautical Information Pu
 |-------|------|--------|---------------------|
 | `aip_ifr_available` | INTEGER | 0-4 (VFR only → ILS) | 207 |
 | `aip_night_available` | INTEGER | 0-1 | - |
-| `aip_hotel_info` | INTEGER | 0=none, 1=vicinity, 2=at_airport | 501 |
-| `aip_restaurant_info` | INTEGER | 0=none, 1=vicinity, 2=at_airport | 502 |
+| `aip_hotel_info` | INTEGER | -1=unknown, 0=none, 1=vicinity, 2=at_airport | 501 |
+| `aip_restaurant_info` | INTEGER | -1=unknown, 0=none, 1=vicinity, 2=at_airport | 502 |
+
+**Integer Encoding Convention (IMPORTANT):**
+| Integer | String | Meaning |
+|---------|--------|---------|
+| -1 | `"unknown"` | No data or unrecognized text |
+| 0 | `"none"` | Explicit "no" in AIP (e.g., "No hotel", "Nil", "-") |
+| 1 | `"vicinity"` | Facility nearby (not on-site) |
+| 2 | `"at_airport"` | Facility on-site at the airport |
+
+**Rationale:** All known values are non-negative (`>= 0`). This makes filtering simpler:
+- `>= 0` = "we have data for this airport"
+- `>= 1` = "has facility (any location)"
+- Values are ordinal: 0=none < 1=vicinity < 2=at_airport
+
+**Consistency Requirement:** These names (`unknown`, `none`, `vicinity`, `at_airport`) MUST be used consistently across:
+- Database integer encoding
+- `features.py` classification functions
+- `service.py` return values (decoded strings)
+- Filter enum values
+- TypeScript types
+- UI display labels
 
 **Computed Feature Scores:**
 | Feature | Computation | Range |
@@ -41,7 +62,8 @@ This document describes the design for enhanced AIP (Aeronautical Information Pu
 # Hospitality classification using regex patterns
 "at_airport" (value=2): "yes", "at airport", "on site", "in terminal"
 "vicinity" (value=1): "nearby", "within N km", "near the airport"
-"none" (value=0): empty, "-", "no.", unrecognized
+"none" (value=0): "-", "nil", "no.", explicit negatives
+"unknown" (value=-1): empty, unrecognized text (default)
 ```
 
 ### Current Limitations
@@ -83,21 +105,27 @@ This document describes the design for enhanced AIP (Aeronautical Information Pu
 
 **Principle:** Use enums instead of multiple booleans. Each structured field has a single filter parameter with enum values.
 
+**IMPORTANT - Naming Consistency:** Filter enum values MUST match the internal encoding names exactly. This ensures consistency across:
+- Database integer encoding
+- Service return values
+- Filter parameter values
+- UI display labels
+
 **Enum Values:**
 ```python
 class HospitalityFilter(str, Enum):
-    ANY = "any"           # Has hotel/restaurant (onsite OR nearby)
-    ONSITE = "onsite"     # Only at the airport (aip_*_info == 2)
-    NEARBY = "nearby"     # Only in vicinity (aip_*_info == 1)
+    ANY = "any"              # Has hotel/restaurant (at_airport OR vicinity)
+    AT_AIRPORT = "at_airport"  # Only at the airport (aip_*_info == 2)
+    VICINITY = "vicinity"      # Only in vicinity (aip_*_info == 1)
     # null/not set = no filter applied
 ```
 
 **Mapping to existing data:**
 | Filter Value | aip_hotel_info / aip_restaurant_info |
 |--------------|--------------------------------------|
-| `"any"` | >= 1 (either nearby or onsite) |
-| `"onsite"` | == 2 |
-| `"nearby"` | == 1 |
+| `"any"` | >= 1 (either vicinity or at_airport) |
+| `"at_airport"` | == 2 |
+| `"vicinity"` | == 1 |
 | null | no filter (include all) |
 
 **Note:** We don't expose "none" or "unknown" as filter values - users filter FOR availability, not against it.
@@ -107,40 +135,36 @@ class HospitalityFilter(str, Enum):
 **Add to filter parameters:**
 ```python
 # Enum filters - single parameter per field
-hotel: Optional[str] = None      # "any", "onsite", "nearby"
-restaurant: Optional[str] = None # "any", "onsite", "nearby"
+hotel: Optional[str] = None      # "any", "at_airport", "vicinity"
+restaurant: Optional[str] = None # "any", "at_airport", "vicinity"
 ```
 
-**Filter Logic:**
+**Filter Logic (uses GA service, not storage directly):**
 ```python
 def _matches_hospitality(airport: Airport, config: FilterConfig) -> bool:
-    ga_data = getattr(airport, 'ga', None)
-
-    # AIP filters require known data - exclude if no GA data
-    if config.hotel is not None or config.restaurant is not None:
-        if not ga_data:
-            return False  # No data = exclude (AIP = known data only)
+    # Use GA service for data access (not storage directly)
+    # This ensures consistent data access patterns
 
     if config.hotel is not None:
-        hotel_info = ga_data.get('aip_hotel_info')
+        hotel_info = get_hospitality_from_service(airport.ident, "hotel")
         if hotel_info is None:
-            return False  # No hotel info = exclude
-        if config.hotel == "any" and hotel_info < 1:
+            return False  # No hotel info = exclude (AIP = known data only)
+        if config.hotel == "any" and hotel_info not in ("at_airport", "vicinity"):
             return False
-        if config.hotel == "onsite" and hotel_info != 2:
+        if config.hotel == "at_airport" and hotel_info != "at_airport":
             return False
-        if config.hotel == "nearby" and hotel_info != 1:
+        if config.hotel == "vicinity" and hotel_info != "vicinity":
             return False
 
     if config.restaurant is not None:
-        restaurant_info = ga_data.get('aip_restaurant_info')
+        restaurant_info = get_hospitality_from_service(airport.ident, "restaurant")
         if restaurant_info is None:
             return False  # No restaurant info = exclude
-        if config.restaurant == "any" and restaurant_info < 1:
+        if config.restaurant == "any" and restaurant_info not in ("at_airport", "vicinity"):
             return False
-        if config.restaurant == "onsite" and restaurant_info != 2:
+        if config.restaurant == "at_airport" and restaurant_info != "at_airport":
             return False
-        if config.restaurant == "nearby" and restaurant_info != 1:
+        if config.restaurant == "vicinity" and restaurant_info != "vicinity":
             return False
 
     return True
@@ -152,8 +176,8 @@ def _matches_hospitality(airport: Airport, config: FilterConfig) -> bool:
 ```python
 FILTER_PARAMS = {
     # ... existing ...
-    "hotel": "enum (any|onsite|nearby) - Filter by hotel availability. 'any' = has hotel, 'onsite' = hotel at airport, 'nearby' = hotel in vicinity",
-    "restaurant": "enum (any|onsite|nearby) - Filter by restaurant availability. 'any' = has restaurant, 'onsite' = at airport, 'nearby' = in vicinity",
+    "hotel": "enum (any|at_airport|vicinity) - Filter by hotel availability. 'any' = has hotel, 'at_airport' = hotel at airport, 'vicinity' = hotel nearby",
+    "restaurant": "enum (any|at_airport|vicinity) - Filter by restaurant availability. 'any' = has restaurant, 'at_airport' = at airport, 'vicinity' = nearby",
 }
 ```
 
@@ -162,15 +186,15 @@ FILTER_PARAMS = {
 **Add to planner filter extraction guidance:**
 ```
 Hospitality Filters (enum values):
-- hotel: "any" | "onsite" | "nearby" | null
-- restaurant: "any" | "onsite" | "nearby" | null
+- hotel: "any" | "at_airport" | "vicinity" | null
+- restaurant: "any" | "at_airport" | "vicinity" | null
 
 Extraction rules:
 - "airports with hotels" → hotel: "any"
-- "hotel at the airport" / "hotel on site" → hotel: "onsite"
-- "hotel nearby" / "hotel in the area" → hotel: "nearby"
+- "hotel at the airport" / "hotel on site" → hotel: "at_airport"
+- "hotel nearby" / "hotel in the area" → hotel: "vicinity"
 - "lunch stop" / "place to eat" → restaurant: "any"
-- "restaurant on the field" → restaurant: "onsite"
+- "restaurant on the field" → restaurant: "at_airport"
 - "overnight with dining" → hotel: "any", restaurant: "any"
 ```
 
@@ -184,20 +208,20 @@ Extraction rules:
   <div class="filter-row">
     <label for="hotel-filter">Hotel</label>
     <select id="hotel-filter">
-      <option value="">Any</option>
-      <option value="any">Available (any)</option>
-      <option value="onsite">On-site only</option>
-      <option value="nearby">Nearby only</option>
+      <option value="">No filter</option>
+      <option value="any">Available (any location)</option>
+      <option value="at_airport">At airport only</option>
+      <option value="vicinity">Nearby only</option>
     </select>
   </div>
 
   <div class="filter-row">
     <label for="restaurant-filter">Restaurant</label>
     <select id="restaurant-filter">
-      <option value="">Any</option>
-      <option value="any">Available (any)</option>
-      <option value="onsite">On-site only</option>
-      <option value="nearby">Nearby only</option>
+      <option value="">No filter</option>
+      <option value="any">Available (any location)</option>
+      <option value="at_airport">At airport only</option>
+      <option value="vicinity">Nearby only</option>
     </select>
   </div>
 </div>
@@ -215,8 +239,8 @@ Extraction rules:
     <summary>Location options</summary>
     <div class="radio-group">
       <label><input type="radio" name="hotel-location" value="any" checked> Any</label>
-      <label><input type="radio" name="hotel-location" value="onsite"> On-site</label>
-      <label><input type="radio" name="hotel-location" value="nearby"> Nearby</label>
+      <label><input type="radio" name="hotel-location" value="at_airport"> At airport</label>
+      <label><input type="radio" name="hotel-location" value="vicinity"> Nearby</label>
     </div>
   </details>
 </div>
@@ -264,11 +288,11 @@ maintenance: "any" | "minor" | "full" | null
 | User Query | Extracted Filters |
 |------------|-------------------|
 | "Airports with hotels" | `hotel: "any"` |
-| "Airports with hotel at the airport" | `hotel: "onsite"` |
+| "Airports with hotel at the airport" | `hotel: "at_airport"` |
 | "Airports with restaurants and hotels" | `hotel: "any", restaurant: "any"` |
 | "Good lunch stop near Paris" | `restaurant: "any"` (+ location) |
-| "Overnight stop with dining on site" | `hotel: "onsite", restaurant: "onsite"` |
-| "Hotel nearby is fine" | `hotel: "nearby"` |
+| "Overnight stop with dining on site" | `hotel: "at_airport", restaurant: "at_airport"` |
+| "Hotel nearby is fine" | `hotel: "vicinity"` |
 
 ### Example Plan
 
@@ -428,7 +452,7 @@ Filter: Query euro_aip with hospitality filter
 class HotelFilter(Filter):
     """Filter airports by hotel availability."""
     name = "hotel"
-    description = "Filter by hotel availability (any|onsite|nearby)"
+    description = "Filter by hotel availability (any|at_airport|vicinity)"
 
     def apply(
         self,
@@ -443,20 +467,23 @@ class HotelFilter(Filter):
             return False  # No GA service - exclude (AIP = known data only)
 
         try:
-            summary = context.ga_friendliness_service.get_summary(airport.ident)
-            if not summary or not summary.features:
+            # Use service method (not storage directly) for consistent access
+            summary = context.ga_friendliness_service.get_summary_dict(airport.ident)
+            if not summary or not summary.get("has_data"):
                 return False  # No data - exclude (AIP = known data only)
 
-            hotel_info = summary.features.get('aip_hotel_info')
-            if hotel_info is None:
-                return False  # No hotel info - exclude
+            # hotel_info is a string: "at_airport", "vicinity", "none", "unknown", or None
+            hotel_info = summary.get('hotel_info')
+            if hotel_info is None or hotel_info == "unknown":
+                return False  # No data - exclude
 
             if value == "any":
-                return hotel_info >= 1
-            elif value == "onsite":
-                return hotel_info == 2
-            elif value == "nearby":
-                return hotel_info == 1
+                # "any" means has facility (at_airport or vicinity), excludes "none"
+                return hotel_info in ("at_airport", "vicinity")
+            elif value == "at_airport":
+                return hotel_info == "at_airport"
+            elif value == "vicinity":
+                return hotel_info == "vicinity"
             else:
                 return True  # Unknown filter value - don't filter
         except Exception:
@@ -467,6 +494,7 @@ class HotelFilter(Filter):
 - AIP filters = "show me what we *know*" → exclude unknown
 - Different from scoring (fuzzy) - this is exact data
 - If GA service unavailable, exclude (fail closed)
+- **Use service, not storage directly** - ensures consistent data access patterns
 
 ### Keeping Definitions in Sync
 
@@ -501,8 +529,8 @@ To maintain consistency, adding `hotel` and `restaurant` filters requires:
    - Uses existing `context.ga_friendliness_service` (already available)
 
 2. **TypeScript FilterConfig** (`web/client/ts/store/types.ts`)
-   - Add `hotel: 'any' | 'onsite' | 'nearby' | null`
-   - Add `restaurant: 'any' | 'onsite' | 'nearby' | null`
+   - Add `hotel: 'any' | 'at_airport' | 'vicinity' | null`
+   - Add `restaurant: 'any' | 'at_airport' | 'vicinity' | null`
 
 3. **LLMIntegration meaningfulFilterKeys** (`web/client/ts/adapters/llm-integration.ts`)
    - Add `'hotel'`, `'restaurant'` to the list
@@ -534,9 +562,24 @@ To maintain consistency, adding `hotel` and `restaurant` filters requires:
 - **Data Flow:** Option A (post-fetch filtering) - simple, measure first
 - **Filter Sync Strategy:** Solution C (tests) - pragmatic for now
 - **FilterContext GA Access:** Already solved - `ToolContext.ga_friendliness_service` exists
-- **UI Approach:** Dropdown for enum values (any/onsite/nearby)
+- **UI Approach:** Dropdown for enum values (any/at_airport/vicinity)
 - **Presets:** No dedicated presets - use manual selection or chatbot for complex filter combinations
-- **Display Labels:** Text labels first ("Hotel on-site", "Restaurant nearby"), icons can come later
+- **Display Labels:** Text labels first ("Hotel at airport", "Restaurant nearby"), icons can come later
+- **Naming Consistency:** Use consistent names across all layers: `at_airport`, `vicinity`, `none`, `unknown`
+  - Filter enum values match database encoding names exactly
+  - Service returns decoded strings matching these names
+  - No translation layer needed between filter values and stored data
+- **Unknown vs None Distinction:**
+  - `unknown` (-1) = No data or unrecognized text
+  - `none` (0) = Explicit "no" in AIP (e.g., "No hotel", "Nil")
+  - All known values are non-negative (`>= 0`), making filtering simpler
+  - This distinction is important for data quality tracking (how many airports have explicit info vs missing)
+- **Service Access:** Filters use `ga_friendliness_service` methods (not storage directly)
+  - Ensures consistent data access patterns
+  - Service handles decoding and data availability checks
+- **API Parameter Pass-through:** Filters are passed generically via `filters` dict
+  - No need to add explicit parameters to API endpoints
+  - FilterEngine handles routing to appropriate filter classes
 
 ---
 
@@ -581,10 +624,15 @@ If specific AIP fields prove useful, classify them like hotel/restaurant:
 
 | Field | Potential Classification |
 |-------|-------------------------|
-| Maintenance | 0=none, 1=minor repairs, 2=full maintenance |
-| De-icing | 0=none, 1=available |
+| Maintenance | -1=unknown, 0=none, 1=minor repairs, 2=full maintenance |
+| De-icing | -1=unknown, 0=none, 1=available |
 | Customs | Already structured via `point_of_entry` + notification |
 | Fuel types | Already structured via `has_avgas`, `has_jet_a` |
 
 The pattern: **classify during build, filter on structured values**.
+
+**Implementation Note:** All new AIP fields should follow the same integer encoding convention:
+- `-1` = unknown / no data
+- `0` = none / explicit "no"
+- `1+` = positive values with increasing specificity (ordinal)
 

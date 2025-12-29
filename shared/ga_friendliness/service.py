@@ -366,6 +366,7 @@ class GAFriendlinessService:
             hassle_level = None  # TODO: compute from notification data if needed
 
             # Derive human-readable hospitality info from AIP-encoded fields
+            # Encoding: -1=unknown, 0=none, 1=vicinity, 2=at_airport
             def _decode_hospitality(code: Optional[int]) -> Optional[str]:
                 if code is None:
                     return None
@@ -374,6 +375,8 @@ class GAFriendlinessService:
                 if code == 1:
                     return "vicinity"
                 if code == 0:
+                    return "none"
+                if code == -1:
                     return "unknown"
                 # Fallback for unexpected values
                 return None

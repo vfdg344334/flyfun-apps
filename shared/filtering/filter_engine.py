@@ -20,6 +20,8 @@ from .filters import (
     HasJetAFilter,
     MaxLandingFeeFilter,
     TripDistanceFilter,
+    HotelFilter,
+    RestaurantFilter,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,8 @@ FilterRegistry.register(HasAvgasFilter())
 FilterRegistry.register(HasJetAFilter())
 FilterRegistry.register(MaxLandingFeeFilter())
 FilterRegistry.register(TripDistanceFilter())
+FilterRegistry.register(HotelFilter())
+FilterRegistry.register(RestaurantFilter())
 
 logger.info(f"Filter registry initialized with {len(FilterRegistry.list_all())} filters")
 

@@ -88,8 +88,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
             aip_night_available     INTEGER,    -- 0=unknown/unavailable, 1=available
 
             -- Hospitality (encoded from AIP)
-            aip_hotel_info          INTEGER,   -- 0=unknown, 1=vicinity, 2=at_airport
-            aip_restaurant_info     INTEGER,   -- 0=unknown, 1=vicinity, 2=at_airport
+            aip_hotel_info          INTEGER,   -- -1=unknown, 0=none, 1=vicinity, 2=at_airport
+            aip_restaurant_info     INTEGER,   -- -1=unknown, 0=none, 1=vicinity, 2=at_airport
 
             -- ============================================
             -- REVIEW-DERIVED FEATURE SCORES (0.0-1.0)
