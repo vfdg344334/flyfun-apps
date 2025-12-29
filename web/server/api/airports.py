@@ -119,6 +119,9 @@ async def get_airports(
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
     has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
     point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports"),
+    # Hospitality filters (from GA friendliness data)
+    hotel: Optional[str] = Query(None, description="Filter by hotel availability: at_airport, vicinity", max_length=20),
+    restaurant: Optional[str] = Query(None, description="Filter by restaurant availability: at_airport, vicinity", max_length=20),
     # New AIP field filters
     aip_field: Optional[str] = Query(None, description="AIP standardized field name to filter by", max_length=100),
     aip_value: Optional[str] = Query(None, description="Value to search for in the AIP field", max_length=200),
@@ -191,6 +194,17 @@ async def get_airports(
             airports = airports.border_crossings()
         else:
             airports = airports.filter(lambda a: not a.point_of_entry)
+
+    # Apply hospitality filtering (hotel/restaurant)
+    if hotel or restaurant:
+        ga_service = get_ga_service()
+        if ga_service and ga_service.enabled:
+            matching_icaos = ga_service.get_icaos_by_hospitality(hotel=hotel, restaurant=restaurant)
+            if matching_icaos:
+                airports = airports.filter(lambda a: a.ident in matching_icaos)
+            else:
+                # No airports match the criteria
+                airports = airports.filter(lambda a: False)
 
     # Apply AIP field filtering
     if aip_field:

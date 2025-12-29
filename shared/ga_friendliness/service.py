@@ -419,6 +419,26 @@ class GAFriendlinessService:
                 "restaurant_info": None
             }
 
+    def get_icaos_by_hospitality(
+        self,
+        hotel: Optional[str] = None,
+        restaurant: Optional[str] = None,
+    ) -> set:
+        """
+        Get set of ICAOs matching hospitality filter criteria.
+
+        Args:
+            hotel: "at_airport", "vicinity", or None (no filter)
+            restaurant: "at_airport", "vicinity", or None (no filter)
+
+        Returns:
+            Set of matching ICAO codes. Returns empty set if service disabled
+            or no filters specified.
+        """
+        if not self._enabled or not self.storage:
+            return set()
+        return self.storage.get_icaos_by_hospitality(hotel=hotel, restaurant=restaurant)
+
     def get_landing_fee_by_weight(
         self,
         icao: str,

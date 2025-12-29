@@ -568,6 +568,25 @@ export class UIManager {
       });
     }
 
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter');
+    if (hotelFilter) {
+      hotelFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ hotel: value || null });
+      });
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter');
+    if (restaurantFilter) {
+      restaurantFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ restaurant: value || null });
+      });
+    }
+
     const maxAirports = document.getElementById('max-airports-filter');
     if (maxAirports) {
       maxAirports.addEventListener('change', (e) => {
@@ -724,6 +743,17 @@ export class UIManager {
     const borderCrossing = document.getElementById('border-crossing-only') as HTMLInputElement;
     if (borderCrossing) {
       borderCrossing.checked = filters.point_of_entry === true;
+    }
+
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter') as HTMLSelectElement;
+    if (hotelFilter) {
+      hotelFilter.value = filters.hotel || '';
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter') as HTMLSelectElement;
+    if (restaurantFilter) {
+      restaurantFilter.value = filters.restaurant || '';
     }
 
     const maxAirports = document.getElementById('max-airports-filter') as HTMLSelectElement;
@@ -1441,6 +1471,17 @@ export class UIManager {
     if (filters.point_of_entry) {
       const checkbox = document.getElementById('border-crossing-only') as HTMLInputElement;
       if (checkbox) checkbox.checked = true;
+    }
+
+    // Hospitality filters
+    if (filters.hotel) {
+      const select = document.getElementById('hotel-filter') as HTMLSelectElement;
+      if (select) select.value = filters.hotel;
+    }
+
+    if (filters.restaurant) {
+      const select = document.getElementById('restaurant-filter') as HTMLSelectElement;
+      if (select) select.value = filters.restaurant;
     }
 
     // Update store filters

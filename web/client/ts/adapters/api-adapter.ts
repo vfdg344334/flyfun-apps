@@ -67,6 +67,8 @@ export class APIAdapter {
     if (filters.has_aip_data === true) params.set('has_aip_data', 'true');
     if (filters.has_hard_runway === true) params.set('has_hard_runway', 'true');
     if (filters.point_of_entry === true) params.set('point_of_entry', 'true');
+    if (filters.hotel) params.set('hotel', filters.hotel);
+    if (filters.restaurant) params.set('restaurant', filters.restaurant);
     if (filters.has_avgas === true) params.set('has_avgas', 'true');
     if (filters.has_jet_a === true) params.set('has_jet_a', 'true');
     if (filters.max_runway_length_ft) params.set('max_runway_length_ft', String(filters.max_runway_length_ft));

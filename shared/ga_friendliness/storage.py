@@ -834,3 +834,55 @@ class GAMetaStorage(StorageInterface):
                 return None
         return None
 
+    def get_icaos_by_hospitality(
+        self,
+        hotel: Optional[str] = None,
+        restaurant: Optional[str] = None,
+    ) -> Set[str]:
+        """
+        Get set of ICAOs matching hospitality filter criteria.
+
+        Args:
+            hotel: "at_airport" (value 2), "vicinity" (value 1), or None (no filter)
+            restaurant: "at_airport" (value 2), "vicinity" (value 1), or None (no filter)
+
+        Returns:
+            Set of matching ICAO codes. Returns empty set if no filters specified.
+        """
+        if hotel is None and restaurant is None:
+            return set()  # No filter
+
+        conditions = []
+        params: List[int] = []
+
+        # Map filter values to database integers
+        # Database: -1=unknown, 0=none, 1=vicinity, 2=at_airport
+        value_map = {"at_airport": 2, "vicinity": 1}
+
+        if hotel is not None:
+            db_value = value_map.get(hotel)
+            if db_value is not None:
+                conditions.append("aip_hotel_info = ?")
+                params.append(db_value)
+
+        if restaurant is not None:
+            db_value = value_map.get(restaurant)
+            if db_value is not None:
+                conditions.append("aip_restaurant_info = ?")
+                params.append(db_value)
+
+        if not conditions:
+            return set()
+
+        query = f"""
+            SELECT icao FROM ga_airfield_stats
+            WHERE {' AND '.join(conditions)}
+        """
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(query, params)
+            return {row["icao"] for row in cursor}
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to query hospitality filters: {e}")
+
