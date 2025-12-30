@@ -397,8 +397,9 @@ def _build_filter_profile(
     if not filters:
         return profile
 
-    # Direct copy keys (values matter)
-    for key in ["country", "max_runway_length_ft", "min_runway_length_ft", "max_landing_fee"]:
+    # Direct copy keys (values matter - strings or numbers, not booleans)
+    for key in ["country", "max_runway_length_ft", "min_runway_length_ft", "max_landing_fee",
+                "hotel", "restaurant"]:
         if filters.get(key):
             profile[key] = filters[key]
 

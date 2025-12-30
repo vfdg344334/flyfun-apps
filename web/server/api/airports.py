@@ -262,6 +262,9 @@ async def get_airports_near_route(
     aip_field: Optional[str] = Query(None, description="AIP standardized field name to filter by", max_length=100),
     aip_value: Optional[str] = Query(None, description="Value to search for in the AIP field", max_length=200),
     aip_operator: str = Query("contains", description="Operator for AIP field filtering: contains, equals, not_empty, starts_with, ends_with", max_length=20),
+    # Hospitality filters
+    hotel: Optional[str] = Query(None, description="Filter by hotel availability: at_airport or vicinity", max_length=20),
+    restaurant: Optional[str] = Query(None, description="Filter by restaurant availability: at_airport or vicinity", max_length=20),
     # GA Friendliness integration
     include_ga: bool = Query(True, description="Include GA friendliness scores (all personas pre-computed)"),
     # Notification data integration
@@ -346,10 +349,21 @@ async def get_airports_near_route(
         # Apply AIP field filtering
         if aip_field and not _matches_aip_field(airport, aip_field, aip_value, aip_operator):
             continue
-        
+
         # Airport passed all filters
         filtered_airports.append(item)
-    
+
+    # Apply hospitality filters (hotel/restaurant) using GA service
+    # This is done after initial filtering to minimize GA service calls
+    if hotel or restaurant:
+        ga_service = get_ga_service()
+        if ga_service and ga_service.enabled:
+            hospitality_icaos = ga_service.get_icaos_by_hospitality(hotel=hotel, restaurant=restaurant)
+            filtered_airports = [
+                item for item in filtered_airports
+                if item['airport'].ident in hospitality_icaos
+            ]
+
     # Get list of ICAOs for batch fetching
     icaos = [item['airport'].ident for item in filtered_airports]
 
@@ -394,7 +408,9 @@ async def get_airports_near_route(
             'point_of_entry': point_of_entry,
             'aip_field': aip_field,
             'aip_value': aip_value,
-            'aip_operator': aip_operator
+            'aip_operator': aip_operator,
+            'hotel': hotel,
+            'restaurant': restaurant
         },
         'airports': result
     }
@@ -411,6 +427,9 @@ async def locate_airports(
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
     has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
     point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports"),
+    # Hospitality filters
+    hotel: Optional[str] = Query(None, description="Filter by hotel availability: at_airport or vicinity", max_length=20),
+    restaurant: Optional[str] = Query(None, description="Filter by restaurant availability: at_airport or vicinity", max_length=20),
     # GA Friendliness integration
     include_ga: bool = Query(True, description="Include GA friendliness scores (all personas pre-computed)"),
     # Notification data integration
@@ -432,6 +451,10 @@ async def locate_airports(
         filters["has_hard_runway"] = has_hard_runway
     if point_of_entry is not None:
         filters["point_of_entry"] = point_of_entry
+    if hotel:
+        filters["hotel"] = hotel
+    if restaurant:
+        filters["restaurant"] = restaurant
 
     # Parse center coordinates, handling "undefined" string from frontend
     center_lat_float: Optional[float] = None

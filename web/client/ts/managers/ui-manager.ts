@@ -509,21 +509,32 @@ export class UIManager {
     // Filter controls
     // Helper to handle filter changes - if route/locate active, re-run search
     const handleFilterChange = (filterUpdate: Partial<FilterConfig>) => {
+      console.log('🔵 handleFilterChange called:', filterUpdate);
+
       // Update filters first
       this.store.getState().setFilters(filterUpdate);
 
       // Check current state after filter update
       const state = this.store.getState();
+      console.log('🔵 handleFilterChange state:', {
+        hasRoute: !!state.route,
+        routeAirports: state.route?.airports,
+        hasLocate: !!state.locate,
+        locateCenter: state.locate?.center
+      });
 
       // If we have an active route or locate, re-run the search with new filters
       if (state.route && state.route.airports) {
         // Active route search - re-run with new filters (including chatbot selections)
+        console.log('🔵 handleFilterChange: triggering applyFilters for route');
         this.applyFilters();
       } else if (state.locate && state.locate.center) {
         // Active locate search - re-run with new filters
+        console.log('🔵 handleFilterChange: triggering applyFilters for locate');
         this.applyFilters();
       } else {
         // Viewport mode - trigger a refresh with current viewport bounds
+        console.log('🔵 handleFilterChange: triggering viewport refresh');
         window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
     };
@@ -1070,6 +1081,12 @@ export class UIManager {
    */
   async applyFilters(): Promise<void> {
     const state = this.store.getState();
+    console.log('🔵 applyFilters called:', {
+      hasRoute: !!state.route,
+      routeAirports: state.route?.airports,
+      hasLocate: !!state.locate,
+      filters: state.filters
+    });
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
@@ -1077,6 +1094,7 @@ export class UIManager {
     try {
       // Route search mode - re-run with current filters
       if (state.route && state.route.airports) {
+        console.log('🔵 applyFilters: route search mode');
         // Route search mode
         await this.applyRouteSearch(state.route);
         return;
@@ -1180,7 +1198,7 @@ export class UIManager {
   }
 
   /**
-   * Handle search input
+   * Handle search input (user-initiated search from typing in search box)
    */
   private async handleSearch(query: string): Promise<void> {
     if (!query.trim()) {
@@ -1192,6 +1210,7 @@ export class UIManager {
     }
 
     // Clear LLM highlights when user initiates a new search
+    // (LLM-initiated searches use trigger-search event which bypasses this)
     window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
 
     // Check if this is a route search (4-letter ICAO codes)

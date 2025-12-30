@@ -437,13 +437,92 @@ class Application {
       this.visualizationEngine.displayRoute(e.detail.route);
     }) as EventListener);
 
-    // Trigger search event
-    window.addEventListener('trigger-search', ((e: CustomEvent<{ query: string }>) => {
-      // This will be handled by UI Manager's search handler
-      const searchInput = document.getElementById('search-input') as HTMLInputElement;
-      if (searchInput) {
-        searchInput.value = e.detail.query;
-        searchInput.dispatchEvent(new Event('input'));
+    // Trigger search event (from LLM integration)
+    // This is for programmatic searches - it updates the store and triggers the search directly,
+    // WITHOUT going through the input event (which would clear LLM highlights)
+    window.addEventListener('trigger-search', (async (e: CustomEvent<{ query: string }>) => {
+      const query = e.detail.query;
+      console.log('🔵 trigger-search event received:', query);
+
+      // Update store (UI syncs automatically via subscription)
+      this.store.getState().setSearchQuery(query);
+
+      // Parse route from query
+      const parts = query.trim().split(/\s+/).filter(part => part.length > 0);
+      const icaoPattern = /^[A-Za-z]{4}$/;
+      const allIcaoCodes = parts.every(part => icaoPattern.test(part));
+
+      if (allIcaoCodes && parts.length >= 1) {
+        // Route search - call API directly
+        const routeAirports = parts.map(part => part.toUpperCase());
+        const state = this.store.getState();
+        const distanceNm = state.filters.search_radius_nm;
+
+        try {
+          this.store.getState().setLoading(true);
+
+          // Get route airport coordinates for route line
+          const originalRouteAirports: Array<{ icao: string; lat: number; lng: number }> = [];
+          for (const icao of routeAirports) {
+            try {
+              const airport = await this.apiAdapter.getAirportDetail(icao);
+              if (airport.latitude_deg && airport.longitude_deg) {
+                originalRouteAirports.push({
+                  icao,
+                  lat: airport.latitude_deg,
+                  lng: airport.longitude_deg
+                });
+              }
+            } catch (error) {
+              console.error(`Error getting coordinates for ${icao}:`, error);
+            }
+          }
+
+          const response = await this.apiAdapter.searchAirportsNearRoute(
+            routeAirports,
+            distanceNm,
+            state.filters
+          );
+
+          // Extract airports
+          const airports = response.airports.map((item: any) => ({
+            ...item.airport,
+            _routeSegmentDistance: item.segment_distance_nm,
+            _routeEnrouteDistance: item.enroute_distance_nm,
+            _closestSegment: item.closest_segment
+          }));
+
+          this.store.getState().setAirports(airports);
+          this.store.getState().setRoute({
+            airports: routeAirports,
+            distance_nm: distanceNm,
+            originalRouteAirports,
+            isChatbotSelection: true,  // Mark as chatbot selection
+            chatbotAirports: null
+          });
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM route search: ${response.airports_found} airports within ${distanceNm}nm`);
+        } catch (error) {
+          console.error('Error in LLM route search:', error);
+          this.store.getState().setLoading(false);
+        }
+      } else {
+        // Text search - call API directly
+        try {
+          this.store.getState().setLoading(true);
+          this.store.getState().setRoute(null);
+          this.store.getState().setLocate(null);
+
+          const response = await this.apiAdapter.searchAirports(query, 50);
+          this.store.getState().setAirports(response.data);
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM text search: ${response.data.length} airports found for "${query}"`);
+        } catch (error) {
+          console.error('Error in LLM text search:', error);
+          this.store.getState().setLoading(false);
+        }
       }
     }) as EventListener);
 
