@@ -219,7 +219,7 @@ final class LocalToolDispatcher {
         
         var output = "Airports along route \(from) → \(to) (within \(maxDistanceNm) nm):\n"
         for airport in result.airports.prefix(20) {
-            output += "- \(airport.icao): \(airport.name) (\(airport.country))\n"
+            output += "- \(airport.icao) (\(airport.name)) - \(String(format: "%.4f", airport.coord.latitude))°, \(String(format: "%.4f", airport.coord.longitude))°\n"
         }
         
         return .success(output)
@@ -265,7 +265,7 @@ final class LocalToolDispatcher {
         )
         
         // Get notification details for filtering and display
-        var notificationDetails: [String: Int] = [:]
+        var notificationDetails: [String: NotificationInfo] = [:]
         if let db = notificationsDb {
             notificationDetails = getNotificationDetails(db: db, maxHours: maxHoursNotice)
         }
@@ -286,9 +286,13 @@ final class LocalToolDispatcher {
             output += "No airports found matching the criteria.\n"
         } else {
             for airport in filteredAirports.prefix(20) {
-                output += "- \(airport.icao): \(airport.name) (\(airport.country))"
-                if let hours = notificationDetails[airport.icao] {
-                    output += " - \(hours)h notice"
+                // Include coordinates for map visualization parsing
+                output += "- \(airport.icao) (\(airport.name)) - \(String(format: "%.4f", airport.coord.latitude))°, \(String(format: "%.4f", airport.coord.longitude))°"
+                if let info = notificationDetails[airport.icao] {
+                    output += " - \(info.hours)h notice"
+                    if let summary = info.summary, !summary.isEmpty {
+                        output += ", \(summary)"
+                    }
                 }
                 output += "\n"
             }
@@ -297,10 +301,16 @@ final class LocalToolDispatcher {
         return .success(output)
     }
     
-    /// Get notification hours for airports (optionally filtered by max hours)
-    private func getNotificationDetails(db: OpaquePointer, maxHours: Int?) -> [String: Int] {
-        var result: [String: Int] = [:]
-        var sql = "SELECT icao, hours_notice FROM ga_notification_requirements WHERE hours_notice IS NOT NULL AND hours_notice > 0"
+    /// Notification info struct
+    struct NotificationInfo {
+        let hours: Int
+        let summary: String?
+    }
+    
+    /// Get notification details for airports (optionally filtered by max hours)
+    private func getNotificationDetails(db: OpaquePointer, maxHours: Int?) -> [String: NotificationInfo] {
+        var result: [String: NotificationInfo] = [:]
+        var sql = "SELECT icao, hours_notice, summary FROM ga_notification_requirements WHERE hours_notice IS NOT NULL AND hours_notice > 0"
         if maxHours != nil {
             sql += " AND hours_notice <= ?"
         }
@@ -318,7 +328,9 @@ final class LocalToolDispatcher {
         while sqlite3_step(statement) == SQLITE_ROW {
             let icao = String(cString: sqlite3_column_text(statement, 0))
             let hours = Int(sqlite3_column_int(statement, 1))
-            result[icao] = hours
+            let summary = sqlite3_column_type(statement, 2) != SQLITE_NULL
+                ? String(cString: sqlite3_column_text(statement, 2)) : nil
+            result[icao] = NotificationInfo(hours: hours, summary: summary)
         }
         
         return result
@@ -328,6 +340,8 @@ final class LocalToolDispatcher {
     private func getAirportsWithNotification(db: OpaquePointer, maxHours: Int) -> Set<String> {
         return Set(getNotificationDetails(db: db, maxHours: maxHours).keys)
     }
+    
+
     
     private func getBorderCrossingAirports(_ args: [String: Any]) async throws -> ToolResult {
         guard let dataSource = airportDataSource else {

@@ -167,8 +167,14 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
             // Execute tool
             let toolResult = await toolDispatcher.dispatch(request: toolCall)
             
-            // Update last section with result (replace last entry in array)
-            toolSections[toolSections.count - 1] = toolHeader + "\n\n**Result:**\n\(toolResult.value)"
+            // For UI display, show truncated preview if result is long
+            let maxPreviewLength = 500
+            let previewResult = toolResult.value.count > maxPreviewLength
+                ? String(toolResult.value.prefix(maxPreviewLength)) + "\n... (truncated, see answer below)"
+                : toolResult.value
+            
+            // Update last section with preview (replace last entry in array)
+            toolSections[toolSections.count - 1] = toolHeader + "\n\n**Result:**\n\(previewResult)"
             let resultContent = toolSections.joined(separator: "\n\n━━━━━━━━━━\n\n")
             continuation.yield(.message(content: resultContent))
             
@@ -176,18 +182,51 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
             let resultDict: [String: Any] = ["result": toolResult.value]
             continuation.yield(.toolCallEnd(name: toolCall.name, result: ToolResult(from: resultDict)))
             
-            // Build follow-up prompt with tool result
-            let followUpPrompt = buildFollowUpPrompt(
-                originalMessage: message,
-                toolCall: toolCall,
-                toolResult: toolResult.value
-            )
+            // Emit visualization for map plotting (like online version)
+            if let visualization = buildVisualization(for: toolCall, result: toolResult) {
+                continuation.yield(.uiPayload(visualization))
+            }
             
-            // Show "Generating..." while waiting
-            continuation.yield(.thinking(content: "Processing tool result..."))
+            // For listing tools, use tool result directly (fast)
+            // For rules/analysis tools, use LLM to summarize with truncated input
+            let directUseTools = ["find_airports_near_location", "find_airports_near_route", 
+                               "find_airports_by_notification", "get_border_crossing_airports", 
+                               "search_airports", "get_airport_details", "get_airport_runways"]
             
-            // Generate response with tool result
-            response = try await inferenceEngine.generate(prompt: followUpPrompt)
+            let llmSummarizeTools = ["list_rules_for_country", "compare_rules_between_countries"]
+            
+            if directUseTools.contains(toolCall.name) {
+                // Use tool result directly as the answer
+                response = toolResult.value
+            } else if llmSummarizeTools.contains(toolCall.name) {
+                // For rules, truncate input to fit token limit and let LLM summarize
+                let maxLLMInput = 2000 // Leave room for prompt + output
+                let truncatedResult = toolResult.value.count > maxLLMInput
+                    ? String(toolResult.value.prefix(maxLLMInput)) + "\n... [data truncated for processing]"
+                    : toolResult.value
+                
+                let followUpPrompt = buildFollowUpPrompt(
+                    originalMessage: message,
+                    toolCall: toolCall,
+                    toolResult: truncatedResult
+                )
+                
+                continuation.yield(.thinking(content: "Summarizing rules..."))
+                response = try await inferenceEngine.generate(prompt: followUpPrompt)
+            } else {
+                // Build follow-up prompt with tool result for analysis
+                let followUpPrompt = buildFollowUpPrompt(
+                    originalMessage: message,
+                    toolCall: toolCall,
+                    toolResult: toolResult.value
+                )
+                
+                // Show "Generating..." while waiting
+                continuation.yield(.thinking(content: "Analyzing results..."))
+                
+                // Generate response with tool result
+                response = try await inferenceEngine.generate(prompt: followUpPrompt)
+            }
         }
         
         // Build final content from tool sections + answer
@@ -205,18 +244,10 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
     }
     
     private func buildPrompt(message: String, history: [ChatMessage]) -> String {
+        // For now, ignore history to ensure each question triggers appropriate tool call
+        // TODO: Implement smarter history handling that doesn't confuse tool selection
         var prompt = Self.systemPrompt + "\n\n"
-        
-        // Add history (last few turns)
-        let recentHistory = history.suffix(6)
-        for msg in recentHistory {
-            let role = msg.role == .user ? "User" : "Assistant"
-            prompt += "\(role): \(msg.content)\n"
-        }
-        
-        // Add current message
         prompt += "User: \(message)\nAssistant:"
-        
         return prompt
     }
     
@@ -225,18 +256,156 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
         toolCall: LocalToolDispatcher.ToolCallRequest,
         toolResult: String
     ) -> String {
-        return """
-        User asked: \(originalMessage)
+        // Listing tools should preserve all data; analysis tools can let LLM summarize
+        let listingTools = ["find_airports_near_location", "find_airports_near_route", 
+                           "find_airports_by_notification", "get_border_crossing_airports", 
+                           "search_airports", "get_airport_details", "get_airport_runways"]
         
-        You called the tool "\(toolCall.name)" and received this result:
+        let shouldPreserveData = listingTools.contains(toolCall.name)
         
-        \(toolResult)
+        if shouldPreserveData {
+            return """
+            User asked: \(originalMessage)
+            
+            Tool "\(toolCall.name)" returned:
+            
+            \(toolResult)
+            
+            Present the results above. Include ALL airports with ALL details (ICAO, name, notice hours, summary).
+            Do NOT omit any entries. Keep the formatting similar to the tool output.
+            
+            Assistant:
+            """
+        } else {
+            // Rules and comparison tools - let LLM analyze and summarize
+            return """
+            User asked: \(originalMessage)
+            
+            Tool "\(toolCall.name)" returned:
+            
+            \(toolResult)
+            
+            Based on these results, provide a helpful answer to the user's question.
+            Highlight the key points that are most relevant to pilots.
+            
+            Assistant:
+            """
+        }
+    }
+    
+    // MARK: - Visualization Builder
+    
+    /// Build a visualization payload from tool results for map plotting
+    private func buildVisualization(
+        for toolCall: LocalToolDispatcher.ToolCallRequest,
+        result: LocalToolDispatcher.ToolResult
+    ) -> ChatVisualizationPayload? {
+        // Only create visualization for airport/location tools
+        let visualizableTools = ["find_airports_near_location", "find_airports_near_route",
+                                  "find_airports_by_notification", "get_border_crossing_airports",
+                                  "search_airports", "get_airport_details"]
         
-        Provide a helpful answer listing the airports from the results.
-        Include at least 10 airports (or all if fewer) with ICAO codes and notification hours.
-        Use a simple bullet list format. Do NOT create separate sections or repeat airports.
+        guard visualizableTools.contains(toolCall.name) else { return nil }
         
-        Assistant:
-        """
+        // Parse airports from the result text
+        let airports = parseAirportsFromResult(result.value)
+        guard !airports.isEmpty else { return nil }
+        
+        // Build visualization sub-dictionary first
+        var visualization: [String: Any] = [
+            "markers": airports
+        ]
+        
+        // Add center point based on first airport
+        if let firstAirport = airports.first,
+           let lat = firstAirport["latitude"] as? Double,
+           let lon = firstAirport["longitude"] as? Double {
+            visualization["center"] = ["latitude": lat, "longitude": lon]
+        }
+        
+        // For route queries, add route data
+        if toolCall.name == "find_airports_near_route",
+           let from = toolCall.arguments["from"] as? String,
+           let to = toolCall.arguments["to"] as? String {
+            // Find departure and destination in results
+            let fromAirport = airports.first { ($0["icao"] as? String) == from }
+            let toAirport = airports.first { ($0["icao"] as? String) == to }
+            
+            var routeDict: [String: Any] = [
+                "departure": from,
+                "destination": to
+            ]
+            
+            if let fromLat = fromAirport?["latitude"] as? Double,
+               let fromLon = fromAirport?["longitude"] as? Double {
+                routeDict["from"] = ["icao": from, "lat": fromLat, "lon": fromLon]
+            }
+            if let toLat = toAirport?["latitude"] as? Double,
+               let toLon = toAirport?["longitude"] as? Double {
+                routeDict["to"] = ["icao": to, "lat": toLat, "lon": toLon]
+            }
+            
+            visualization["route"] = routeDict
+        }
+        
+        // Build final payload
+        let vizDict: [String: Any] = [
+            "kind": "list",
+            "visualization": visualization
+        ]
+        
+        return ChatVisualizationPayload(from: vizDict)
+    }
+    
+    /// Parse airport data from tool result text
+    /// Extracts ICAO codes and coordinates from the formatted output
+    private func parseAirportsFromResult(_ resultText: String) -> [[String: Any]] {
+        var airports: [[String: Any]] = []
+        
+        // Parse lines like: "EDDB (Berlin Brandenburg) - 52.3667°, 13.5033° - ..."
+        // or: "1. EDDB (Berlin)"
+        let lines = resultText.components(separatedBy: "\n")
+        
+        for line in lines {
+            // Look for ICAO codes (4 uppercase letters)
+            let pattern = "([A-Z]{4})\\s*\\(([^)]+)\\)"
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+                
+                guard let icaoRange = Range(match.range(at: 1), in: line),
+                      let nameRange = Range(match.range(at: 2), in: line) else { continue }
+                
+                let icao = String(line[icaoRange])
+                let name = String(line[nameRange])
+                
+                // Try to extract coordinates
+                var airport: [String: Any] = [
+                    "icao": icao,
+                    "name": name,
+                    "style": "result"
+                ]
+                
+                // Look for coordinates pattern: "52.3667°, 13.5033°" or similar
+                let coordPattern = "(-?\\d+\\.\\d+)[°]?,?\\s*(-?\\d+\\.\\d+)[°]?"
+                if let coordRegex = try? NSRegularExpression(pattern: coordPattern),
+                   let coordMatch = coordRegex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    
+                    if let latRange = Range(coordMatch.range(at: 1), in: line),
+                       let lonRange = Range(coordMatch.range(at: 2), in: line),
+                       let lat = Double(line[latRange]),
+                       let lon = Double(line[lonRange]) {
+                        airport["latitude"] = lat
+                        airport["longitude"] = lon
+                    }
+                }
+                
+                // Only add airports with coordinates
+                if airport["latitude"] != nil {
+                    airports.append(airport)
+                }
+            }
+        }
+        
+        return airports
     }
 }
