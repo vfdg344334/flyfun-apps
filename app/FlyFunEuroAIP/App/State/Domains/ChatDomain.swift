@@ -36,6 +36,10 @@ final class ChatDomain {
     /// AppState wires this to AirportDomain.applyVisualization
     var onVisualization: ((ChatVisualizationPayload) -> Void)?
     
+    /// Called when chat is cleared to reset map visualization
+    /// AppState wires this to AirportDomain.clearVisualization
+    var onClearVisualization: (() -> Void)?
+    
     // MARK: - Dependencies
     private var onlineChatbotService: ChatbotService?
     private var offlineChatbotService: OfflineChatbotService?
@@ -201,6 +205,8 @@ final class ChatDomain {
         currentThinking = nil
         currentToolCall = nil
         error = nil
+        // Clear map visualization when chat is cleared
+        onClearVisualization?()
     }
     
     /// Add a message programmatically

@@ -64,6 +64,12 @@ struct AirportMapView: View {
                 state?.airports.clearProcedureLines()
             }
         }
+        // Sync offline map region when visibleRegion changes (for auto-zoom)
+        .onChange(of: state?.airports.visibleRegion?.center.latitude) { _, _ in
+            if isOfflineMode, let region = state?.airports.visibleRegion {
+                offlineRegion = region
+            }
+        }
         // Legend overlays - always at bottom: selector on left, key on right
         .overlay(alignment: .bottomTrailing) {
             legendKeyOverlay

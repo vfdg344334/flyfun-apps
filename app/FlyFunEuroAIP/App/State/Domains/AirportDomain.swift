@@ -291,6 +291,12 @@ final class AirportDomain {
         highlights = highlights.filter { !$0.key.hasPrefix("chat-") }
     }
     
+    /// Clear all chat visualizations (highlights and route)
+    func clearVisualization() {
+        clearChatHighlights()
+        activeRoute = nil
+    }
+    
     // MARK: - Visualization (from Chat)
     
     /// Apply visualization from chat API response
@@ -413,7 +419,12 @@ final class AirportDomain {
             longitudeDelta: (maxLon - minLon) * 1.5 + 0.5
         )
         
-        mapPosition = .region(MKCoordinateRegion(center: center, span: span))
+        let region = MKCoordinateRegion(center: center, span: span)
+        
+        // Sync visibleRegion for offline map auto-zoom
+        visibleRegion = region
+        
+        mapPosition = .region(region)
     }
     
     /// Apply internal visualization payload (for programmatic use)

@@ -70,6 +70,11 @@ final class AppState {
         chat.onVisualization = { [weak self] chatPayload in
             self?.airports.applyVisualization(chatPayload)
         }
+        
+        // Chat clear → Clear map visualization
+        chat.onClearVisualization = { [weak self] in
+            self?.airports.clearVisualization()
+        }
     }
     
     /// Configure the chatbot service (call after initialization)
