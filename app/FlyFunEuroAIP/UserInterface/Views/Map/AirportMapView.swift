@@ -14,70 +14,37 @@ struct AirportMapView: View {
     @Environment(\.appState) private var state
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selectedAirportID: String?
+    @State private var offlineRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 48.0, longitude: 10.0),
+        span: MKCoordinateSpan(latitudeDelta: 10, longitudeDelta: 10)
+    )
     
     private var isCompact: Bool {
         sizeClass == .compact
     }
     
+    /// Check if app is in offline mode
+    private var isOfflineMode: Bool {
+        state?.chat.isOfflineMode ?? false
+    }
+    
     var body: some View {
         let currentLegendMode = state?.airports.legendMode ?? .airportType
+        let routeID = state?.airports.activeRoute?.departure ?? "none"
+        let highlightsCount = state?.airports.highlights.count ?? 0
         
-        Map(
-            position: mapPosition,
-            selection: $selectedAirportID
-        ) {
-            // Airport markers using custom Annotation for full flexibility
-            ForEach(airports, id: \.icao) { airport in
-                Annotation(airport.icao, coordinate: airport.coord) {
-                    AirportMarkerView(
-                        airport: airport,
-                        legendMode: currentLegendMode,
-                        isSelected: airport.icao == state?.airports.selectedAirport?.icao,
-                        isBorderCrossing: state?.airports.isBorderCrossing(airport) ?? false
-                    )
-                }
-                .tag(airport.icao)
-            }
-            
-            // Route polyline
-            if let route = state?.airports.activeRoute {
-                MapPolyline(coordinates: route.coordinates)
-                    .stroke(.blue.opacity(0.8), lineWidth: 4)
-            }
-            
-            // Procedure lines (when in procedure legend mode)
-            if currentLegendMode == .procedures {
-                ForEach(Array(procedureLines.keys), id: \.self) { icao in
-                    if let lines = procedureLines[icao] {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            MapPolyline(coordinates: [line.startCoordinate, line.endCoordinate])
-                                .stroke(procedureLineColor(line.precisionCategory), lineWidth: 3)
-                        }
-                    }
-                }
-            }
-            
-            // Highlights (from chat visualization)
-            ForEach(Array(highlights.values), id: \.id) { highlight in
-                MapCircle(center: highlight.coordinate, radius: highlight.radius)
-                    .foregroundStyle(highlightColor(highlight.color).opacity(0.2))
-                    .stroke(highlightColor(highlight.color), lineWidth: 2)
+        // Use different map views based on offline mode
+        Group {
+            if isOfflineMode {
+                // Offline mode: use MKMapView with cached tiles
+                offlineMapContent
+            } else {
+                // Online mode: use native SwiftUI Map
+                onlineMapContent(legendMode: currentLegendMode)
             }
         }
-        .id(currentLegendMode) // Force map to re-render when legend changes
-        .mapStyle(.standard(elevation: .realistic))
-        .mapControls {
-            MapCompass()
-            MapScaleView()
-            #if os(iOS)
-            MapUserLocationButton()
-            #endif
-        }
-        .onMapCameraChange(frequency: .onEnd) { context in
-            // Update visibleRegion when map camera changes to keep it in sync
-            state?.airports.visibleRegion = context.region
-            state?.airports.onRegionChange(context.region)
-        }
+        // Force re-render when legend, route, or highlights change
+        .id("\(currentLegendMode)-\(routeID)-\(highlightsCount)")
         .onChange(of: selectedAirportID) { _, newValue in
             if let icao = newValue,
                let airport = airports.first(where: { $0.icao == icao }) {
@@ -110,6 +77,107 @@ struct AirportMapView: View {
                 routeInfoBar
                     .padding(.bottom, bottomPadding + 80) // Space for legend
             }
+        }
+        // Offline indicator
+        .overlay(alignment: .top) {
+            if isOfflineMode {
+                HStack {
+                    Image(systemName: "airplane.circle.fill")
+                    Text("Offline Map")
+                }
+                .font(.caption)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.orange.opacity(0.9))
+                .foregroundStyle(.white)
+                .clipShape(Capsule())
+                .padding(.top, 8)
+            }
+        }
+    }
+    
+    // MARK: - Offline Map Content
+    
+    private var offlineMapContent: some View {
+        OfflineMapView(
+            region: $offlineRegion,
+            airports: airports,
+            selectedAirport: state?.airports.selectedAirport,
+            onAirportSelected: { airport in
+                state?.airports.select(airport)
+                state?.navigation.showAirportDetail()
+            },
+            onRegionChange: { region in
+                // Load airports for new region (like online map's onMapCameraChange)
+                state?.airports.visibleRegion = region
+                state?.airports.onRegionChange(region)
+            },
+            useOfflineTiles: true,
+            legendMode: state?.airports.legendMode ?? .airportType,
+            borderCrossingAirports: state?.airports.borderCrossingICAOs ?? [],
+            activeRoute: state?.airports.activeRoute,
+            highlights: state?.airports.highlights ?? [:]
+        )
+    }
+    
+    // MARK: - Online Map Content
+    
+    @ViewBuilder
+    private func onlineMapContent(legendMode: LegendMode) -> some View {
+        Map(
+            position: mapPosition,
+            selection: $selectedAirportID
+        ) {
+            // Airport markers using custom Annotation for full flexibility
+            ForEach(airports, id: \.icao) { airport in
+                Annotation(airport.icao, coordinate: airport.coord) {
+                    AirportMarkerView(
+                        airport: airport,
+                        legendMode: legendMode,
+                        isSelected: airport.icao == state?.airports.selectedAirport?.icao,
+                        isBorderCrossing: state?.airports.isBorderCrossing(airport) ?? false
+                    )
+                }
+                .tag(airport.icao)
+            }
+            
+            // Route polyline
+            if let route = state?.airports.activeRoute {
+                MapPolyline(coordinates: route.coordinates)
+                    .stroke(.blue.opacity(0.8), lineWidth: 4)
+            }
+            
+            // Procedure lines (when in procedure legend mode)
+            if legendMode == .procedures {
+                ForEach(Array(procedureLines.keys), id: \.self) { icao in
+                    if let lines = procedureLines[icao] {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                            MapPolyline(coordinates: [line.startCoordinate, line.endCoordinate])
+                                .stroke(procedureLineColor(line.precisionCategory), lineWidth: 3)
+                        }
+                    }
+                }
+            }
+            
+            // Highlights (from chat visualization)
+            ForEach(Array(highlights.values), id: \.id) { highlight in
+                MapCircle(center: highlight.coordinate, radius: highlight.radius)
+                    .foregroundStyle(highlightColor(highlight.color).opacity(0.2))
+                    .stroke(highlightColor(highlight.color), lineWidth: 2)
+            }
+        }
+        .mapStyle(.standard(elevation: .realistic))
+        .mapControls {
+            MapCompass()
+            MapScaleView()
+            #if os(iOS)
+            MapUserLocationButton()
+            #endif
+        }
+        .onMapCameraChange(frequency: .onEnd) { context in
+            // Update visibleRegion when map camera changes to keep it in sync
+            state?.airports.visibleRegion = context.region
+            state?.airports.onRegionChange(context.region)
         }
     }
     

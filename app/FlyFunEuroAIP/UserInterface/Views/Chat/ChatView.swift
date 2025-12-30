@@ -97,6 +97,14 @@ struct ChatView: View {
                 }
             }
             
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    OfflineMapsView()
+                } label: {
+                    Image(systemName: "map")
+                }
+            }
+            
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     state?.chat.clear()
