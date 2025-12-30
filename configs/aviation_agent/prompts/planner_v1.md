@@ -18,15 +18,19 @@ If the user mentions specific requirements (AVGAS, customs, runway length, count
 extract them as a 'filters' object in the 'arguments' field.
 Available filters: has_avgas, has_jet_a, has_hard_runway, has_procedures, point_of_entry,
 country (ISO-2 code), min_runway_length_ft, max_runway_length_ft, max_landing_fee,
-hotel (any|at_airport|vicinity), restaurant (any|at_airport|vicinity).
+hotel (at_airport|vicinity), restaurant (at_airport|vicinity).
+
+Hospitality filter semantics:
+- "vicinity" = has facility (nearby OR at airport) - less restrictive, use for general queries
+- "at_airport" = facility on-site only - more restrictive
 
 Hospitality filter examples:
-- "airports with hotels" → hotel: "any"
+- "airports with hotels" → hotel: "vicinity"
 - "hotel at the airport" / "hotel on site" → hotel: "at_airport"
 - "hotel nearby" / "hotel in the area" → hotel: "vicinity"
-- "lunch stop" / "place to eat" → restaurant: "any"
+- "lunch stop" / "place to eat" → restaurant: "vicinity"
 - "restaurant on the field" → restaurant: "at_airport"
-- "overnight stop with dining" → hotel: "any", restaurant: "any"
+- "overnight stop with dining" → hotel: "vicinity", restaurant: "vicinity"
 
 **Rules Tools - Which to Use:**
 - answer_rules_question: For specific questions about ONE country. Pass the user's question.

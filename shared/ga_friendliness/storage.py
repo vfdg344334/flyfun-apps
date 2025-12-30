@@ -842,9 +842,14 @@ class GAMetaStorage(StorageInterface):
         """
         Get set of ICAOs matching hospitality filter criteria.
 
+        Filter semantics:
+            - "at_airport": Most restrictive, only value 2
+            - "vicinity": Less restrictive, includes both vicinity (1) AND at_airport (2)
+            - "any": Same as "vicinity" (backwards compatibility)
+
         Args:
-            hotel: "at_airport" (value 2), "vicinity" (value 1), or None (no filter)
-            restaurant: "at_airport" (value 2), "vicinity" (value 1), or None (no filter)
+            hotel: "at_airport", "vicinity", "any", or None (no filter)
+            restaurant: "at_airport", "vicinity", "any", or None (no filter)
 
         Returns:
             Set of matching ICAO codes. Returns empty set if no filters specified.
@@ -853,23 +858,23 @@ class GAMetaStorage(StorageInterface):
             return set()  # No filter
 
         conditions = []
-        params: List[int] = []
 
-        # Map filter values to database integers
         # Database: -1=unknown, 0=none, 1=vicinity, 2=at_airport
-        value_map = {"at_airport": 2, "vicinity": 1}
+        # "vicinity" includes at_airport (>= 1), "at_airport" is exact (= 2)
 
         if hotel is not None:
-            db_value = value_map.get(hotel)
-            if db_value is not None:
-                conditions.append("aip_hotel_info = ?")
-                params.append(db_value)
+            if hotel == "at_airport":
+                conditions.append("aip_hotel_info = 2")
+            elif hotel in ("vicinity", "any"):
+                # vicinity includes at_airport (value >= 1)
+                conditions.append("aip_hotel_info >= 1")
 
         if restaurant is not None:
-            db_value = value_map.get(restaurant)
-            if db_value is not None:
-                conditions.append("aip_restaurant_info = ?")
-                params.append(db_value)
+            if restaurant == "at_airport":
+                conditions.append("aip_restaurant_info = 2")
+            elif restaurant in ("vicinity", "any"):
+                # vicinity includes at_airport (value >= 1)
+                conditions.append("aip_restaurant_info >= 1")
 
         if not conditions:
             return set()
@@ -881,7 +886,7 @@ class GAMetaStorage(StorageInterface):
 
         try:
             conn = self._get_connection()
-            cursor = conn.execute(query, params)
+            cursor = conn.execute(query, ())
             return {row["icao"] for row in cursor}
         except sqlite3.Error as e:
             raise StorageError(f"Failed to query hospitality filters: {e}")

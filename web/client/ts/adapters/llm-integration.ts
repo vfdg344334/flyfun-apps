@@ -539,6 +539,8 @@ export class LLMIntegration {
     if (profile.max_runway_length_ft) filters.max_runway_length_ft = Number(profile.max_runway_length_ft);
     if (profile.min_runway_length_ft) filters.min_runway_length_ft = Number(profile.min_runway_length_ft);
     if (profile.max_landing_fee) filters.max_landing_fee = Number(profile.max_landing_fee);
+    if (profile.hotel) filters.hotel = String(profile.hotel) as 'at_airport' | 'vicinity';
+    if (profile.restaurant) filters.restaurant = String(profile.restaurant) as 'at_airport' | 'vicinity';
     
     // Update store filters
     const store = this.store as any;

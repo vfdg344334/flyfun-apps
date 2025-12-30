@@ -21,10 +21,12 @@ class HotelFilter(Filter):
     Filter airports by hotel availability.
 
     Filter values:
-        - "any": Has hotel (at_airport or vicinity)
-        - "at_airport": Hotel on-site at the airport
-        - "vicinity": Hotel nearby but not on-site
+        - "vicinity": Has hotel nearby or at airport (includes at_airport)
+        - "at_airport": Hotel on-site at the airport only (most restrictive)
         - None: No filter applied
+
+    Semantics: "vicinity" is less restrictive and includes "at_airport" because
+    if a hotel is at the airport, it's definitely in the vicinity.
 
     Fail-closed behavior: Excludes airports when:
         - GA service is unavailable
@@ -33,7 +35,7 @@ class HotelFilter(Filter):
     """
 
     name = "hotel"
-    description = "Filter by hotel availability (any|at_airport|vicinity)"
+    description = "Filter by hotel availability (at_airport|vicinity)"
 
     def apply(
         self,
@@ -58,13 +60,13 @@ class HotelFilter(Filter):
             if hotel_info is None or hotel_info == "unknown":
                 return False  # No known data - exclude
 
-            if value == "any":
-                # "any" means has facility (at_airport or vicinity), excludes "none"
-                return hotel_info in ("at_airport", "vicinity")
-            elif value == "at_airport":
+            if value == "at_airport":
+                # Most restrictive: only at airport
                 return hotel_info == "at_airport"
-            elif value == "vicinity":
-                return hotel_info == "vicinity"
+            elif value in ("vicinity", "any"):
+                # Less restrictive: at_airport OR vicinity (any available)
+                # "any" is treated same as "vicinity" for backwards compatibility
+                return hotel_info in ("at_airport", "vicinity")
             else:
                 return True  # Unknown filter value - don't filter
 
@@ -78,10 +80,12 @@ class RestaurantFilter(Filter):
     Filter airports by restaurant availability.
 
     Filter values:
-        - "any": Has restaurant (at_airport or vicinity)
-        - "at_airport": Restaurant on-site at the airport
-        - "vicinity": Restaurant nearby but not on-site
+        - "vicinity": Has restaurant nearby or at airport (includes at_airport)
+        - "at_airport": Restaurant on-site at the airport only (most restrictive)
         - None: No filter applied
+
+    Semantics: "vicinity" is less restrictive and includes "at_airport" because
+    if a restaurant is at the airport, it's definitely in the vicinity.
 
     Fail-closed behavior: Excludes airports when:
         - GA service is unavailable
@@ -90,7 +94,7 @@ class RestaurantFilter(Filter):
     """
 
     name = "restaurant"
-    description = "Filter by restaurant availability (any|at_airport|vicinity)"
+    description = "Filter by restaurant availability (at_airport|vicinity)"
 
     def apply(
         self,
@@ -115,13 +119,13 @@ class RestaurantFilter(Filter):
             if restaurant_info is None or restaurant_info == "unknown":
                 return False  # No known data - exclude
 
-            if value == "any":
-                # "any" means has facility (at_airport or vicinity), excludes "none"
-                return restaurant_info in ("at_airport", "vicinity")
-            elif value == "at_airport":
+            if value == "at_airport":
+                # Most restrictive: only at airport
                 return restaurant_info == "at_airport"
-            elif value == "vicinity":
-                return restaurant_info == "vicinity"
+            elif value in ("vicinity", "any"):
+                # Less restrictive: at_airport OR vicinity (any available)
+                # "any" is treated same as "vicinity" for backwards compatibility
+                return restaurant_info in ("at_airport", "vicinity")
             else:
                 return True  # Unknown filter value - don't filter
 

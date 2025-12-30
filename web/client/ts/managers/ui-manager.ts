@@ -516,8 +516,8 @@ export class UIManager {
       const state = this.store.getState();
 
       // If we have an active route or locate, re-run the search with new filters
-      if (state.route && state.route.airports && !state.route.isChatbotSelection) {
-        // Active route search - re-run with new filters
+      if (state.route && state.route.airports) {
+        // Active route search - re-run with new filters (including chatbot selections)
         this.applyFilters();
       } else if (state.locate && state.locate.center) {
         // Active locate search - re-run with new filters
@@ -1075,14 +1075,7 @@ export class UIManager {
     this.store.getState().setError(null);
 
     try {
-      // Check if we have route state
-      if (state.route && state.route.isChatbotSelection && state.route.chatbotAirports) {
-        // Client-side filtering for chatbot airports
-        // Filters are already applied via store.setFilters()
-        this.store.getState().setLoading(false);
-        return;
-      }
-
+      // Route search mode - re-run with current filters
       if (state.route && state.route.airports) {
         // Route search mode
         await this.applyRouteSearch(state.route);

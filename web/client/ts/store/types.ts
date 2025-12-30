@@ -71,9 +71,9 @@ export interface FilterConfig {
   max_runway_length_ft: number | null;
   min_runway_length_ft: number | null;
   max_landing_fee: number | null;
-  // Hospitality filters (enum: any|at_airport|vicinity)
-  hotel: 'any' | 'at_airport' | 'vicinity' | null;
-  restaurant: 'any' | 'at_airport' | 'vicinity' | null;
+  // Hospitality filters: at_airport (most restrictive) or vicinity (includes at_airport)
+  hotel: 'at_airport' | 'vicinity' | null;
+  restaurant: 'at_airport' | 'vicinity' | null;
   limit: number;
   offset: number;
   // Search radius/distance parameters (used for route corridor and locate radius)
