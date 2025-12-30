@@ -49,6 +49,68 @@ The offline mode supports these tools via `LocalToolDispatcher`:
 - **ga_notifications.db** - GA notification requirements (hours notice, operating hours)
 - **rules.json** - Country-specific aviation rules
 
+### Offline Maps
+
+The app supports offline map tiles using a custom `MKTileOverlay` implementation with local caching.
+
+#### Architecture
+
+```
+Services/Offline/
+├── OfflineTileManager.swift    # Downloads & manages tile cache
+├── CachedTileOverlay.swift     # Custom MKTileOverlay with caching
+
+UserInterface/Views/
+├── Map/OfflineMapView.swift    # UIViewRepresentable for MKMapView
+└── Settings/OfflineMapsView.swift  # UI for managing downloads
+```
+
+#### How It Works
+
+1. **Tile Source**: OpenStreetMap tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`)
+
+2. **Caching Strategy**:
+   - Tiles cached to `Documents/MapTiles/{z}/{x}/{y}.png`
+   - Pre-defined European regions available for bulk download
+   - Tiles also cached as you browse
+
+3. **Offline Mode Behavior**:
+   - When offline: `CachedTileOverlay.offlineOnly = true`
+   - Only serves tiles from local cache
+   - No network requests for missing tiles (shows blank)
+   - When online: Falls back to network for uncached tiles
+
+4. **Pre-defined Regions**:
+   | Region | Coverage | Est. Size |
+   |--------|----------|-----------|
+   | UK & Ireland | 49-61°N, 11°W-2°E | ~50 MB |
+   | Germany | 47-55°N, 5-15°E | ~40 MB |
+   | France | 41-51°N, 6°W-10°E | ~45 MB |
+   | Western Europe | 35-55°N, 10°W-5°E | ~80 MB |
+   | Central Europe | 45-55°N, 5-20°E | ~60 MB |
+   | Northern Europe | 54-71°N, 4-31°E | ~50 MB |
+   | Southern Europe | 35-45°N, 10°W-20°E | ~55 MB |
+
+#### Usage
+
+1. **Download Tiles**: Chat → Map icon (🗺️) → Select regions
+2. **Toggle Offline Mode**: Chat → Airplane icon
+3. **View Offline Map**: Map tab shows cached OSM tiles with "Offline Map" badge
+
+#### Code Flow
+
+```
+OfflineMapView (UIViewRepresentable)
+    └── MKMapView with CachedTileOverlay
+            │
+            ├── loadTile(at:) → Check local cache
+            │       │
+            │       ├── Cached? → Return data
+            │       └── Not cached + online? → Fetch & cache
+            │
+            └── rendererFor(overlay:) → MKTileOverlayRenderer
+```
+
 ### Tool Replication from Web Version
 
 The offline tools replicate the server-side API functionality:
