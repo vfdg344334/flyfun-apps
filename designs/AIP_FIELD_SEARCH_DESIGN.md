@@ -200,53 +200,32 @@ Extraction rules:
 
 #### 1.5 UI Changes
 
-**Add hospitality dropdowns to filter panel:**
+**Implemented: Hospitality dropdowns in filter panel (after quick filters row):**
 ```html
-<div class="filter-group" id="hospitality-filters">
-  <label class="filter-group-label">Hospitality</label>
-
-  <div class="filter-row">
-    <label for="hotel-filter">Hotel</label>
-    <select id="hotel-filter">
-      <option value="">No filter</option>
-      <option value="any">Available (any location)</option>
-      <option value="at_airport">At airport only</option>
-      <option value="vicinity">Nearby only</option>
-    </select>
-  </div>
-
-  <div class="filter-row">
-    <label for="restaurant-filter">Restaurant</label>
-    <select id="restaurant-filter">
-      <option value="">No filter</option>
-      <option value="any">Available (any location)</option>
-      <option value="at_airport">At airport only</option>
-      <option value="vicinity">Nearby only</option>
-    </select>
-  </div>
-</div>
-```
-
-**Alternative: Checkbox group (simpler UX for common case):**
-```html
-<div class="filter-group" id="hospitality-filters">
-  <label class="filter-group-label">Hospitality</label>
-  <div class="filter-options">
-    <label><input type="checkbox" id="has-hotel" value="any"> Hotel</label>
-    <label><input type="checkbox" id="has-restaurant" value="any"> Restaurant</label>
-  </div>
-  <details class="advanced-options">
-    <summary>Location options</summary>
-    <div class="radio-group">
-      <label><input type="radio" name="hotel-location" value="any" checked> Any</label>
-      <label><input type="radio" name="hotel-location" value="at_airport"> At airport</label>
-      <label><input type="radio" name="hotel-location" value="vicinity"> Nearby</label>
+<!-- Hospitality Filters Row -->
+<div class="filters-row">
+    <div class="filter-field">
+        <label for="hotel-filter"><i class="fas fa-bed"></i> Hotel</label>
+        <select class="form-select form-select-sm" id="hotel-filter">
+            <option value="">Any</option>
+            <option value="at_airport">At Airport</option>
+            <option value="vicinity">In Vicinity</option>
+        </select>
     </div>
-  </details>
+    <div class="filter-field">
+        <label for="restaurant-filter"><i class="fas fa-utensils"></i> Restaurant</label>
+        <select class="form-select form-select-sm" id="restaurant-filter">
+            <option value="">Any</option>
+            <option value="at_airport">At Airport</option>
+            <option value="vicinity">In Vicinity</option>
+        </select>
+    </div>
 </div>
 ```
 
-**Placement:** Add to main filter panel, after fuel filters (logical grouping for trip planning).
+**Note:** The `"any"` filter value (meaning "has facility somewhere") is available for chatbot/API use but not exposed in the UI dropdown. UI users can select specific locations (at_airport/vicinity) or leave as "Any" (no filter).
+
+**Placement:** Added to filters panel in `index.html`, after the quick filters row.
 
 ---
 
@@ -445,7 +424,7 @@ Filter: Query euro_aip with hospitality filter
 
 ### Filter Implementation Location
 
-**Location:** `shared/filtering/filters/hospitality.py` (new file, follows existing pattern)
+**Location:** `shared/filtering/filters/hospitality_filters.py` (follows existing pattern)
 
 **Pattern already established in `pricing_filters.py`:**
 ```python
@@ -523,30 +502,35 @@ class HotelFilter(Filter):
 
 To maintain consistency, adding `hotel` and `restaurant` filters requires:
 
-1. **Python Filter Class** (`shared/filtering/filters/hospitality.py`)
+1. **Python Filter Class** (`shared/filtering/filters/hospitality_filters.py`) ✅
    - Create `HotelFilter` and `RestaurantFilter`
-   - Register in FilterRegistry
+   - Register in FilterRegistry (`filter_engine.py`)
    - Uses existing `context.ga_friendliness_service` (already available)
 
-2. **TypeScript FilterConfig** (`web/client/ts/store/types.ts`)
+2. **TypeScript FilterConfig** (`web/client/ts/store/types.ts`) ✅
    - Add `hotel: 'any' | 'at_airport' | 'vicinity' | null`
    - Add `restaurant: 'any' | 'at_airport' | 'vicinity' | null`
 
-3. **LLMIntegration meaningfulFilterKeys** (`web/client/ts/adapters/llm-integration.ts`)
+3. **LLMIntegration meaningfulFilterKeys** (`web/client/ts/adapters/llm-integration.ts`) ✅
    - Add `'hotel'`, `'restaurant'` to the list
 
-4. **Planner Prompt** (`configs/aviation_agent/prompts/planner_v1.md`)
+4. **Planner Prompt** (`configs/aviation_agent/prompts/planner_v1.md`) ✅
    - Add filter descriptions and examples
 
-5. **API Endpoint** (`web/server/api/airports.py`)
-   - Add query parameters
-   - Ensure filters are passed to FilterEngine
+5. **API Endpoint** (`web/server/api/airports.py`) ✅
+   - Add explicit `hotel` and `restaurant` query parameters
+   - Use `get_icaos_by_hospitality()` for efficient SQL-based filtering
 
-6. **UI Components** (`web/client/`)
-   - Add filter controls
-   - Wire to store
+6. **GA Service/Storage** (`shared/ga_friendliness/`) ✅
+   - Add `get_icaos_by_hospitality()` to storage and service
+   - Enables efficient SQL query for matching ICAOs
 
-7. **Tests**
+7. **UI Components** (`web/client/`) ✅
+   - Add filter dropdowns to `index.html`
+   - Add event listeners in `ui-manager.ts`
+   - Add params to `api-adapter.ts`
+
+8. **Tests**
    - Filter unit tests
    - Integration test for sync verification (ensure all 4 places stay in sync)
 
@@ -559,10 +543,12 @@ To maintain consistency, adding `hotel` and `restaurant` filters requires:
   - Scores/personas are for fuzzy matching when data is uncertain.
   - AIP filters = "show me what we know" → exclude unknown
   - Persona scores = "best guess" → can include with uncertainty
-- **Data Flow:** Option A (post-fetch filtering) - simple, measure first
+- **Data Flow:** Option B for web API (efficient SQL query), Option A for filter engine (chatbot)
+  - Web API uses `get_icaos_by_hospitality()` for efficient pre-filtering via SQL
+  - Filter engine (chatbot path) uses per-airport service calls (less critical for smaller result sets)
 - **Filter Sync Strategy:** Solution C (tests) - pragmatic for now
 - **FilterContext GA Access:** Already solved - `ToolContext.ga_friendliness_service` exists
-- **UI Approach:** Dropdown for enum values (any/at_airport/vicinity)
+- **UI Approach:** Dropdown for enum values (at_airport/vicinity), with empty = no filter
 - **Presets:** No dedicated presets - use manual selection or chatbot for complex filter combinations
 - **Display Labels:** Text labels first ("Hotel at airport", "Restaurant nearby"), icons can come later
 - **Naming Consistency:** Use consistent names across all layers: `at_airport`, `vicinity`, `none`, `unknown`
@@ -577,9 +563,9 @@ To maintain consistency, adding `hotel` and `restaurant` filters requires:
 - **Service Access:** Filters use `ga_friendliness_service` methods (not storage directly)
   - Ensures consistent data access patterns
   - Service handles decoding and data availability checks
-- **API Parameter Pass-through:** Filters are passed generically via `filters` dict
-  - No need to add explicit parameters to API endpoints
-  - FilterEngine handles routing to appropriate filter classes
+- **API Parameters:** Explicit `hotel` and `restaurant` query parameters added to API endpoints
+  - Simpler than generic filters dict for these specific filters
+  - FilterEngine still used for chatbot/filter engine path
 
 ---
 

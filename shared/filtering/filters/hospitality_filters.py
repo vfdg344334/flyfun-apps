@@ -5,12 +5,15 @@ Hospitality-related filters (hotel, restaurant availability).
 These filters use AIP-derived data from the GA friendliness service.
 They follow a "fail-closed" approach: airports are excluded if data is unavailable.
 """
+import logging
 from typing import Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
 from .base import Filter
 
 if TYPE_CHECKING:
     from shared.tool_context import ToolContext
+
+logger = logging.getLogger(__name__)
 
 
 class HotelFilter(Filter):
@@ -65,7 +68,8 @@ class HotelFilter(Filter):
             else:
                 return True  # Unknown filter value - don't filter
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Error applying hotel filter to {airport.ident}: {e}")
             return False  # Error - exclude (fail closed)
 
 
@@ -121,5 +125,6 @@ class RestaurantFilter(Filter):
             else:
                 return True  # Unknown filter value - don't filter
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Error applying restaurant filter to {airport.ident}: {e}")
             return False  # Error - exclude (fail closed)
