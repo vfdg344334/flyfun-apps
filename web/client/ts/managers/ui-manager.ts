@@ -6,6 +6,7 @@
 import { useStore } from '../store/store';
 import type { AppState, FilterConfig, LegendMode, Airport } from '../store/types';
 import { APIAdapter } from '../adapters/api-adapter';
+import { geocodeCache } from '../utils/geocode-cache';
 
 /**
  * UI Manager class
@@ -1199,13 +1200,50 @@ export class UIManager {
 
   /**
    * Handle search input (user-initiated search from typing in search box)
+   *
+   * Unified search logic:
+   * 1. Empty search → show all airports (viewport refresh)
+   * 2. Check geocode cache → if hit, do locate search with cached coords
+   * 3. Check for ICAO route pattern → route search
+   * 4. Text search → if results, show them
+   * 5. No matches → show all airports (don't hide everything)
    */
   private async handleSearch(query: string): Promise<void> {
-    if (!query.trim()) {
-      // Clear search - reload airports in current viewport instead of clearing
+    const trimmedQuery = query.trim();
+
+    // 1. Empty search: show all airports in viewport
+    if (!trimmedQuery) {
       this.store.getState().setRoute(null);
       this.store.getState().setLocate(null);
       window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
+      return;
+    }
+
+    // 2. Check geocode cache first (for locate searches like "Brac, Croatia")
+    const cachedGeocode = geocodeCache.get(trimmedQuery);
+    if (cachedGeocode) {
+      console.log(`🔵 handleSearch: geocode cache hit for "${trimmedQuery}"`);
+      // Use cached coordinates for locate search
+      const state = this.store.getState();
+      const radiusNm = state.filters.search_radius_nm;
+
+      this.store.getState().setLoading(true);
+      try {
+        const response = await this.apiAdapter.locateAirportsByCenter(
+          { lat: cachedGeocode.lat, lon: cachedGeocode.lon, label: cachedGeocode.label },
+          radiusNm,
+          state.filters
+        );
+
+        if (response.airports) {
+          this.store.getState().setAirports(response.airports);
+          console.log(`✅ Geocode cache search: ${response.airports.length} airports within ${radiusNm}nm of "${cachedGeocode.label}"`);
+        }
+        this.store.getState().setLoading(false);
+      } catch (error: any) {
+        console.error('Error in geocode cache search:', error);
+        this.store.getState().setLoading(false);
+      }
       return;
     }
 
@@ -1213,30 +1251,39 @@ export class UIManager {
     // (LLM-initiated searches use trigger-search event which bypasses this)
     window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
 
-    // Check if this is a route search (4-letter ICAO codes)
-    const routeAirports = this.parseRouteFromQuery(query);
+    // 3. Check if this is a route search (4-letter ICAO codes)
+    const routeAirports = this.parseRouteFromQuery(trimmedQuery);
 
     if (routeAirports && routeAirports.length > 0) {
       // Route search
       await this.handleRouteSearch(routeAirports);
-    } else {
-      // Text search - clear route and locate state since this is a new search
-      this.store.getState().setRoute(null);
-      this.store.getState().setLocate(null);
+      return;
+    }
 
-      this.store.getState().setLoading(true);
-      this.store.getState().setError(null);
+    // 4. Text search on airport names/ICAO codes
+    this.store.getState().setRoute(null);
+    this.store.getState().setLocate(null);
 
-      try {
-        const response = await this.apiAdapter.searchAirports(query, 50);
+    this.store.getState().setLoading(true);
+    this.store.getState().setError(null);
+
+    try {
+      const response = await this.apiAdapter.searchAirports(trimmedQuery, 50);
+
+      if (response.data.length > 0) {
+        // Text search found results
         this.store.getState().setAirports(response.data);
-        this.showSuccess(`Search results: ${response.data.length} airports found for "${query}"`);
-        this.store.getState().setLoading(false);
-      } catch (error: any) {
-        console.error('Error in search:', error);
-        this.store.getState().setError('Error searching airports: ' + (error.message || 'Unknown error'));
-        this.store.getState().setLoading(false);
+        this.showSuccess(`Search results: ${response.data.length} airports found for "${trimmedQuery}"`);
+      } else {
+        // 5. No matches: show all airports in viewport (don't hide everything)
+        console.log(`🔵 handleSearch: no text matches for "${trimmedQuery}", showing viewport airports`);
+        window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
+      this.store.getState().setLoading(false);
+    } catch (error: any) {
+      console.error('Error in search:', error);
+      this.store.getState().setError('Error searching airports: ' + (error.message || 'Unknown error'));
+      this.store.getState().setLoading(false);
     }
   }
 
@@ -1333,7 +1380,7 @@ export class UIManager {
   }
 
   /**
-   * Handle locate
+   * Handle locate (user clicks Locate button)
    */
   private async handleLocate(): Promise<void> {
     const state = this.store.getState();
@@ -1356,9 +1403,15 @@ export class UIManager {
         this.store.getState().setAirports(response.airports);
 
         if (response.center) {
+          const centerLng = (response.center as any).lon || (response.center as any).lng || response.center.lat;
+          const centerLabel = response.center.label || query;
+
+          // Cache the geocode result for consistent search behavior
+          geocodeCache.set(query, response.center.lat, centerLng, centerLabel);
+
           this.store.getState().setLocate({
             query,
-            center: { lat: response.center.lat, lng: (response.center as any).lon || (response.center as any).lng || response.center.lat, label: response.center.label || '' },
+            center: { lat: response.center.lat, lng: centerLng, label: centerLabel },
             radiusNm
           });
         }

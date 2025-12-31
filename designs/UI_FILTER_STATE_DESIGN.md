@@ -272,7 +272,28 @@ Handles all communication with the backend API using Fetch API.
 - `getGASummary(icao, persona)` - Get full GA summary for single airport
 - `getGAHealth()` - Check GA service health
 
-### 5. LLM Integration (`ts/adapters/llm-integration.ts`)
+### 5. Geocode Cache (`ts/utils/geocode-cache.ts`)
+
+Caches geocode results (location label → coordinates) for consistent search behavior.
+
+#### Purpose
+
+When a locate search is performed (via chatbot or locate button), the search box displays the location label (e.g., "Brac, Croatia"). Without caching, the debounced search handler would text-search this label against airport names, find nothing, and overwrite the locate results.
+
+#### Key Methods
+
+- `set(searchText, lat, lon, label)` - Cache a geocode result
+- `get(searchText)` - Get cached result (case-insensitive, trimmed)
+- `has(searchText)` - Check if cached
+- `clear()` - Clear all entries
+
+#### Usage
+
+- **Population**: `trigger-locate` handler and `handleLocate()` populate the cache
+- **Lookup**: `handleSearch()` checks cache before doing text search
+- **Eviction**: LRU-like eviction when cache exceeds 256 entries
+
+### 6. LLM Integration (`ts/adapters/llm-integration.ts`)
 
 Handles chatbot visualizations and filter profile application.
 
@@ -421,6 +442,72 @@ Chatbot sends visualization
 4. Apply filter profile if provided
 5. Trigger route search via `trigger-search` event
 6. Route search shows all airports, highlights show chat airports
+
+## Geocode Cache
+
+### Overview
+
+The GeocodeCache (`ts/utils/geocode-cache.ts`) ensures consistent search behavior when the search box contains a location query from a previous locate search. Without this cache, the debounced search handler would text-search the location label (e.g., "Brac, Croatia") against airport names, find nothing, and overwrite the locate results.
+
+### Problem Solved
+
+```
+Without cache:
+1. Chatbot: "airports near Brac, Croatia"
+2. trigger-locate fires → loads 15 airports
+3. Search box shows "Brac, Croatia"
+4. Debounced search fires (500ms later)
+5. Text search "Brac, Croatia" → 0 matches
+6. Airports overwritten with empty/viewport results ❌
+
+With cache:
+1. Chatbot: "airports near Brac, Croatia"
+2. trigger-locate fires → caches "Brac, Croatia" → {lat, lon} → loads 15 airports
+3. Search box shows "Brac, Croatia"
+4. Debounced search fires (500ms later)
+5. Cache hit for "Brac, Croatia" → locate search with cached coords
+6. Same airports displayed ✅
+```
+
+### Implementation
+
+**Cache Structure:**
+```typescript
+interface GeocodeEntry {
+  lat: number;
+  lon: number;
+  label: string;
+  timestamp: number;
+}
+
+class GeocodeCache {
+  private cache = new Map<string, GeocodeEntry>();
+  private maxSize = 256;  // LRU-like eviction
+
+  set(searchText, lat, lon, label): void;
+  get(searchText): GeocodeEntry | undefined;
+  clear(): void;
+}
+```
+
+**Cache Population:**
+- `main.ts`: `trigger-locate` handler caches label → coords BEFORE loading airports
+- `ui-manager.ts`: `handleLocate()` caches query → coords after geocode API returns
+
+**Unified Search Logic (`ui-manager.ts:handleSearch`):**
+1. Empty search → viewport refresh
+2. **Check geocode cache** → if hit, do locate search with cached coords
+3. Check for ICAO route pattern → route search
+4. Text search → if results, show them
+5. No matches → show all airports in viewport (don't hide everything)
+
+### Key Design Decisions
+
+- **Cache key normalization**: `trim().toLowerCase()` for consistent lookups
+- **LRU eviction**: Oldest entries removed when cache exceeds 256 entries
+- **No airport storage**: Cache stores only coordinates; filter changes trigger re-fetch with current filters
+- **Singleton export**: `geocodeCache` instance shared across app
+- **Debug access**: Exposed on `window.geocodeCache` for debugging
 
 ## Filter Updates with Active Route
 

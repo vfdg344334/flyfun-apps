@@ -11,6 +11,7 @@ import { LLMIntegration } from './adapters/llm-integration';
 import { ChatbotManager } from './managers/chatbot-manager';
 import { PersonaManager } from './managers/persona-manager';
 import { getThemeManager, ThemeManager } from './managers/theme-manager';
+import { geocodeCache } from './utils/geocode-cache';
 import type { AppState, RouteState, MapView, FilterConfig, BoundingBox } from './store/types';
 
 // Global instances (for debugging/window access)
@@ -22,6 +23,7 @@ declare global {
     llmIntegration: LLMIntegration;
     personaManager: PersonaManager;
     themeManager: ThemeManager;
+    geocodeCache: typeof geocodeCache;
   }
 }
 
@@ -74,6 +76,7 @@ class Application {
     window.llmIntegration = this.llmIntegration;
     window.personaManager = this.personaManager;
     window.themeManager = this.themeManager;
+    window.geocodeCache = geocodeCache;
     (window as any).chatbotManager = this.chatbotManager;
   }
 
@@ -533,6 +536,12 @@ class Application {
       // Read radius from store (single source of truth)
       const radiusNm = state.filters.search_radius_nm;
       console.log('🔵 trigger-locate event received:', { lat, lon, label, radiusNm });
+
+      // Cache the geocode result BEFORE loading airports
+      // This ensures the debounced search handler can find the cache entry
+      if (label) {
+        geocodeCache.set(label, lat, lon, label);
+      }
 
       try {
         const response = await this.apiAdapter.locateAirportsByCenter(

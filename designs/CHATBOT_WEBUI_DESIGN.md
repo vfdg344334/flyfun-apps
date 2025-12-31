@@ -501,8 +501,10 @@ The `LLMIntegration` class handles each visualization type as follows:
    - Sets highlights for recommended airports
    - Sets locate state in store with center point
    - Applies filter profile
+   - **Caches geocode result** (label → coordinates) in `geocodeCache`
    - Triggers locate search via `trigger-locate` event
    - Shows all airports within radius with highlights on recommended airports
+   - **Important:** The geocode cache ensures that when the debounced search handler fires (due to search box text), it recognizes the cached location and performs a locate search instead of a text search
 
 **Filter Profile Application:**
 
@@ -638,13 +640,18 @@ Each visualization type must map to specific store actions:
 **Event-Based Communication:**
 - Use custom events for cross-component actions:
   - `trigger-search` - Trigger search from any component
-  - `trigger-locate` - Trigger locate search
+  - `trigger-locate` - Trigger locate search (caches label → coords in `geocodeCache` for consistent search behavior)
   - `trigger-filter-refresh` - Load all airports matching current store filters (for markers with filters)
   - `airport-click` - Open airport details panel
   - `show-country-rules` - Display rules panel
   - `reset-rules-panel` - Reset rules panel
 - Store updates trigger reactive UI updates
 - No direct method calls across components
+
+**Geocode Cache (`ts/utils/geocode-cache.ts`):**
+- Caches location label → coordinates mappings from locate searches
+- Prevents search box text (e.g., "Brac, Croatia") from triggering text search that overwrites locate results
+- See `UI_FILTER_STATE_DESIGN.md` → "Geocode Cache" section for full details
 
 ---
 
@@ -926,8 +933,11 @@ web/client/ts/
     llm-integration.ts  # LLM visualization handler
   managers/
     chatbot-manager.ts  # Chatbot UI and SSE event processing
+    ui-manager.ts      # UI event handling and search logic
   store/
     store.ts           # Zustand store (single source of truth)
+  utils/
+    geocode-cache.ts   # Geocode result cache for consistent search behavior
 ```
 
 ---
