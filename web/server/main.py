@@ -325,6 +325,12 @@ async def add_cache_control_headers(request: Request, call_next):
 css_dir = os.path.join(client_dir, "css")
 app.mount("/css", StaticFiles(directory=css_dir, html=True), name="css")
 
+# Mount assets (logos, images)
+assets_dir = client_dir / "assets"
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    logger.info(f"Assets directory mounted: {assets_dir}")
+
 # Mount TypeScript build output (for production)
 ts_dist_dir = client_dir / "dist"
 if ts_dist_dir.exists():

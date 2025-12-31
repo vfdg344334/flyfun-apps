@@ -32,8 +32,9 @@ COPY configs/ /app/configs/
 
 # Copy built client dist from builder stage
 COPY --from=client-builder /build/dist /app/web/client/dist
-# Also copy other client files needed at runtime (CSS, HTML)
+# Also copy other client files needed at runtime (CSS, HTML, assets)
 COPY web/client/css/ /app/web/client/css/
+COPY web/client/assets/ /app/web/client/assets/
 COPY web/client/index.html /app/web/client/index.html
 
 # Copy ga_persona.db into container (optional - will be in writable location)
