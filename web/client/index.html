@@ -800,14 +800,56 @@
         .legend-item {
             display: flex;
             align-items: center;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
+            font-size: 12px;
         }
 
         .legend-color {
-            width: 20px;
-            height: 20px;
+            width: 16px;
+            height: 16px;
             border-radius: 50%;
-            margin-right: 8px;
+            margin-right: 6px;
+        }
+
+        /* ===== COMPACT FONT SIZES ===== */
+        /* Legend */
+        #legend-content {
+            font-size: 12px;
+        }
+
+        /* Right panel / Data tabs */
+        .right-panel {
+            font-size: 13px;
+        }
+
+        .tab-pane-content {
+            font-size: 13px;
+        }
+
+        .airport-info, .aip-data-content, #rules-content, #relevance-content {
+            font-size: 13px;
+        }
+
+        .airport-detail-section h6 {
+            font-size: 13px;
+        }
+
+        #airport-tabs .nav-link {
+            font-size: 12px;
+            padding: 6px 10px;
+        }
+
+        /* Chatbot - see also chatbot.css */
+        .chat-messages-new {
+            font-size: 13px;
+        }
+
+        .quick-actions-new {
+            font-size: 12px;
+        }
+
+        #chat-input-new {
+            font-size: 13px;
         }
 
         .legend-line {
@@ -1742,7 +1784,7 @@
                                 </div>
                                 <div class="form-check form-check-inline mb-0">
                                     <input class="form-check-input" type="checkbox" id="border-crossing-only">
-                                    <label class="form-check-label small" for="border-crossing-only"><i class="fas fa-passport"></i> Border</label>
+                                    <label class="form-check-label small" for="border-crossing-only"><i class="fas fa-passport"></i> Border Entry</label>
                                 </div>
                                 <span class="text-muted mx-2">|</span>
                                 <div class="d-flex align-items-center gap-1">
@@ -1807,18 +1849,18 @@
                             </div>
 
                             <!-- Action Buttons -->
-                            <div class="filters-row actions-row filter-section-advanced">
-                                <button class="btn btn-success" id="locate-button">
+                            <div class="filters-row actions-row filter-section-advanced" style="gap: 8px; flex-wrap: nowrap;">
+                                <button class="btn btn-success btn-sm" id="locate-button" style="font-size: 12px;">
                                     <i class="fas fa-location-crosshairs"></i> Locate
                                 </button>
-                                <button class="btn btn-primary" id="apply-filters">
-                                    <i class="fas fa-search"></i> Apply Filters
+                                <button class="btn btn-primary btn-sm" id="apply-filters" style="font-size: 12px;">
+                                    <i class="fas fa-search"></i> Apply
                                 </button>
-                                <button class="btn btn-outline-secondary" id="reset-zoom">
-                                    <i class="fas fa-expand-arrows-alt"></i> Reset Zoom
+                                <button class="btn btn-outline-secondary btn-sm" id="reset-zoom" style="font-size: 12px;">
+                                    <i class="fas fa-expand-arrows-alt"></i> Reset
                                 </button>
-                                <button class="btn btn-outline-secondary" id="clear-filters">
-                                    <i class="fas fa-eraser"></i> Clear Filters
+                                <button class="btn btn-outline-secondary btn-sm" id="clear-filters" style="font-size: 12px;">
+                                    <i class="fas fa-eraser"></i> Clear
                                 </button>
                             </div>
 
@@ -1869,6 +1911,14 @@
                         }
                     }
 
+                    // Helper function to resize map after filter toggle
+                    function resizeMap() {
+                        window.dispatchEvent(new CustomEvent('panel-resize'));
+                        if (window.leafletMap) {
+                            window.leafletMap.invalidateSize();
+                        }
+                    }
+
                     filterModeToggle.addEventListener('click', () => {
                         const isMinimum = filtersPanel.classList.contains('minimum-mode');
 
@@ -1881,6 +1931,10 @@
                             updateToggleButton('minimum');
                             localStorage.setItem('filterMode', 'minimum');
                         }
+
+                        // Resize map after CSS transition
+                        setTimeout(resizeMap, 50);
+                        setTimeout(resizeMap, 350);
                     });
                 })();
             </script>

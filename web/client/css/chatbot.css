@@ -788,3 +788,18 @@
 .feedback-thanks i {
   font-size: 14px;
 }
+
+/* ===== COMPACT FONT SIZES ===== */
+.message-content {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message-content p {
+  margin-bottom: 0.4em;
+}
+
+.quick-action-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+}
