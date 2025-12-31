@@ -239,16 +239,32 @@ def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> 
     """
     Build UI payload using hybrid approach:
     - Flatten commonly-used fields (filters, visualization, airports) for convenience
-    - Keep mcp_raw for everything else and as authoritative source
+    - Build show_rules for rules tools to trigger frontend rules panel
     """
-    # Base payload with kind and mcp_raw
+    # Base payload with kind
     base_payload = {
         "kind": _determine_kind(plan.selected_tool),
-        "mcp_raw": tool_result,
     }
-    
+
     # Add kind-specific metadata (departure, destination, icao, etc.)
-    
+
+    # For rules tools: build show_rules with countries and tags
+    if plan.selected_tool in {"answer_rules_question", "browse_rules", "compare_rules_between_countries"}:
+        countries = []
+        if "country_code" in tool_result:
+            countries = [tool_result["country_code"]]
+        elif "countries" in tool_result:
+            countries = tool_result["countries"]
+
+        tags = plan.arguments.get("tags") or []
+        tags_by_country = {country: tags for country in countries} if tags else {}
+
+        if countries:
+            base_payload["show_rules"] = {
+                "countries": countries,
+                "tags_by_country": tags_by_country
+            }
+
     # Flatten commonly-used fields for convenience
     if "filter_profile" in tool_result:
         base_payload["filters"] = tool_result["filter_profile"]
@@ -256,7 +272,7 @@ def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> 
         base_payload["visualization"] = tool_result["visualization"]
     if "airports" in tool_result:
         base_payload["airports"] = tool_result["airports"]
-    
+
     return base_payload
 ```
 
@@ -413,7 +429,7 @@ async def aviation_agent_chat_stream(
   "suggested_queries": [...],  // Optional: follow-up query suggestions
   "show_rules": {  // Optional: for rules tools
     "countries": ["FR", "DE"],
-    "categories_by_country": {"FR": ["IFR"], "DE": ["VFR"]}
+    "tags_by_country": {"FR": ["flight_plan", "ifr"], "DE": ["transponder", "vfr"]}
   }
 }
 ```
@@ -440,7 +456,9 @@ async def aviation_agent_chat_stream(
   - Format: `[{text, tool, category, priority}, ...]`
   - Only included if next query prediction is enabled
 - `show_rules`: Optional object for rules tools to trigger rules panel display
-  - Format: `{countries: string[], categories_by_country: Record<string, string[]>}`
+  - Format: `{countries: string[], tags_by_country: Record<string, string[]>}`
+  - `tags_by_country` filters rules at the rule level (more precise than category filtering)
+  - Rules are displayed grouped by category, but filtered by tags
   - Used by frontend to display country rules in right panel
 
 ### 4.2 UI Integration
@@ -517,9 +535,12 @@ When `filter_profile` is present in `ui_payload`:
 **Rules Panel Display:**
 
 When `show_rules` is present in `ui_payload`:
-1. Extract `countries` and `categories_by_country`
+1. Extract `countries` and `tags_by_country`
 2. Dispatch `show-country-rules` event with details
-3. Rules panel displays country rules with category filters
+3. main.ts loads rules for each country via API
+4. Store updated with `tagsByCountry` visual filter
+5. Rules panel displays rules filtered by tags, grouped by category
+6. Empty categories (no matching rules) are automatically hidden
 
 **Tool-to-Visualization Mapping:**
 

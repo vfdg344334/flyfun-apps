@@ -395,10 +395,10 @@ export class ChatbotManager {
                   rulesDiv.innerHTML = `<small><i class="fas fa-gavel"></i> Showing rules for ${countries.join(', ')}</small>`;
                   messageDiv.appendChild(rulesDiv);
 
-                  // Dispatch event to display country rules with category filter
-                  const categoriesByCountry = eventData.show_rules.categories_by_country || {};
+                  // Dispatch event to display country rules with tag filter
+                  const tagsByCountry = eventData.show_rules.tags_by_country || {};
                   window.dispatchEvent(new CustomEvent('show-country-rules', {
-                    detail: { countries, categoriesByCountry }
+                    detail: { countries, tagsByCountry }
                   }));
                   showRulesReceived = true;
                 }

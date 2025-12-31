@@ -144,6 +144,29 @@ def build_ui_payload(
         base_payload["region"] = plan.arguments.get("region") or plan.arguments.get("country_code")
         base_payload["topic"] = plan.arguments.get("topic") or plan.arguments.get("category")
 
+        # Build show_rules for frontend to display rules in Rules tab
+        countries: list[str] = []
+        tags_by_country: dict[str, list[str]] = {}
+
+        # Extract countries from tool result
+        if "country_code" in tool_result:
+            countries = [tool_result["country_code"]]
+        elif "countries" in tool_result:
+            countries = tool_result["countries"]
+
+        # Extract tags from plan arguments (what was used to filter)
+        tags = plan.arguments.get("tags") or []
+
+        # Build tags_by_country - apply same tags to all countries
+        if countries:
+            if tags:
+                tags_by_country = {country: tags for country in countries}
+
+            base_payload["show_rules"] = {
+                "countries": countries,
+                "tags_by_country": tags_by_country
+            }
+
     # Flatten commonly-used fields for convenience (hybrid approach)
     # These are the fields UI accesses most frequently
     if "filter_profile" in tool_result:

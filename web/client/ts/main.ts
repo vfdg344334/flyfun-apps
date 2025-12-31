@@ -633,12 +633,12 @@ class Application {
     window.addEventListener('show-country-rules', (async (e: Event) => {
       const customEvent = e as CustomEvent<{
         countries: string[];
-        categoriesByCountry?: Record<string, string[]>;
+        tagsByCountry?: Record<string, string[]>;
       }>;
-      const { countries, categoriesByCountry } = customEvent.detail;
+      const { countries, tagsByCountry } = customEvent.detail;
 
       if (countries && countries.length > 0) {
-        console.log('FlyFunApp: Loading rules for countries', countries, 'categoriesByCountry:', categoriesByCountry);
+        console.log('FlyFunApp: Loading rules for countries', countries, 'tagsByCountry:', tagsByCountry);
 
         try {
           // Load rules for all countries in parallel
@@ -657,7 +657,7 @@ class Application {
 
           // Persist selection and LLM-provided visual filter in store
           store.getState().setRulesSelection(countries, {
-            categoriesByCountry: categoriesByCountry || {}
+            tagsByCountry: tagsByCountry || {}
           });
           // Reset any existing free-text filter when applying a new selection
           store.getState().setRulesTextFilter('');
@@ -1220,7 +1220,7 @@ class Application {
 
   /**
    * Compute visible rules from centralized store state
-   * This applies both the LLM visual filter (categoriesByCountry) and the
+   * This applies both the LLM visual filter (tagsByCountry) and the
    * free-text filter from the Rules search box.
    */
   private getVisibleRulesFromStore(): { countryLabel: string | null; totalRules: number; categories: any[] } {
@@ -1233,7 +1233,7 @@ class Application {
     const activeCountries: string[] = rulesState.activeCountries || [];
     const allRulesByCountry = rulesState.allRulesByCountry || {};
     const visualFilter = rulesState.visualFilter || null;
-    const categoriesByCountry: Record<string, string[]> = visualFilter?.categoriesByCountry || {};
+    const tagsByCountry: Record<string, string[]> = visualFilter?.tagsByCountry || {};
     const textFilter: string = (rulesState.textFilter || '').toLowerCase();
 
     const combinedCategories: any[] = [];
@@ -1245,18 +1245,21 @@ class Application {
         return;
       }
 
-      const relevantCategories = categoriesByCountry[countryCode] || [];
+      const relevantTags = tagsByCountry[countryCode] || [];
 
       countryRules.categories.forEach((cat: any) => {
-        // Apply visual filter (categoriesByCountry) if present
-        if (relevantCategories.length > 0 && !relevantCategories.includes(cat.name)) {
-          return;
-        }
-
         const rulesArray: any[] = Array.isArray(cat.rules) ? cat.rules : [];
 
-        // Apply free-text filter
+        // Apply tag filter (tagsByCountry) and free-text filter
         const visibleRules = rulesArray.filter((rule: any) => {
+          // Apply tag filter: show rule if it has ANY of the relevant tags
+          if (relevantTags.length > 0) {
+            const ruleTags: string[] = Array.isArray(rule.tags) ? rule.tags : [];
+            const hasMatchingTag = relevantTags.some(tag => ruleTags.includes(tag));
+            if (!hasMatchingTag) return false;
+          }
+
+          // Apply free-text filter
           if (!textFilter) return true;
 
           const question = (rule.question_text || '').toString().toLowerCase();
@@ -1426,6 +1429,7 @@ class Application {
     rulesContainer.innerHTML = html;
     this.initializeRuleSections();
     this.initializeRulesFilter();
+    this.syncRulesFilterInput();
   }
 
   /**
@@ -1858,50 +1862,63 @@ class Application {
   }
 
   /**
-   * Initialize rules filter
+   * Initialize rules filter (only once - don't re-initialize on every render)
    */
+  private rulesFilterInitialized = false;
+
   private initializeRulesFilter(): void {
-    const filterInput = document.getElementById('rules-filter-input');
-    const clearButton = document.getElementById('rules-filter-clear');
+    // Only initialize once to avoid cloning/replacing input on every render (causes focus loss)
+    if (this.rulesFilterInitialized) return;
+
+    const filterInput = document.getElementById('rules-filter-input') as HTMLInputElement;
+    const clearButton = document.getElementById('rules-filter-clear') as HTMLButtonElement;
 
     if (!filterInput) return;
 
-    // Remove existing listeners by cloning and replacing
-    const newFilterInput = filterInput.cloneNode(true) as HTMLInputElement;
-    filterInput.parentNode?.replaceChild(newFilterInput, filterInput);
+    this.rulesFilterInitialized = true;
 
-    const newClearButton = clearButton ? (clearButton.cloneNode(true) as HTMLButtonElement) : null;
-    if (clearButton && newClearButton) {
-      clearButton.parentNode?.replaceChild(newClearButton, clearButton);
-    }
-
-    // Sync input with current store text filter so UI reflects state
-    try {
-      const state = (this.store as any).getState() as AppState & { rules: any };
-      const rulesState = (state as any).rules;
-      newFilterInput.value = (rulesState && typeof rulesState.textFilter === 'string')
-        ? rulesState.textFilter
-        : '';
-    } catch {
-      newFilterInput.value = '';
-    }
-
-    newFilterInput.addEventListener('input', (e) => {
+    filterInput.addEventListener('input', (e) => {
       const target = e.target as HTMLInputElement;
       const store = this.store as any;
       store.getState().setRulesTextFilter(target.value || '');
-      // Render will also be triggered by store subscription, but do an immediate
-      // update here for snappy UX.
       this.renderRulesPanelFromStore();
     });
 
-    if (newClearButton) {
-      newClearButton.addEventListener('click', () => {
-        newFilterInput.value = '';
+    if (clearButton) {
+      clearButton.addEventListener('click', () => {
+        filterInput.value = '';
         const store = this.store as any;
         store.getState().setRulesTextFilter('');
         this.renderRulesPanelFromStore();
       });
+    }
+
+    // Sync input value with store on first initialization
+    this.syncRulesFilterInput();
+  }
+
+  /**
+   * Sync rules filter input value with store (without touching focus)
+   */
+  private syncRulesFilterInput(): void {
+    const filterInput = document.getElementById('rules-filter-input') as HTMLInputElement;
+    if (!filterInput) return;
+
+    // Don't update if input has focus (user is typing)
+    if (document.activeElement === filterInput) return;
+
+    try {
+      const state = (this.store as any).getState() as AppState & { rules: any };
+      const rulesState = (state as any).rules;
+      const storeValue = (rulesState && typeof rulesState.textFilter === 'string')
+        ? rulesState.textFilter
+        : '';
+
+      if (filterInput.value !== storeValue) {
+        filterInput.value = storeValue;
+      }
+    } catch {
+      // Ignore errors
     }
   }
 

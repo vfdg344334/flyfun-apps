@@ -611,9 +611,13 @@ The Rules system manages country-specific aviation regulations, with support for
 interface RulesState {
   allRulesByCountry: Record<string, CountryRules>; // All loaded rules, keyed by ISO country code
   activeCountries: string[];                     // Currently selected countries (display order)
-  visualFilter: RulesVisualFilter | null;        // LLM-provided visual filter (categoriesByCountry)
+  visualFilter: RulesVisualFilter | null;        // LLM-provided visual filter (tagsByCountry)
   textFilter: string;                             // Free-text filter from Rules search box
   sectionState: Record<string, boolean>;          // Expand/collapse state per section (sectionId -> expanded)
+}
+
+interface RulesVisualFilter {
+  tagsByCountry: Record<string, string[]>;  // Tags to filter by, per country
 }
 ```
 
@@ -625,10 +629,11 @@ LLM sends 'show-country-rules' event → main.ts loads rules → APIAdapter.getC
 store.setRulesForCountry() → store.setRulesSelection() → Rules panel renders
 ```
 
-**Visual Filtering:**
+**Visual Filtering (Tag-Based):**
 ```
-LLM provides categoriesByCountry → store.setRulesSelection(countries, visualFilter) → 
-Rules panel filters to show only specified categories per country
+LLM provides tagsByCountry → store.setRulesSelection(countries, visualFilter) →
+Rules panel filters rules at rule-level (show rules with ANY matching tag) →
+Rules displayed grouped by category, empty categories auto-hidden
 ```
 
 **Text Filtering:**
@@ -645,7 +650,10 @@ Restored on next render
 
 ### Key Concepts
 
-- **Visual Filter**: LLM can provide `categoriesByCountry` to show only relevant categories
+- **Visual Filter (Tag-Based)**: LLM provides `tagsByCountry` to filter rules by tags
+  - Filters at rule level (more precise than category-level filtering)
+  - Rules shown if they have ANY of the specified tags
+  - Rules displayed grouped by category, empty categories auto-hidden
 - **Text Filter**: Free-text search across question, answer, tags, category, and country
 - **Section State**: Expand/collapse state persisted per section ID
 - **Store-Driven Rendering**: Rules panel renders from centralized store state, not direct API calls
