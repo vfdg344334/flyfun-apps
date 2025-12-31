@@ -64,8 +64,8 @@ const initialState: AppState = {
   selectedAirport: null,
   
   mapView: {
-    center: [50.0, 10.0],
-    zoom: 5
+    center: [47.67, 9.51],
+    zoom: 4
   },
   
   ui: {

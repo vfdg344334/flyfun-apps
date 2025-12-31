@@ -45,8 +45,9 @@ export class VisualizationEngine {
       return;
     }
     
-    // Initialize Leaflet map
-    this.map = L.map(containerId).setView([50.0, 10.0], 5);
+    // Initialize Leaflet map - read initial view from store (single source of truth)
+    const { mapView } = useStore.getState();
+    this.map = L.map(containerId).setView(mapView.center, mapView.zoom);
     
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {

@@ -817,28 +817,33 @@ class Application {
   }
 
   /**
-   * Load initial airports
+   * Load initial airports within the current viewport
+   * Uses viewport bounds to preserve the default Europe-centered view
    */
   private async loadInitialAirports(): Promise<void> {
-    const state = this.store.getState();
+    const map = this.visualizationEngine.getMap();
+    if (!map) return;
 
-    // Only load if filters are applied
-    const hasFilters = Object.values(state.filters).some(value =>
-      value !== null && value !== undefined && value !== ''
-    );
-
-    if (hasFilters) {
-      this.store.getState().setLoading(true);
-      try {
-        const response = await this.apiAdapter.getAirports(state.filters);
-        this.store.getState().setAirports(response.data);
-        this.store.getState().setLoading(false);
-      } catch (error: any) {
-        console.error('Error loading initial airports:', error);
-        this.store.getState().setError('Error loading airports: ' + (error.message || 'Unknown error'));
-        this.store.getState().setLoading(false);
+    // Wait for map to be fully ready (tiles loaded, bounds valid)
+    await new Promise<void>(resolve => {
+      if (map.getSize().x > 0 && map.getSize().y > 0) {
+        resolve();
+      } else {
+        // Wait for map container to have dimensions
+        setTimeout(resolve, 200);
       }
-    }
+    });
+
+    // Use viewport-based loading to preserve initial map view
+    const bounds = map.getBounds();
+    const bbox: BoundingBox = {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest()
+    };
+
+    await this.fetchAirportsInViewport(bbox);
   }
 
   // Limit for viewport-based airport loading (lower than default to improve performance)
