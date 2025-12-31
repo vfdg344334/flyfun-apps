@@ -491,15 +491,23 @@
 
         /* Compact padding in minimum mode */
         .filters-panel-full.minimum-mode .filters-content {
-            padding: 15px 25px;
+            padding: 8px 15px;
         }
 
         .filters-panel-full.minimum-mode .filters-row {
-            margin-bottom: 12px;
+            margin-bottom: 8px;
         }
 
         .filters-panel-full.minimum-mode .quick-filters-row {
-            margin-bottom: 12px;
+            margin-bottom: 8px;
+        }
+
+        .filters-panel-full.minimum-mode .panel-header {
+            padding: 6px 12px;
+        }
+
+        .filters-panel-full.minimum-mode .panel-header h5 {
+            font-size: 13px;
         }
 
         .filters-panel-full {
@@ -1139,11 +1147,31 @@
 
         .legend-panel {
             background: var(--surface-color);
-            padding: 15px;
+            padding: 10px 12px;
             border-radius: 8px;
             box-shadow: var(--shadow-md);
             margin-top: auto;
             flex-shrink: 0;
+        }
+
+        .legend-content-collapsible {
+            margin-top: 8px;
+            transition: max-height 0.3s ease, opacity 0.2s ease;
+            overflow: hidden;
+        }
+
+        .legend-panel.collapsed .legend-content-collapsible {
+            max-height: 0 !important;
+            opacity: 0;
+            margin-top: 0;
+        }
+
+        .legend-panel.collapsed #legend-toggle i {
+            transform: rotate(-90deg);
+        }
+
+        #legend-toggle i {
+            transition: transform 0.2s ease;
         }
 
         /* ===== RESPONSIVE DESIGN: IPAD ===== */
@@ -1438,29 +1466,29 @@
 <body>
     <div class="container-fluid">
         <!-- Header -->
-        <div class="row mt-2 align-items-center">
+        <div class="row align-items-center" style="padding: 6px 15px;">
             <div class="col-12">
-                <div class="d-flex justify-content-between align-items-center mb-2" style="padding: 0 15px;">
-                    <div style="width: 200px;"></div> <!-- Spacer for centering -->
-                    <h2 class="mb-0">
+                <div class="d-flex align-items-center gap-3">
+                    <!-- Title left -->
+                    <h5 class="mb-0" style="white-space: nowrap;">
                         <i class="fas fa-plane"></i> FlyFun
-                    </h2>
-                    <div class="d-flex align-items-center gap-2" style="width: 250px; justify-content: flex-end;">
+                    </h5>
+                    <!-- Tagline centered -->
+                    <span class="text-muted small flex-grow-1 text-center" style="white-space: nowrap;">Your intelligent aviation assistant</span>
+                    <!-- Controls right -->
+                    <div class="d-flex align-items-center gap-2" style="white-space: nowrap;">
                         <select class="form-select form-select-sm" id="persona-selector"
-                            style="width: auto; min-width: 180px;" title="Select pilot persona for relevance scoring">
+                            style="width: auto; min-width: 150px; padding: 2px 24px 2px 8px; font-size: 12px;" title="Select pilot persona">
                             <option value="ifr_touring_sr22">IFR Touring (SR22)</option>
-                            <!-- Options populated dynamically from API -->
                         </select>
-                        <button class="btn btn-outline-secondary btn-sm" id="theme-toggle" title="Toggle theme">
+                        <button class="btn btn-outline-secondary btn-sm py-0 px-2" id="theme-toggle" title="Toggle theme" style="font-size: 12px;">
                             <i class="fas fa-circle-half-stroke"></i>
                         </button>
-                        <button class="btn btn-outline-primary btn-sm" id="share-button" title="Copy shareable URL">
-                            <i class="fas fa-share-alt"></i> Share
+                        <button class="btn btn-outline-primary btn-sm py-0 px-2 d-flex align-items-center gap-1" id="share-button" title="Copy shareable URL" style="font-size: 12px;">
+                            <i class="fas fa-share-alt"></i> <span>Share</span>
                         </button>
                     </div>
                 </div>
-                <p class="text-center text-muted mb-2">Your intelligent aviation assistant - Interactive map with
-                    European airports, AIP data, and empirical flying rules</p>
             </div>
         </div>
 
@@ -1660,23 +1688,27 @@
                                 </div>
                             </div>
 
-                            <!-- Legend (Always Visible) -->
-                            <div class="legend-panel">
+                            <!-- Legend (Collapsible) -->
+                            <div class="legend-panel" id="legend-panel">
                                 <div class="legend-horizontal" id="legend">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h6 class="mb-0"><i class="fas fa-info-circle"></i> Legend</h6>
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <button class="btn btn-sm btn-link p-0 text-secondary" id="legend-toggle" title="Toggle legend">
+                                                <i class="fas fa-chevron-down"></i>
+                                            </button>
+                                            <h6 class="mb-0" style="font-size: 13px;"><i class="fas fa-info-circle"></i> Legend</h6>
+                                        </div>
                                         <select class="form-select form-select-sm" id="legend-mode-filter"
-                                            style="width: auto;">
+                                            style="width: auto; font-size: 11px; padding: 2px 20px 2px 6px;">
                                             <option value="airport-type" selected>Airport Type</option>
-                                            <option value="procedure-precision">Procedure Precision</option>
-                                            <option value="runway-length">Runway Length</option>
+                                            <option value="procedure-precision">Procedure</option>
+                                            <option value="runway-length">Runway</option>
                                             <option value="country">Country</option>
-                                            <option value="relevance">GA Relevance</option>
+                                            <option value="relevance">Relevance</option>
                                             <option value="notification">Notification</option>
                                         </select>
                                     </div>
-                                    <!-- Persona selector moved to global header -->
-                                    <div id="legend-content">
+                                    <div id="legend-content" class="legend-content-collapsible">
                                         <!-- Legend content will be dynamically updated -->
                                     </div>
                                 </div>
@@ -1697,46 +1729,41 @@
                         </div>
 
                         <div class="filters-content">
-                            <!-- Quick Filters Row -->
-                            <div class="filters-row quick-filters-row">
-                                <div class="form-check form-check-inline">
+                            <!-- Quick Filters Row - Compact -->
+                            <div class="filters-row quick-filters-row" style="gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <span class="text-muted small" style="font-weight: 500;">has</span>
+                                <div class="form-check form-check-inline mb-0">
                                     <input class="form-check-input" type="checkbox" id="has-procedures">
-                                    <label class="form-check-label" for="has-procedures">Has Procedures</label>
+                                    <label class="form-check-label small" for="has-procedures">Procedure</label>
                                 </div>
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="checkbox" id="has-aip-data">
-                                    <label class="form-check-label" for="has-aip-data">Has AIP Data</label>
-                                </div>
-                                <div class="form-check form-check-inline">
+                                <div class="form-check form-check-inline mb-0">
                                     <input class="form-check-input" type="checkbox" id="has-hard-runway">
-                                    <label class="form-check-label" for="has-hard-runway">Has Hard Runway</label>
+                                    <label class="form-check-label small" for="has-hard-runway">Hard Runway</label>
                                 </div>
-                                <div class="form-check form-check-inline">
+                                <div class="form-check form-check-inline mb-0">
                                     <input class="form-check-input" type="checkbox" id="border-crossing-only">
-                                    <label class="form-check-label" for="border-crossing-only"><i
-                                            class="fas fa-passport"></i> Border Crossing Only</label>
+                                    <label class="form-check-label small" for="border-crossing-only"><i class="fas fa-passport"></i> Border</label>
                                 </div>
-                            </div>
-
-                            <!-- Hospitality Filters Row -->
-                            <div class="filters-row">
-                                <div class="filter-field">
-                                    <label for="hotel-filter"><i class="fas fa-bed"></i> Hotel</label>
-                                    <select class="form-select form-select-sm" id="hotel-filter">
-                                        <option value="">Any</option>
+                                <span class="text-muted mx-2">|</span>
+                                <div class="d-flex align-items-center gap-1">
+                                    <i class="fas fa-bed text-muted small"></i>
+                                    <select class="form-select form-select-sm py-0" id="hotel-filter" style="width: auto; font-size: 12px;">
+                                        <option value="">Hotel</option>
                                         <option value="at_airport">At Airport</option>
-                                        <option value="vicinity">In Vicinity</option>
+                                        <option value="vicinity">Vicinity</option>
                                     </select>
                                 </div>
-                                <div class="filter-field">
-                                    <label for="restaurant-filter"><i class="fas fa-utensils"></i> Restaurant</label>
-                                    <select class="form-select form-select-sm" id="restaurant-filter">
-                                        <option value="">Any</option>
+                                <div class="d-flex align-items-center gap-1">
+                                    <i class="fas fa-utensils text-muted small"></i>
+                                    <select class="form-select form-select-sm py-0" id="restaurant-filter" style="width: auto; font-size: 12px;">
+                                        <option value="">Restaurant</option>
                                         <option value="at_airport">At Airport</option>
-                                        <option value="vicinity">In Vicinity</option>
+                                        <option value="vicinity">Vicinity</option>
                                     </select>
                                 </div>
                             </div>
+                            <!-- Hidden checkbox to maintain compatibility -->
+                            <input type="checkbox" id="has-aip-data" style="display: none;">
 
                             <!-- Search Row -->
                             <div class="filters-row">
@@ -1795,72 +1822,6 @@
                                 </button>
                             </div>
 
-                            <!-- Advanced AIP Filters Section -->
-                            <div class="filter-section mt-3 filter-section-advanced">
-                                <div class="filter-section-header" data-bs-toggle="collapse"
-                                    data-bs-target="#advanced-aip-filters" aria-expanded="false">
-                                    <h6 class="mb-0">
-                                        <i class="fas fa-cog"></i> Advanced AIP Filters
-                                        <i class="fas fa-chevron-down ms-auto"></i>
-                                    </h6>
-                                </div>
-
-                                <div class="collapse" id="advanced-aip-filters">
-                                    <div class="filter-section-content">
-                                        <!-- Predefined AIP Filter Presets -->
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Quick Filters:</label>
-                                            <div class="aip-preset-buttons" id="aip-preset-buttons">
-                                                <!-- Preset buttons will be loaded dynamically -->
-                                            </div>
-                                        </div>
-
-                                        <!-- Custom AIP Field Filter -->
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Custom Field Filter:</label>
-                                            <div class="row g-2">
-                                                <div class="col-12">
-                                                    <select class="form-select form-select-sm" id="aip-field-select">
-                                                        <option value="">Select AIP Field...</option>
-                                                    </select>
-                                                </div>
-                                                <div class="col-6">
-                                                    <select class="form-select form-select-sm" id="aip-operator-select">
-                                                        <option value="contains">Contains</option>
-                                                        <option value="equals">Equals</option>
-                                                        <option value="not_empty">Not Empty</option>
-                                                        <option value="starts_with">Starts With</option>
-                                                        <option value="ends_with">Ends With</option>
-                                                    </select>
-                                                </div>
-                                                <div class="col-6">
-                                                    <input type="text" class="form-control form-control-sm"
-                                                        id="aip-value-input" placeholder="Value...">
-                                                </div>
-                                                <div class="col-12">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary w-100"
-                                                        id="clear-aip-filter">
-                                                        <i class="fas fa-times"></i> Clear AIP Filter
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- Active AIP Filter Display -->
-                                        <div id="active-aip-filter" class="alert alert-info py-2"
-                                            style="display: none;">
-                                            <small>
-                                                <i class="fas fa-filter"></i>
-                                                <span id="active-aip-filter-text"></span>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
-                                                    id="remove-aip-filter">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                            </small>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -1920,6 +1881,27 @@
                             updateToggleButton('minimum');
                             localStorage.setItem('filterMode', 'minimum');
                         }
+                    });
+                })();
+            </script>
+
+            <!-- Legend Collapse/Expand Script -->
+            <script>
+                (function () {
+                    const legendToggle = document.getElementById('legend-toggle');
+                    const legendPanel = document.getElementById('legend-panel');
+
+                    if (!legendToggle || !legendPanel) return;
+
+                    // Check localStorage for saved preference
+                    const savedState = localStorage.getItem('legendCollapsed');
+                    if (savedState === 'true') {
+                        legendPanel.classList.add('collapsed');
+                    }
+
+                    legendToggle.addEventListener('click', () => {
+                        const isCollapsed = legendPanel.classList.toggle('collapsed');
+                        localStorage.setItem('legendCollapsed', isCollapsed);
                     });
                 })();
             </script>
