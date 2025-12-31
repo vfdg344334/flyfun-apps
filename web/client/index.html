@@ -323,12 +323,29 @@
         }
 
         /* ===== CHATBOT PANEL ===== */
-        .quick-actions-new {
-            padding: 6px 16px;
+        .chatbot-header-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
             background: var(--quick-action-bg);
             border-bottom: 1px solid var(--quick-action-border);
+            flex-shrink: 0;
+        }
+
+        .chatbot-header-row .quick-actions-new {
+            flex: 1;
+            min-width: 0;
+            padding: 0;
+            background: none;
+            border-bottom: none;
             overflow-x: auto;
             white-space: nowrap;
+        }
+
+        .chatbot-header-row .panel-actions {
+            display: flex;
+            gap: 4px;
             flex-shrink: 0;
         }
 
@@ -1511,12 +1528,14 @@
         <div class="row align-items-center" style="padding: 6px 15px;">
             <div class="col-12">
                 <div class="d-flex align-items-center gap-3">
-                    <!-- Title left -->
-                    <h5 class="mb-0" style="white-space: nowrap;">
-                        <i class="fas fa-plane"></i> FlyFun
+                    <!-- Title left with theme-aware logo -->
+                    <h5 class="mb-0 d-flex align-items-center gap-2" style="white-space: nowrap;">
+                        <img src="assets/logo-light.svg" alt="FlyFun" class="logo-light" style="height: 24px; width: 24px;">
+                        <img src="assets/logo-dark.svg" alt="FlyFun" class="logo-dark" style="height: 24px; width: 24px; display: none;">
+                        FlyFun Assistant
                     </h5>
                     <!-- Tagline centered -->
-                    <span class="text-muted small flex-grow-1 text-center" style="white-space: nowrap;">Your intelligent aviation assistant</span>
+                    <span class="text-muted small flex-grow-1 text-center" style="white-space: nowrap;">Aspiring to be your intelligent aviation assistant</span>
                     <!-- Controls right -->
                     <div class="d-flex align-items-center gap-2" style="white-space: nowrap;">
                         <select class="form-select form-select-sm" id="persona-selector"
@@ -1543,8 +1562,13 @@
                 <div id="left-panel" class="left-panel">
                     <!-- Chatbot Panel -->
                     <div id="chatbot-panel-new" class="panel-content">
-                        <div class="panel-header">
-                            <h5><i class="fas fa-robot"></i> FlyFun Assistant</h5>
+                        <!-- Quick Actions + Panel Controls (consolidated header) -->
+                        <div class="chatbot-header-row">
+                            <div class="quick-actions-new">
+                                <div id="quick-actions-container-new">
+                                    <!-- Quick action buttons will be loaded here -->
+                                </div>
+                            </div>
                             <div class="panel-actions">
                                 <button id="chatbot-expand-btn-new" class="btn-panel-action" title="Expand (Ctrl+E)">
                                     <i class="fas fa-expand"></i>
@@ -1552,13 +1576,6 @@
                                 <button id="chatbot-clear-btn-new" class="btn-panel-action" title="Clear conversation">
                                     <i class="fas fa-trash"></i>
                                 </button>
-                            </div>
-                        </div>
-
-                        <!-- Quick Actions -->
-                        <div class="quick-actions-new">
-                            <div id="quick-actions-container-new">
-                                <!-- Quick action buttons will be loaded here -->
                             </div>
                         </div>
 

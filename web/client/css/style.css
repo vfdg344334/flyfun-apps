@@ -216,3 +216,12 @@
 [data-theme="dark"] .airport-detail-section h6 {
     color: var(--text-primary);
 }
+
+/* Theme-aware logo switching */
+[data-theme="dark"] .logo-light {
+    display: none !important;
+}
+
+[data-theme="dark"] .logo-dark {
+    display: inline-block !important;
+}
