@@ -1,0 +1,32 @@
+[
+  {
+    "query": "What are the rules for IFR transit in Germany?",
+    "country": "DE",
+    "top_k": 5,
+    "description": "IFR transit rules for Germany - should retrieve airspace/IFR related questions"
+  },
+  {
+    "query": "Do I need to file a flight plan for VFR in France?",
+    "country": "FR",
+    "top_k": 5,
+    "description": "VFR flight plan requirements in France"
+  },
+  {
+    "query": "What are the transponder requirements in the UK?",
+    "country": "GB",
+    "top_k": 5,
+    "description": "Transponder requirements - should retrieve transponder tagged questions"
+  },
+  {
+    "query": "How do I get permission to land at a military airfield in Germany?",
+    "country": "DE",
+    "top_k": 5,
+    "description": "Airfield permission questions"
+  },
+  {
+    "query": "What clearance do I need to enter controlled airspace VFR in France?",
+    "country": "FR",
+    "top_k": 5,
+    "description": "Airspace clearance requirements"
+  }
+]

@@ -3,6 +3,66 @@
 ## Overview
 Review code changes in `shared/aviation_agent/` and `web/server/api/aviation_agent_chat.py` to ensure compliance with our LangGraph agent architecture. Verify that the UI payload remains stable, tool names match the manifest, and state management follows LangGraph patterns.
 
+## Agent Flow
+The agent uses a simple planner-based architecture:
+```
+Planner → [Predict Next Queries] → Tool → Formatter → END
+```
+
+The planner selects the appropriate tool based on user query. No routing layer - the planner handles all tool selection directly.
+
+## Available Tools (from `shared/airport_tools.py`)
+
+**Airport Tools:**
+- `search_airports` - Text/name/code search, country queries
+- `find_airports_near_location` - Proximity search near a specific place
+- `find_airports_near_route` - Airports along a route between two points
+- `get_airport_details` - Details for a specific ICAO code
+- `get_notification_for_airport` - Notification/requirements for an airport
+
+**Rules Tools:**
+- `answer_rules_question` - RAG-based semantic search for specific questions (single country)
+- `browse_rules` - Tag-based listing with pagination
+- `compare_rules_between_countries` - Semantic comparison of 2+ countries
+
+**Deprecated/Removed:**
+- ~~`list_rules_for_country`~~ - Replaced by `answer_rules_question` and `browse_rules`
+
+## AgentState Fields
+
+Current state structure (see `shared/aviation_agent/state.py`):
+
+```python
+class AgentState(TypedDict, total=False):
+    messages: Annotated[List[BaseMessage], operator.add]
+
+    # Planning
+    plan: Optional[AviationPlan]
+    planning_reasoning: Optional[str]
+
+    # Tool execution
+    tool_result: Optional[Any]
+
+    # Output
+    formatting_reasoning: Optional[str]
+    final_answer: Optional[str]
+    thinking: Optional[str]
+    ui_payload: Optional[dict]
+    error: Optional[str]
+
+    # User preferences
+    persona_id: Optional[str]
+
+    # Next query prediction
+    suggested_queries: Optional[List[dict]]
+```
+
+**Removed fields** (no longer in state):
+- ~~`router_decision`~~ - Routing was removed
+- ~~`retrieved_rules`~~ - Rules retrieval now happens inside tools
+- ~~`rules_answer`~~ - Rules answers now come through tool_result
+- ~~`rules_sources`~~ - Sources now come through tool_result
+
 ## Architecture Rules
 
 1. **UI Payload Stability** - Hybrid approach must be maintained:
@@ -50,12 +110,13 @@ Review code changes in `shared/aviation_agent/` and `web/server/api/aviation_age
 
 9. **Configuration Management** - All behavioral settings must use behavior_config:
    - LLM models, temperatures, streaming settings from `behavior_config.llms.*`
-   - Feature flags (routing, reranking, etc.) from `behavior_config.*.enabled`
+   - Feature flags (reranking, next_query_prediction) from `behavior_config.*.enabled`
    - RAG settings (embedding model, top_k, thresholds) from `behavior_config.rag.*`
    - Reranking provider and models from `behavior_config.reranking.*`
    - System prompts loaded via `behavior_config.load_prompt(key)`
    - No hardcoded config values in code (except defaults in `AgentBehaviorConfig.default()`)
    - Use `get_behavior_config(settings.agent_config_name)` to load config
+   - NOTE: `routing.enabled` is deprecated - routing has been removed
 
 ## Review Checklist
 
@@ -110,13 +171,14 @@ Review code changes in `shared/aviation_agent/` and `web/server/api/aviation_age
 
 ### 9. Configuration Management
 - [ ] LLM settings (model, temperature, streaming) come from `behavior_config.llms.*`?
-- [ ] Feature flags (routing, reranking, etc.) come from `behavior_config.*.enabled`?
+- [ ] Feature flags (reranking, next_query_prediction) come from `behavior_config.*.enabled`?
 - [ ] RAG settings (embedding model, top_k, thresholds) come from `behavior_config.rag.*`?
 - [ ] Reranking provider and models come from `behavior_config.reranking.*`?
 - [ ] System prompts loaded via `behavior_config.load_prompt(key)`?
 - [ ] No hardcoded config values (models, temperatures, thresholds, etc.)?
 - [ ] Uses `get_behavior_config()` to load config instead of hardcoding?
 - [ ] Config passed through function parameters (not re-loaded in each function)?
+- [ ] No references to deprecated `routing.enabled` (routing was removed)?
 
 ## Red Flags to Flag
 
@@ -136,6 +198,7 @@ Flag these violations immediately:
 - 🔴 **Config logic in code**: Feature flags or settings determined by code logic instead of behavior_config
 - 🔴 **Prompt hardcoding**: System prompts embedded in code instead of loaded from config
 - 🔴 **Re-loading config**: Calling `get_behavior_config()` multiple times instead of passing config through
+- 🔴 **Using deprecated routing**: References to `routing.enabled`, `QueryRouter`, or routing-related code (routing was removed)
 
 ## Review Process
 
@@ -234,18 +297,11 @@ def build_agent_graph(..., behavior_config=None):
     if behavior_config is None:
         settings = get_settings()
         behavior_config = get_behavior_config(settings.agent_config_name)
-    
-    # Use config for all settings
-    if behavior_config.routing.enabled:
-        router = QueryRouter(...)
-    
-    rag_system = RulesRAG(
-        embedding_model=behavior_config.rag.embedding_model,
-        enable_reranking=behavior_config.reranking.enabled,
-        reranking_provider=behavior_config.reranking.provider,
-        ...
-    )
-    
+
+    # Use config for feature flags
+    if behavior_config.next_query_prediction.enabled:
+        predictor = NextQueryPredictor(...)
+
     # Load prompts from config
     formatter_prompt = behavior_config.load_prompt("formatter")
     formatter_chain = build_formatter_chain(formatter_llm, system_prompt=formatter_prompt)
@@ -261,14 +317,8 @@ def build_planner_runnable(llm, tools, system_prompt=None):
 # ❌ BAD: Hardcoded config values
 def build_agent_graph(...):
     if True:  # Hardcoded feature flag!
-        router = QueryRouter(...)
-    
-    rag_system = RulesRAG(
-        embedding_model="text-embedding-3-small",  # Hardcoded!
-        top_k=5,  # Hardcoded!
-        similarity_threshold=0.3,  # Hardcoded!
-    )
-    
+        predictor = NextQueryPredictor(...)
+
     # Hardcoded prompt
     system_prompt = "You are a helpful assistant..."  # Should be in config file!
 
@@ -277,12 +327,10 @@ def some_function():
     config = get_behavior_config("default")  # Re-loads every time!
     # Should receive config as parameter instead
 
-# ❌ BAD: Config logic in code
+# ❌ BAD: Using deprecated routing
 def build_agent_graph(...):
-    # Determining feature flags by code logic
-    enable_routing = os.getenv("ENABLE_ROUTING", "true") == "true"  # Should be in config!
-    if enable_routing:
-        ...
+    if behavior_config.routing.enabled:  # DEPRECATED - routing was removed!
+        router = QueryRouter(...)  # Don't use this!
 ```
 
 ## Key Considerations
@@ -349,6 +397,8 @@ def build_agent_graph(...):
 - Re-load config in every function (pass as parameter)
 - Determine feature flags by code logic (use config)
 - Put behavioral settings in environment variables (use config files)
+- Use deprecated `routing.enabled` or `QueryRouter` (routing was removed)
+- Use deprecated `list_rules_for_country` tool (use `answer_rules_question` or `browse_rules`)
 
 ## Notes
 
@@ -365,10 +415,11 @@ def build_agent_graph(...):
 
 ### What Goes in Config (Behavioral Settings)
 - LLM models, temperatures, streaming per component
-- Feature flags: routing, query reformulation, reranking, next query prediction
+- Feature flags: query reformulation, reranking, next query prediction
 - RAG settings: embedding model, top_k, similarity_threshold, rerank_candidates_multiplier
 - Reranking: provider (cohere/openai/none), model selection
 - System prompts: file paths to markdown files
+- NOTE: `routing` is deprecated and has no effect (routing was removed)
 
 ### What Goes in Environment Variables (Deployment-Specific)
 - `AVIATION_AGENT_CONFIG` - Which config file to use
@@ -397,8 +448,9 @@ def build_planner_runnable(..., system_prompt=None):
 ### Common Violations to Flag
 - Hardcoded model names: `model="gpt-4o"` → Use `behavior_config.llms.planner.model`
 - Hardcoded temperatures: `temperature=0.3` → Use `behavior_config.llms.formatter.temperature`
-- Hardcoded feature flags: `if True:` → Use `behavior_config.routing.enabled`
+- Hardcoded feature flags: `if True:` → Use `behavior_config.next_query_prediction.enabled`
 - Hardcoded thresholds: `similarity_threshold=0.3` → Use `behavior_config.rag.retrieval.similarity_threshold`
 - Embedded prompts: `system_prompt = "You are..."` → Use `behavior_config.load_prompt("planner")`
 - Code-based feature flags: `if os.getenv("FEATURE")` → Use `behavior_config.feature.enabled`
+- Using deprecated routing: `behavior_config.routing.enabled` → Routing was removed, don't use
 

@@ -180,11 +180,10 @@ class NotificationScorer:
                     (icao, score.summary, score.level.value, score.score, now)
                 )
             
-            # Write detailed rules if provided
-            if parsed_rules:
-                for icao, parsed in parsed_rules.items():
-                    self._write_notification_rules(conn, icao, parsed, now)
-            
+            # Note: Detailed rules are no longer written to ga_persona.db
+            # Notification data is now stored in ga_notifications.db (separate database)
+            # The parsed_rules parameter is kept for backward compatibility but ignored.
+
             conn.commit()
             logger.info(f"Updated {updated} airports in GA persona database")
             return updated
@@ -192,54 +191,8 @@ class NotificationScorer:
         finally:
             conn.close()
     
-    def _write_notification_rules(
-        self,
-        conn: sqlite3.Connection,
-        icao: str,
-        parsed: ParsedNotificationRules,
-        timestamp: str,
-    ) -> None:
-        """Write parsed rules to ga_notification_requirements table."""
-        import json
-        
-        # Delete existing rules for this airport
-        conn.execute(
-            "DELETE FROM ga_notification_requirements WHERE icao = ?",
-            (icao,)
-        )
-        
-        # Insert new rules
-        for rule in parsed.rules:
-            conn.execute(
-                """
-                INSERT INTO ga_notification_requirements (
-                    icao, rule_type, weekday_start, weekday_end,
-                    notification_hours, notification_type,
-                    specific_time, business_day_offset, is_obligatory,
-                    includes_holidays, schengen_only, non_schengen_only,
-                    conditions_json, raw_text, source_std_field_id,
-                    confidence, created_utc, updated_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    icao,
-                    rule.rule_type.value,
-                    rule.weekday_start,
-                    rule.weekday_end,
-                    rule.hours_notice,
-                    rule.notification_type.value,
-                    rule.specific_time,
-                    rule.business_day_offset,
-                    1 if rule.is_obligatory else 0,
-                    1 if rule.includes_holidays else 0,
-                    1 if rule.schengen_only else 0,
-                    1 if rule.non_schengen_only else 0,
-                    json.dumps(rule.conditions) if rule.conditions else None,
-                    rule.raw_text,
-                    parsed.source_std_field_id,
-                    rule.confidence,
-                    timestamp,
-                    timestamp,
-                )
-            )
+    # DEPRECATED: This method used to write to ga_notification_requirements in ga_persona.db
+    # Notification data is now stored in ga_notifications.db with a different schema.
+    # This method is kept for reference but should not be used.
+    # See NotificationService for the current notification data access pattern.
 

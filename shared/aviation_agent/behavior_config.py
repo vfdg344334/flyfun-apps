@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +26,14 @@ class LLMsConfig(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    enabled: bool = True
+    """
+    Legacy routing configuration.
+
+    NOTE: Routing is deprecated. The planner now handles all tool selection directly,
+    including rules tools (answer_rules_question, browse_rules, compare_rules_between_countries).
+    This config is kept for backwards compatibility but has no effect.
+    """
+    enabled: bool = False  # Deprecated - routing is no longer used
 
 
 class QueryReformulationConfig(BaseModel):
@@ -59,16 +66,97 @@ class RerankingConfig(BaseModel):
     openai: Optional[OpenAIRerankingConfig] = OpenAIRerankingConfig()
 
 
+class FilterSuggestionTemplate(BaseModel):
+    """Template for filter-based suggestion."""
+    filter: str
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class EntitySuggestionTemplate(BaseModel):
+    """Template for entity-based suggestion."""
+    entity_type: str  # "icao_codes", "countries", "locations"
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class RuleCategoryTemplate(BaseModel):
+    """Template for rule category suggestions."""
+    name: str
+    priority: int
+    max_questions: int = 1
+
+
+class ToolSuggestionTemplates(BaseModel):
+    """Templates for suggestions for a specific tool."""
+    filters: List[FilterSuggestionTemplate] = []
+    entities: List[EntitySuggestionTemplate] = []
+    rule_categories: List[RuleCategoryTemplate] = []
+    fallback_queries: List[str] = []
+
+
 class NextQueryPredictionConfig(BaseModel):
     enabled: bool = True
     max_suggestions: int = Field(default=4, gt=0, le=20)
+    templates_path: Optional[str] = Field(
+        default="next_query_predictor/default.json",
+        description="Path to templates JSON file, relative to configs/ directory."
+    )
+
+
+class ComparisonConfig(BaseModel):
+    """
+    Configuration for cross-country rule comparison feature.
+
+    This feature uses answer embeddings to identify semantic differences
+    between countries' rules, then uses LLM synthesis to explain differences.
+    """
+    enabled: bool = True
+
+    # Embedding-based filtering parameters
+    max_questions: int = Field(
+        default=15,
+        gt=0,
+        le=100,
+        description="Maximum questions to send to LLM for synthesis. "
+                    "Set high (e.g., 100) to send all, low (e.g., 5) for aggressive filtering."
+    )
+    min_difference: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine difference threshold. "
+                    "0.0 = include identical answers, 1.0 = only opposite answers."
+    )
+    send_all_threshold: int = Field(
+        default=10,
+        gt=0,
+        description="If total questions <= this, send all regardless of difference score."
+    )
+
+    # LLM synthesis settings
+    synthesis_model: Optional[str] = Field(
+        default=None,
+        description="Model for synthesis. None = use formatter model."
+    )
+    synthesis_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0
+    )
 
 
 class PromptsConfig(BaseModel):
     planner: str  # Path to prompt file, e.g., "prompts/planner_v1.md"
     formatter: str
-    rules_agent: str
-    router: str
+    comparison_synthesis: Optional[str] = None  # Optional: for cross-country comparison
+    # Deprecated (kept for backwards compatibility with existing config files)
+    rules_agent: Optional[str] = None  # DEPRECATED: rules_agent was removed
+    router: Optional[str] = None  # DEPRECATED: routing was removed
 
 
 class ExamplesConfig(BaseModel):
@@ -81,15 +169,10 @@ class ToolsConfig(BaseModel):
     find_airports_near_location: Optional[str] = None
     find_airports_near_route: Optional[str] = None
     get_airport_details: Optional[str] = None
-    get_border_crossing_airports: Optional[str] = None
-    get_airport_statistics: Optional[str] = None
-    get_airport_pricing: Optional[str] = None
-    get_pilot_reviews: Optional[str] = None
-    get_fuel_prices: Optional[str] = None
-    list_rules_for_country: Optional[str] = None
-    compare_rules_between_countries: Optional[str] = None
     get_notification_for_airport: Optional[str] = None
-    find_airports_by_notification: Optional[str] = None
+    answer_rules_question: Optional[str] = None
+    browse_rules: Optional[str] = None
+    compare_rules_between_countries: Optional[str] = None
 
 
 class AgentBehaviorConfig(BaseModel):
@@ -126,6 +209,7 @@ class AgentBehaviorConfig(BaseModel):
     rag: RAGConfig
     reranking: RerankingConfig
     next_query_prediction: NextQueryPredictionConfig
+    comparison: ComparisonConfig = ComparisonConfig()  # Cross-country comparison
     prompts: PromptsConfig
     examples: ExamplesConfig
     tools: Optional[ToolsConfig] = None  # Optional: tool description file paths
@@ -234,7 +318,7 @@ class AgentBehaviorConfig(BaseModel):
                 router=LLMConfig(model="gpt-4o-mini", temperature=0.0, streaming=False),
                 rules=None,  # Uses formatter
             ),
-            routing=RoutingConfig(enabled=True),
+            routing=RoutingConfig(enabled=False),  # Deprecated - routing is no longer used
             query_reformulation=QueryReformulationConfig(enabled=True),
             rag=RAGConfig(
                 embedding_model="text-embedding-3-small",
@@ -247,11 +331,15 @@ class AgentBehaviorConfig(BaseModel):
                 openai=OpenAIRerankingConfig(model="text-embedding-3-large"),
             ),
             next_query_prediction=NextQueryPredictionConfig(enabled=True, max_suggestions=4),
+            comparison=ComparisonConfig(
+                enabled=True,
+                max_questions=15,
+                min_difference=0.1,
+                send_all_threshold=10,
+            ),
             prompts=PromptsConfig(
                 planner="prompts/planner_v1.md",
                 formatter="prompts/formatter_v1.md",
-                rules_agent="prompts/rules_agent_v1.md",
-                router="prompts/router_v1.md",
             ),
             examples=ExamplesConfig(
                 planner="examples/planner_examples_v1.json",

@@ -522,6 +522,155 @@ class GAFriendlinessBuilder:
             icao, datetime.now(timezone.utc)
         )
 
+    def update_aip_only(
+        self,
+        airports_db: "AirportsDatabaseSource",
+        icaos: Optional[List[str]] = None,
+    ) -> BuildResult:
+        """
+        Update only AIP-derived fields without processing reviews.
+
+        This is much faster than a full build since it:
+        - Does NOT call the LLM extractor
+        - Only updates aip_* fields (ifr, night, hotel, restaurant)
+        - Also updates computed aip_* scores
+        - Works for airports not yet in ga_persona.db
+
+        Use this when the AIP data has changed but reviews haven't.
+
+        Args:
+            airports_db: AirportsDatabaseSource for AIP data
+            icaos: Optional list of specific ICAOs to process.
+                   If None, processes all airports in airports_db that have
+                   hotel or restaurant fields.
+
+        Returns:
+            BuildResult with metrics and status
+        """
+        self._metrics = BuildMetrics(start_time=datetime.now(timezone.utc))
+
+        try:
+            # Get list of airports to process
+            if icaos:
+                airports_to_process = icaos
+            else:
+                # Get all airports with hotel or restaurant AIP fields
+                airports_to_process = airports_db.get_airports_with_hospitality_fields()
+
+            airports_sorted = sorted(airports_to_process)
+            self._metrics.total_airports = len(airports_sorted)
+
+            logger.info(
+                f"AIP-only update started: {self._metrics.total_airports} airports"
+            )
+
+            inserted_count = 0
+            updated_count = 0
+
+            with self.storage:
+                for icao in airports_sorted:
+                    try:
+                        # Get AIP data for this airport
+                        airport = airports_db.get_airport(icao)
+                        if not airport:
+                            self._metrics.skipped_airports += 1
+                            continue
+
+                        # Extract AIP fields
+                        aip_ifr_available = 0
+                        aip_night_available = 0
+                        aip_hotel_info = None
+                        aip_restaurant_info = None
+
+                        # Get IFR permitted field (std_field_id=207)
+                        ifr_permitted_text = None
+                        for entry in airport.aip_entries:
+                            if entry.std_field_id == 207:
+                                ifr_permitted_text = entry.value
+                                break
+
+                        aip_ifr_available = compute_aip_ifr_score(
+                            airport.procedures, ifr_permitted_text
+                        )
+                        aip_night_available = compute_aip_night_available()
+
+                        # Parse hospitality fields
+                        for entry in airport.aip_entries:
+                            if entry.std_field_id == 501:  # Hotels
+                                aip_hotel_info = parse_hospitality_text_to_int(entry.value)
+                            elif entry.std_field_id == 502:  # Restaurants
+                                aip_restaurant_info = parse_hospitality_text_to_int(entry.value)
+
+                        # Compute AIP feature scores
+                        aip_data = {
+                            "aip_ifr_available": aip_ifr_available,
+                            "aip_hotel_info": aip_hotel_info,
+                            "aip_restaurant_info": aip_restaurant_info,
+                        }
+                        aip_feature_scores = self.feature_mapper.compute_aip_feature_scores(
+                            icao=icao,
+                            aip_data=aip_data,
+                        )
+
+                        # Upsert to database
+                        was_inserted = self.storage.upsert_aip_only(
+                            icao=icao,
+                            aip_ifr_available=aip_ifr_available,
+                            aip_night_available=aip_night_available,
+                            aip_hotel_info=aip_hotel_info,
+                            aip_restaurant_info=aip_restaurant_info,
+                            aip_ops_ifr_score=aip_feature_scores.get("aip_ops_ifr_score"),
+                            aip_hospitality_score=aip_feature_scores.get("aip_hospitality_score"),
+                        )
+
+                        if was_inserted:
+                            inserted_count += 1
+                        else:
+                            updated_count += 1
+
+                        self._metrics.successful_airports += 1
+
+                    except Exception as e:
+                        self._metrics.failed_airports += 1
+                        self._metrics.errors.append(f"{icao}: {str(e)}")
+                        logger.error(f"Airport {icao} AIP update failed: {e}")
+
+                # Store update metadata
+                now = datetime.now(timezone.utc).isoformat()
+                self.storage.write_meta_info("aip_only_update_timestamp", now)
+
+            self._metrics.end_time = datetime.now(timezone.utc)
+            self._metrics.duration_seconds = (
+                self._metrics.end_time - self._metrics.start_time
+            ).total_seconds()
+
+            logger.info(
+                f"AIP-only update completed: {updated_count} updated, "
+                f"{inserted_count} inserted, {self._metrics.failed_airports} failed, "
+                f"{self._metrics.duration_seconds:.1f}s"
+            )
+
+            return BuildResult(
+                success=self._metrics.failed_airports == 0,
+                metrics=self._metrics,
+                output_db_path=str(self.settings.ga_meta_db_path),
+            )
+
+        except Exception as e:
+            self._metrics.end_time = datetime.now(timezone.utc)
+            self._metrics.duration_seconds = (
+                self._metrics.end_time - self._metrics.start_time
+            ).total_seconds() if self._metrics.start_time else None
+            self._metrics.errors.append(f"AIP update failed: {str(e)}")
+
+            logger.error(f"AIP-only update failed: {e}")
+
+            return BuildResult(
+                success=False,
+                metrics=self._metrics,
+                output_db_path=str(self.settings.ga_meta_db_path),
+            )
+
     def _store_build_metadata(self) -> None:
         """Store build metadata in ga_meta_info."""
         now = datetime.now(timezone.utc).isoformat()

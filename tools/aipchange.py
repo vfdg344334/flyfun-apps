@@ -24,6 +24,8 @@ Key options
 - Country filter: --country-filter FR,GB (by airports.iso_country).
 - Output: --format table|csv|json; --group-by airport|field|none (table); --plain-text to disable colors.
 - Summary: --summary prints counts by type, top airports, and top fields (table format).
+- Field filtering: By default, skips low-value fields (Elevation/temp, Geoid undulation, Magnetic variation).
+  Use --all-fields to include them.
 
 Examples
 - Latest day’s AIP changes:
@@ -58,6 +60,12 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# std_field_ids to skip by default (use --all-fields to include)
+# 203: Elevation / Reference temperature / Mean Low Temperature
+# 204: Geoid undulation at AD ELEV PSN
+# 205: Magnetic Variation / Annual Change
+SKIP_STD_FIELD_IDS = [203, 204, 205]
 
 CHANGE_TABLES = {
     'aip': {
@@ -260,6 +268,7 @@ def _query_changes(
     fields: Optional[Sequence[str]],
     std_field_ids: Optional[Sequence[int]] = None,
     country_filter: Optional[Sequence[str]] = None,
+    skip_std_field_ids: Optional[Sequence[int]] = None,
 ) -> List[Dict[str, Any]]:
     all_rows: List[Dict[str, Any]] = []
     for t in types:
@@ -274,6 +283,11 @@ def _query_changes(
             placeholders = ','.join(['?'] * len(std_field_ids))
             extra_clauses.append(f"std_field_id IN ({placeholders})")
             extra_params.extend(std_field_ids)
+        # skip low-value std_field_ids (only for AIP changes)
+        if t == 'aip' and skip_std_field_ids:
+            placeholders = ','.join(['?'] * len(skip_std_field_ids))
+            extra_clauses.append(f"(std_field_id IS NULL OR std_field_id NOT IN ({placeholders}))")
+            extra_params.extend(skip_std_field_ids)
         # country filter via airports table
         if country_filter:
             placeholders = ','.join(['?'] * len(country_filter))
@@ -439,6 +453,7 @@ def main():
     parser.add_argument('--country-filter', help='Filter by ISO country code(s) (e.g. FR, GB). Comma-separated or repeatable.', nargs='*')
     parser.add_argument('--summary', help='Show summary counts instead of detailed rows (table format only)', action='store_true')
     parser.add_argument('--plain-text', help='Disable ANSI colors/styles in table output', action='store_true')
+    parser.add_argument('--all-fields', help='Include all fields (do not skip low-value fields like magnetic variation)', action='store_true')
     parser.add_argument('-v', '--verbose', help='Verbose output', action='store_true')
 
     args = parser.parse_args()
@@ -517,6 +532,7 @@ def main():
             until = (d + timedelta(days=1)).date().isoformat()
 
     # Query
+    skip_ids = None if args.all_fields else SKIP_STD_FIELD_IDS
     rows = _query_changes(
         conn=conn,
         types=selected_types,
@@ -526,6 +542,7 @@ def main():
         fields=fields,
         std_field_ids=std_field_ids,
         country_filter=country_filter,
+        skip_std_field_ids=skip_ids,
     )
 
     # Output

@@ -295,15 +295,15 @@ class AirportStats(BaseModel):
     )
     aip_hotel_info: Optional[int] = Field(
         default=None,
-        ge=0,
+        ge=-1,
         le=2,
-        description="Hotel availability: 0=unknown, 1=vicinity, 2=at_airport",
+        description="Hotel availability: -1=unknown, 0=none, 1=vicinity, 2=at_airport",
     )
     aip_restaurant_info: Optional[int] = Field(
         default=None,
-        ge=0,
+        ge=-1,
         le=2,
-        description="Restaurant availability: 0=unknown, 1=vicinity, 2=at_airport",
+        description="Restaurant availability: -1=unknown, 0=none, 1=vicinity, 2=at_airport",
     )
 
     # Review-derived feature scores (all normalized [0, 1])

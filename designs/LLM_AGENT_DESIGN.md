@@ -27,94 +27,50 @@ This design strongly isolates UI from internal LLM schema changes while still en
 
 ### Core Design
 
-The agent uses a **routing-based architecture** that intelligently directs queries to the appropriate path:
+The agent uses a **planner-based architecture** where the LLM planner selects the appropriate tool:
 
-1. **Router Node** (optional, configurable)
-   - LLM-based query classification
-   - Routes to: `"rules"`, `"database"`, or `"both"` paths
-   - Extracts relevant countries from query
+1. **Planner Node**: LLM with structured output (`AviationPlan`)
+   - Selects one aviation tool from the available catalog
+   - Extracts arguments (including filters, tags, countries)
+   - Specifies answer style
 
-2. **Rules Path** (for regulations questions)
-   - **RAG Node**: Retrieves relevant rules using vector search
-   - **Next Query Predictor** (optional): Generates follow-up suggestions
-   - **Rules Agent Node**: Synthesizes natural language answer from retrieved rules
-   - Returns answer with `show_rules` UI payload
+2. **Next Query Predictor** (optional): Generates follow-up suggestions based on plan
 
-3. **Database Path** (for airport/route queries)
-   - **Planner Node**: LLM with structured output (`AviationPlan`)
-     - Selects one aviation tool
-     - Extracts arguments (including filters)
-     - Specifies answer style
-   - **Next Query Predictor** (optional): Generates follow-up suggestions based on plan
-   - **Tool Runner Node**: Executes the chosen MCP-backed LangChain tool
-   - **Formatter Node**: Produces final answer and UI payload
+3. **Tool Runner Node**: Executes the chosen tool
+   - Tools return DATA only (no synthesis)
+   - Includes airport tools and rules tools
 
-4. **Both Path** (combines database + rules)
-   - Executes database path first
-   - Then adds rules via RAG + Rules Agent
-   - Formatter combines both results
+4. **Formatter Node**: Strategy-based formatting
+   - Detects tool type via `_tool_type` marker
+   - Uses appropriate prompt (e.g., `comparison_synthesis_v1.md` for comparisons)
+   - Produces final answer and UI payload
+
+### Available Tool Types
+
+**Airport Tools:**
+- `search_airports`: Text search for airports
+- `find_airports_near_location`: Airports near a location
+- `find_airports_near_route`: Airports along a route
+- `get_airport_details`: Details for a specific airport
+
+**Rules Tools:**
+- `answer_rules_question`: RAG-based semantic search for specific questions (single country)
+- `browse_rules`: Tag-based listing with pagination
+- `compare_rules_between_countries`: Semantic comparison of 2+ countries
 
 ### Agent State Flow
 
-**With Routing Enabled:**
-
-```mermaid
-flowchart TD
-  Start([User Query]) --> Router[Router Node<br/>Classifies Query]
-
-  Router -->|rules| RulesPath[RAG Node<br/>Vector Search]
-  Router -->|database| DBPath[Planner Node]
-  Router -->|both| BothPath[Planner Node]
-
-  RulesPath --> PredictR{Predict Next<br/>Queries?}
-  PredictR -->|enabled| PredictRNode[Predict Next Queries<br/>for Rules]
-  PredictR -->|disabled| RulesAgent
-  PredictRNode --> RulesAgent[Rules Agent Node<br/>Synthesizes Answer]
-  RulesAgent --> End1([END])
-
-  DBPath --> PredictD{Predict Next<br/>Queries?}
-  PredictD -->|enabled| PredictDNode[Predict Next Queries]
-  PredictD -->|disabled| ToolDB
-  PredictDNode --> ToolDB[Tool Runner Node<br/>Execute MCP Tool]
-  ToolDB --> FormatterDB[Formatter Node<br/>Format Answer]
-  FormatterDB --> End2([END])
-
-  BothPath --> PredictB{Predict Next<br/>Queries?}
-  PredictB -->|enabled| PredictBNode[Predict Next Queries]
-  PredictB -->|disabled| ToolBoth
-  PredictBNode --> ToolBoth[Tool Runner Node<br/>Execute MCP Tool]
-  ToolBoth --> RAGBoth[RAG Node<br/>Retrieve Rules]
-  RAGBoth --> PredictBR{Predict Next<br/>Queries?}
-  PredictBR -->|enabled| PredictBRNode[Predict Next Queries<br/>for Rules]
-  PredictBR -->|disabled| RulesAgentBoth
-  PredictBRNode --> RulesAgentBoth[Rules Agent Node<br/>Synthesize Rules]
-  RulesAgentBoth --> FormatterBoth[Formatter Node<br/>Combine DB + Rules]
-  FormatterBoth --> End3([END])
-
-  style Router fill:#e1f5ff
-  style RulesAgent fill:#fff4e6
-  style RulesAgentBoth fill:#fff4e6
-  style FormatterDB fill:#e8f5e9
-  style FormatterBoth fill:#e8f5e9
-```
-
-**Without Routing (Backward Compatible):**
-
 ```mermaid
 graph TD
-  Start([User Query]) --> Planner[Planner Node]
-  Planner --> Predict{Predict Next<br/>Queries?}
-  Predict -->|enabled| PredictNode[Predict Next Queries]
-  Predict -->|disabled| Tool
-  PredictNode --> Tool[Tool Runner Node]
-  Tool --> Formatter[Formatter Node]
+  Start([User Query]) --> Planner[Planner Node<br/>Tool Selection]
+  Planner --> Predictor[Next Query Predictor<br/>optional]
+  Predictor --> Tool[Tool Runner<br/>Returns DATA only]
+  Tool --> Formatter[Formatter Node<br/>Strategy-Based Synthesis]
   Formatter --> End([END])
 
   style Planner fill:#e1f5ff
   style Formatter fill:#e8f5e9
 ```
-
-**Note:** Next Query Prediction nodes are conditionally included in the graph based on the `enable_next_query_prediction` setting in the behavior config. When disabled, the graph skips these nodes and flows directly to the next step.
 
 The UI receives (via SSE streaming):
 
@@ -133,17 +89,18 @@ The agent follows FlyFun's pattern of separating shared Python libraries (`share
 ```
 shared/aviation_agent/
   __init__.py
-  config.py                # Settings + behavior config loading
+  config.py                 # Settings + behavior config loading
   behavior_config.py        # JSON config schema (Pydantic)
   state.py
   planning.py
   execution.py
-  formatting.py
-  graph.py                  # Graph construction with routing
-  routing.py                # Query router (rules vs database)
-  rules_rag.py              # RAG system for rules retrieval
-  rules_agent.py            # Rules synthesis agent
+  formatting.py             # Formatter chains (general + comparison)
+  graph.py                  # Graph construction
+  rules_rag.py              # RAG system for rules retrieval (used by answer_rules_question tool)
   next_query_predictor.py   # Follow-up query suggestions
+  answer_comparer.py        # Embedding-based answer comparison
+  comparison_service.py     # High-level comparison service
+  tools.py                  # Tool definitions and wrappers
   adapters/
     __init__.py
     streaming.py          # SSE streaming adapter
@@ -159,13 +116,16 @@ web/server/api/
 ```
 tests/aviation_agent/
   __init__.py
-  conftest.py             # Shared fixtures + MCP doubles
+  conftest.py               # Shared fixtures + MCP doubles
   test_planning.py
-  test_execution.py
+  test_planner_behavior.py  # Planner tool selection tests
   test_formatting.py
   test_graph_e2e.py
   test_streaming.py
   test_integration.py
+  test_rules_rag.py         # RAG system tests
+  test_answer_comparer.py   # Comparison system tests
+  test_state_and_thinking.py
 ```
 
 ### Placement Notes
@@ -295,18 +255,12 @@ See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuratio
 class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], operator.add]
 
-    # Routing
-    router_decision: Optional[RouterDecision]  # Routing decision (rules/database/both)
-
-    # Rules path
-    retrieved_rules: Optional[List[dict]]  # Rules from RAG retrieval
-    rules_answer: Optional[str]  # Synthesized answer from rules agent
-    rules_sources: Optional[List[dict]]  # Source links from rules
-
-    # Database path
-    plan: Optional[AviationPlan]
+    # Planning
+    plan: Optional[AviationPlan]  # Tool selection plan
     planning_reasoning: Optional[str]  # Planner's reasoning
-    tool_result: Optional[Any]
+
+    # Tool execution
+    tool_result: Optional[Any]  # Result from tool execution
 
     # Output
     formatting_reasoning: Optional[str]  # Formatter's reasoning
@@ -325,13 +279,9 @@ class AgentState(TypedDict, total=False):
 ### State Fields
 
 - **`messages`**: Conversation history (uses `Annotated[List[BaseMessage], operator.add]` for automatic accumulation)
-- **`router_decision`**: Routing decision with path (`rules`/`database`/`both`), confidence, countries
-- **`retrieved_rules`**: Rules retrieved via RAG (rules path)
-- **`rules_answer`**: Synthesized answer from rules agent (rules path)
-- **`rules_sources`**: Source links from rules
-- **`plan`**: Structured plan from planner node (database path)
+- **`plan`**: Structured plan from planner node (selected tool, arguments, answer style)
 - **`planning_reasoning`**: Why the planner selected this tool/approach
-- **`tool_result`**: Raw result from tool execution (database path)
+- **`tool_result`**: Raw result from tool execution
 - **`formatting_reasoning`**: How the formatter presents results
 - **`final_answer`**: User-facing response text
 - **`thinking`**: Combined reasoning (planning + formatting) for UI display
@@ -391,67 +341,87 @@ def build_ui_payload(
 
 ---
 
-## 8. Routing System
+## 8. Tool Selection (Planner)
 
-### Router Node
+The planner LLM selects the appropriate tool based on the user query:
 
-The router classifies queries into three paths:
+### Rules Tools
 
-- **`"rules"`**: Questions about regulations, procedures, requirements
-- **`"database"`**: Questions about airports, routes, locations
-- **`"both"`**: Questions that need both database results and relevant regulations
+| Tool | Use Case | Key Arguments |
+|------|----------|---------------|
+| `answer_rules_question` | Specific questions about ONE country | `country_code`, `question`, `tags` |
+| `browse_rules` | List/browse rules in a category | `country_code`, `tags`, `offset`, `limit` |
+| `compare_rules_between_countries` | Compare 2+ countries | `countries`, `tags`, `category` |
 
-The router uses an LLM with structured output (`RouterDecision`) and extracts relevant countries from the query using:
-- ICAO code prefixes (e.g., `LF` → France)
-- Country name matching
-- Airport ICAO codes mentioned in query
+### Airport Tools
 
-### Rules Path Flow
+| Tool | Use Case | Key Arguments |
+|------|----------|---------------|
+| `search_airports` | Text search for airports | `query`, `filters` |
+| `find_airports_near_location` | Airports near a location | `location_query`, `filters` |
+| `find_airports_near_route` | Airports along a route | `from_location`, `to_location`, `filters` |
+| `get_airport_details` | Details for specific airport | `icao_code` |
 
-1. **RAG Node**: Retrieves relevant rules using vector search
-   - Uses query reformulation (if enabled) for better matching
-   - Applies reranking (Cohere or OpenAI) if enabled
-   - Filters by countries from router decision
+### Planner Prompt Guidance
 
-2. **Next Query Predictor** (optional): Generates follow-up suggestions
-   - Rule-based suggestions based on query context
-   - Considers countries mentioned
+The planner prompt includes guidance for tool selection:
 
-3. **Rules Agent Node**: Synthesizes answer from retrieved rules
-   - Uses LLM to generate natural language explanation
-   - Includes proper citations and source links
-   - Returns `show_rules` UI payload for frontend display
+```markdown
+**Rules Tools - Which to Use:**
+- answer_rules_question: For specific questions about ONE country. Pass the user's question.
+- browse_rules: For listing/browsing all rules in a category ("list all", "show me")
+- compare_rules_between_countries: ONLY for comparing 2+ countries. NEVER use with single country.
 
-### Database Path Flow
+**Tag Extraction:**
+ONLY use tags from the available list (injected dynamically from rules.json).
 
-1. **Planner Node**: Selects tool and extracts arguments
-2. **Next Query Predictor** (optional): Generates suggestions based on plan
-3. **Tool Runner Node**: Executes MCP tool
-4. **Formatter Node**: Formats answer and builds UI payload
-
-### Both Path Flow
-
-1. Executes database path (Planner → Tool → Formatter)
-2. Then executes rules path (RAG → Rules Agent)
-3. Formatter combines both results into final answer
+**Country Comparison (requires 2+ countries):**
+- "Compare UK and France" → countries: ["GB", "FR"]
+- "Differences between Germany and Belgium" → countries: ["DE", "BE"]
+```
 
 ---
 
 ## 9. Formatter Node
 
-The formatter node produces both the final answer and the UI payload. It handles three scenarios:
+The formatter node produces both the final answer and the UI payload. It handles multiple scenarios with **strategy-based formatting**.
 
-1. **Database-only path**: Formats tool results
-2. **Rules-only path**: Returns answer from rules agent (no formatting needed)
-3. **Both path**: Combines database and rules answers
+### Strategy-Based Formatting
+
+The formatter detects the tool type and uses the appropriate prompt:
+
+```python
+# Tools mark themselves with _tool_type for formatter routing
+tool_result = {
+    "_tool_type": "comparison",  # Tells formatter which chain to use
+    "differences": [...],
+    "rules_context": "...",
+    # ... other data
+}
+
+# Formatter selects appropriate chain
+if tool_result.get("_tool_type") == "comparison":
+    # Use comparison_synthesis_v1.md prompt
+    chain_result = comparison_formatter_chain.invoke({
+        "countries": ", ".join(tool_result["countries"]),
+        "topic_context": topic_context,
+        "rules_context": tool_result["rules_context"],
+    })
+else:
+    # Use standard formatter_v1.md prompt
+    chain_result = formatter_chain.invoke({...})
+```
+
+### Formatting Scenarios
+
+1. **Standard tools**: Formats tool results using `formatter_v1.md` prompt
+2. **Comparison tool**: Uses specialized `comparison_formatter_chain` with `comparison_synthesis_v1.md`
 
 ```python
 def formatter_node(state: AgentState) -> Dict[str, Any]:
     """
-    Formats final answer and builds UI payload. Handles three scenarios:
-    1. Database-only: Formats tool results using LLM, builds UI payload, enhances visualization
-    2. Rules-only: Returns empty dict (answer already in state from rules_agent_node)
-    3. Both: Combines database and rules answers, builds UI payload
+    Formats final answer and builds UI payload.
+    Uses strategy-based formatting - detects tool type and applies appropriate prompt.
     """
     # ... implementation ...
 
@@ -463,7 +433,14 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     # }
 ```
 
-**Note**: The formatter uses prompts loaded from the behavior config (`prompts/formatter_v1.md` by default).
+### Formatter Chains
+
+| Tool Type | Formatter Chain | Prompt File |
+|-----------|-----------------|-------------|
+| Default | `formatter_chain` | `formatter_v1.md` |
+| Comparison | `comparison_formatter_chain` | `comparison_synthesis_v1.md` |
+
+**Design Principle**: Tools return DATA only, formatters do SYNTHESIS. This enables experimentation with different prompts per strategy without changing tool code.
 
 ---
 
@@ -482,8 +459,9 @@ All behavioral settings are controlled via JSON configuration files in `configs/
 ### Prompt Loading
 
 System prompts are stored as markdown files in `configs/aviation_agent/prompts/`:
-- `planner_v1.md` - Planner system prompt
-- `formatter_v1.md` - Formatter system prompt
+- `planner_v1.md` - Planner system prompt (tool selection)
+- `formatter_v1.md` - General formatter system prompt
+- `comparison_synthesis_v1.md` - Comparison formatter prompt (for cross-country comparisons)
 - `rules_agent_v1.md` - Rules agent system prompt
 - `router_v1.md` - Router system prompt
 
@@ -554,22 +532,18 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 
 ### Tool Catalog
 
+**Tools Exposed to LLM Planner (8 tools):**
+
 | Tool | Required args | Optional args | Default `ui_payload.kind` | Notable `mcp_raw` keys |
 | --- | --- | --- | --- | --- |
 | `search_airports` | `query` | `max_results`, `filters`, `priority_strategy` | `route` | `airports`, `filter_profile`, `visualization.type='markers'` |
-| `find_airports_near_location` | `location_query` | `max_distance_nm`, `filters`, `priority_strategy` | `route` | `center`, `airports`, `filter_profile`, `visualization.type='point_with_markers'` |
-| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `priority_strategy` | `route` | `airports`, `filter_profile`, `visualization.type='route_with_markers'`, `substitutions` |
+| `find_airports_near_location` | `location_query` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `center`, `airports`, `filter_profile`, `visualization.type='point_with_markers'` |
+| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `airports`, `filter_profile`, `visualization.type='route_with_markers'`, `substitutions` |
 | `get_airport_details` | `icao_code` | – | `airport` | `airport`, `runways`, `visualization.type='marker_with_details'` |
-| `get_border_crossing_airports` | – | `country` | `airport` | `airports`, `by_country`, `filter_profile`, `visualization.style='customs'` |
-| `get_airport_statistics` | – | `country` | `airport` | `stats` |
-| `get_airport_pricing` | `icao_code` | – | `airport` | `pricing`, `pretty` |
-| `get_pilot_reviews` | `icao_code` | `limit` | `airport` | `reviews`, `average_rating` |
-| `get_fuel_prices` | `icao_code` | – | `airport` | `fuels`, `pricing` |
-| `list_rules_for_country` | `country_code` | `category`, `tags` | `rules` | `rules`, `formatted_text`, `categories` |
-| `compare_rules_between_countries` | `country1`, `country2` | `category` | `rules` | `comparison`, `formatted_summary`, `total_differences` |
-| `get_answers_for_questions` | `question_ids` | – | `rules` | `items`, `pretty` |
-| `list_rule_categories_and_tags` | – | – | `rules` | `categories`, `tags`, `counts` |
-| `list_rule_countries` | – | – | `rules` | `items`, `count` |
+| `get_notification_for_airport` | `icao` | `day_of_week` | `airport` | `notification`, `requirements` |
+| `answer_rules_question` | `country_code`, `question` | `tags`, `use_rag` | `rules` | `rules`, `formatted_text`, `source` |
+| `browse_rules` | `country_code` | `tags`, `offset`, `limit` | `rules` | `rules`, `formatted_text`, `has_more`, `next_offset` |
+| `compare_rules_between_countries` | `countries` | `category`, `tags` | `rules` | `differences`, `rules_context`, `_tool_type`, `total_differences`, `filtered_by_embedding` |
 
 ### Documentation Workflow
 
@@ -614,6 +588,29 @@ switch(ui_payload.kind) {
 ---
 
 ## 14. Key Design Principles
+
+### Tools Return DATA, Formatters Do SYNTHESIS
+- **Critical principle**: Tools should NEVER do LLM synthesis or formatting
+- Tools return structured data with a `_tool_type` marker for formatter routing
+- Formatters apply appropriate prompts based on tool type
+- This enables experimentation with different prompts per strategy without changing tool code
+- Example: `compare_rules_between_countries` returns `differences` and `rules_context`, formatter synthesizes the answer
+
+```python
+# GOOD: Tool returns data only
+def compare_rules_between_countries(...) -> Dict[str, Any]:
+    return {
+        "_tool_type": "comparison",
+        "differences": [...],           # Raw comparison data
+        "rules_context": "...",         # Pre-formatted for synthesis prompt
+        "countries": ["FR", "DE"],
+    }
+
+# BAD: Tool does synthesis (don't do this)
+def compare_rules_between_countries(...) -> Dict[str, Any]:
+    synthesis = llm.invoke(...)  # NO! Formatter should do this
+    return {"synthesis": synthesis}
+```
 
 ### State-Based Thinking
 - Reasoning stored in state fields (`planning_reasoning`, `formatting_reasoning`)
@@ -973,6 +970,131 @@ def test_ui_payload_structure():
 - Validates UI contract
 - Catches breaking changes early
 - Documents expectations
+
+---
+
+## 17. Comparison System
+
+The comparison system enables semantic comparison of aviation rules across countries using embedding-based similarity detection.
+
+### Architecture Overview
+
+```
+User Query: "Compare VFR rules between France and Germany"
+    ↓
+Router (priority routing for comparisons)
+    ↓ database path
+Planner (selects compare_rules_between_countries)
+    ↓
+Tool (returns DATA only via ComparisonService)
+    ↓
+Formatter (uses comparison_synthesis_v1.md prompt)
+    ↓
+Final Answer
+```
+
+### Components
+
+#### AnswerComparer (`answer_comparer.py`)
+
+Low-level embedding-based comparison:
+
+```python
+class AnswerComparer:
+    """Compares rule answers across countries using embeddings."""
+
+    def compare_countries(
+        self,
+        countries: List[str],
+        tag: Optional[str] = None,
+        category: Optional[str] = None,
+        max_questions: int = 15,
+        min_difference: float = 0.1,
+    ) -> ComparisonResult:
+        """
+        1. Get questions matching tag/category
+        2. Retrieve answer embeddings from vector DB
+        3. Compute pairwise cosine distances
+        4. Filter to questions with semantic differences > min_difference
+        5. Return ranked differences
+        """
+```
+
+#### ComparisonService (`comparison_service.py`)
+
+High-level service used by tools:
+
+```python
+class RulesComparisonService:
+    """High-level API for cross-country rule comparison."""
+
+    def compare_countries(
+        self,
+        countries: List[str],
+        tag: Optional[str] = None,
+        category: Optional[str] = None,
+        synthesize: bool = False,  # Tools always pass False
+    ) -> SynthesizedComparison:
+        """
+        Returns structured comparison data.
+        When synthesize=False, returns raw differences only.
+        """
+```
+
+### Tool Integration
+
+The `compare_rules_between_countries` tool uses ComparisonService with `synthesize=False`:
+
+```python
+def compare_rules_between_countries(ctx, country1, country2, category=None, tag=None):
+    result = ctx.comparison_service.compare_countries(
+        countries=[country1, country2],
+        category=category,
+        tag=tag,
+        synthesize=False,  # Never synthesize in tool
+    )
+
+    return {
+        "_tool_type": "comparison",  # Signals formatter to use comparison prompt
+        "differences": result.differences,
+        "rules_context": "...",  # Pre-formatted for synthesis prompt
+        "countries": [country1, country2],
+        "total_differences": len(result.differences),
+        "filtered_by_embedding": result.filtered_by_embedding,
+    }
+```
+
+### Configuration
+
+Comparison settings in `default.json`:
+
+```json
+{
+  "comparison": {
+    "enabled": true,
+    "max_questions": 15,
+    "min_difference": 0.1,
+    "send_all_threshold": 10,
+    "synthesis_model": null,
+    "synthesis_temperature": 0.0
+  }
+}
+```
+
+| Setting | Description |
+|---------|-------------|
+| `max_questions` | Max questions to compare |
+| `min_difference` | Minimum cosine distance to consider "different" (0-1) |
+| `send_all_threshold` | Below this count, skip embedding filtering |
+
+### Vector Database Collections
+
+The comparison system uses a separate collection for answer embeddings:
+
+- `aviation_rules` - Question text embeddings (for RAG retrieval)
+- `aviation_rules_answers` - Answer text embeddings (for comparison)
+
+Build with: `python -m shared.aviation_agent.rules_rag --build-rag`
 
 ---
 

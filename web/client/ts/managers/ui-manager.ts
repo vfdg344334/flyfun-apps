@@ -509,21 +509,34 @@ export class UIManager {
     // Filter controls
     // Helper to handle filter changes - if route/locate active, re-run search
     const handleFilterChange = (filterUpdate: Partial<FilterConfig>) => {
+      console.log('🔵 handleFilterChange called:', filterUpdate);
+
       // Update filters first
       this.store.getState().setFilters(filterUpdate);
 
       // Check current state after filter update
       const state = this.store.getState();
+      console.log('🔵 handleFilterChange state:', {
+        hasRoute: !!state.route,
+        routeAirports: state.route?.airports,
+        hasLocate: !!state.locate,
+        locateCenter: state.locate?.center
+      });
 
       // If we have an active route or locate, re-run the search with new filters
-      if (state.route && state.route.airports && !state.route.isChatbotSelection) {
-        // Active route search - re-run with new filters
+      if (state.route && state.route.airports) {
+        // Active route search - re-run with new filters (including chatbot selections)
+        console.log('🔵 handleFilterChange: triggering applyFilters for route');
         this.applyFilters();
       } else if (state.locate && state.locate.center) {
         // Active locate search - re-run with new filters
+        console.log('🔵 handleFilterChange: triggering applyFilters for locate');
         this.applyFilters();
+      } else {
+        // Viewport mode - trigger a refresh with current viewport bounds
+        console.log('🔵 handleFilterChange: triggering viewport refresh');
+        window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
-      // Otherwise, just client-side filtering is fine (normal mode)
     };
 
     const countrySelect = document.getElementById('country-filter');
@@ -566,12 +579,50 @@ export class UIManager {
       });
     }
 
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter');
+    if (hotelFilter) {
+      hotelFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ hotel: value || null });
+      });
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter');
+    if (restaurantFilter) {
+      restaurantFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ restaurant: value || null });
+      });
+    }
+
     const maxAirports = document.getElementById('max-airports-filter');
     if (maxAirports) {
       maxAirports.addEventListener('change', (e) => {
         const target = e.target as HTMLSelectElement;
         const limit = target.value ? parseInt(target.value, 10) : null;
         handleFilterChange({ limit: limit || 1000 });
+      });
+    }
+
+    // Distance inputs - update store and re-run search if route/locate is active
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance) {
+      routeDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = parseFloat(target.value) || 50;
+        handleFilterChange({ search_radius_nm: value });
+      });
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      enrouteDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = target.value ? parseFloat(target.value) : null;
+        handleFilterChange({ enroute_distance_max_nm: value });
       });
     }
 
@@ -633,7 +684,14 @@ export class UIManager {
     const applyFiltersBtn = document.getElementById('apply-filters');
     if (applyFiltersBtn) {
       applyFiltersBtn.addEventListener('click', () => {
-        this.applyFilters();
+        const state = this.store.getState();
+        // If route or locate is active, use the standard applyFilters
+        if ((state.route && state.route.airports) || (state.locate && state.locate.center)) {
+          this.applyFilters();
+        } else {
+          // Use viewport-based loading when in normal browse mode
+          window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
+        }
       });
     }
 
@@ -698,6 +756,17 @@ export class UIManager {
       borderCrossing.checked = filters.point_of_entry === true;
     }
 
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter') as HTMLSelectElement;
+    if (hotelFilter) {
+      hotelFilter.value = filters.hotel || '';
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter') as HTMLSelectElement;
+    if (restaurantFilter) {
+      restaurantFilter.value = filters.restaurant || '';
+    }
+
     const maxAirports = document.getElementById('max-airports-filter') as HTMLSelectElement;
     if (maxAirports) {
       maxAirports.value = filters.limit ? String(filters.limit) : '';
@@ -727,6 +796,21 @@ export class UIManager {
       const activeFilterDiv = document.getElementById('active-aip-filter');
       if (activeFilterDiv) {
         activeFilterDiv.style.display = 'none';
+      }
+    }
+
+    // Update distance inputs
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance && routeDistance.value !== String(filters.search_radius_nm)) {
+      routeDistance.value = String(filters.search_radius_nm);
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      const currentValue = enrouteDistance.value;
+      const newValue = filters.enroute_distance_max_nm ? String(filters.enroute_distance_max_nm) : '';
+      if (currentValue !== newValue) {
+        enrouteDistance.value = newValue;
       }
     }
   }
@@ -859,6 +943,31 @@ export class UIManager {
         `).join('');
         break;
       }
+
+      case 'notification':
+        html = `
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #28a745;"></div>
+            <span>H24 / ≤24h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #ffc107;"></div>
+            <span>25-48h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #dc3545;"></div>
+            <span>>48h notice</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #6c757d;"></div>
+            <span>On request</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background-color: #95a5a6;"></div>
+            <span>Unknown</span>
+          </div>
+        `;
+        break;
     }
 
     legendContent.innerHTML = html;
@@ -972,20 +1081,20 @@ export class UIManager {
    */
   async applyFilters(): Promise<void> {
     const state = this.store.getState();
+    console.log('🔵 applyFilters called:', {
+      hasRoute: !!state.route,
+      routeAirports: state.route?.airports,
+      hasLocate: !!state.locate,
+      filters: state.filters
+    });
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
 
     try {
-      // Check if we have route state
-      if (state.route && state.route.isChatbotSelection && state.route.chatbotAirports) {
-        // Client-side filtering for chatbot airports
-        // Filters are already applied via store.setFilters()
-        this.store.getState().setLoading(false);
-        return;
-      }
-
+      // Route search mode - re-run with current filters
       if (state.route && state.route.airports) {
+        console.log('🔵 applyFilters: route search mode');
         // Route search mode
         await this.applyRouteSearch(state.route);
         return;
@@ -1017,22 +1126,14 @@ export class UIManager {
     if (!route.airports || route.airports.length < 1) return;
 
     const state = this.store.getState();
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
-
-    const enrouteInput = document.getElementById('enroute-distance') as HTMLInputElement;
-    const enrouteMaxNm = enrouteInput ? parseFloat(enrouteInput.value) || undefined : undefined;
+    // Read distance values from store (single source of truth)
+    const distanceNm = state.filters.search_radius_nm;
 
     try {
-      const filters: Partial<FilterConfig> = { ...state.filters };
-      if (enrouteMaxNm) {
-        filters.enroute_distance_max_nm = enrouteMaxNm;
-      }
-
       const response = await this.apiAdapter.searchAirportsNearRoute(
         route.airports,
         distanceNm,
-        filters
+        state.filters
       );
 
       // Extract airports from response
@@ -1067,8 +1168,8 @@ export class UIManager {
     if (!locate.center) return;
 
     const state = this.store.getState();
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || locate.radiusNm : locate.radiusNm;
+    // Read radius from store (single source of truth)
+    const radiusNm = state.filters.search_radius_nm;
 
     try {
       const response = await this.apiAdapter.locateAirportsByCenter(
@@ -1080,7 +1181,7 @@ export class UIManager {
       if (response.airports) {
         this.store.getState().setAirports(response.airports);
 
-        // Update locate state
+        // Update locate state with current radius
         this.store.getState().setLocate({
           ...locate,
           radiusNm
@@ -1097,14 +1198,20 @@ export class UIManager {
   }
 
   /**
-   * Handle search input
+   * Handle search input (user-initiated search from typing in search box)
    */
   private async handleSearch(query: string): Promise<void> {
     if (!query.trim()) {
-      // Clear search
-      this.store.getState().setAirports([]);
+      // Clear search - reload airports in current viewport instead of clearing
+      this.store.getState().setRoute(null);
+      this.store.getState().setLocate(null);
+      window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       return;
     }
+
+    // Clear LLM highlights when user initiates a new search
+    // (LLM-initiated searches use trigger-search event which bypasses this)
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
 
     // Check if this is a route search (4-letter ICAO codes)
     const routeAirports = this.parseRouteFromQuery(query);
@@ -1113,7 +1220,10 @@ export class UIManager {
       // Route search
       await this.handleRouteSearch(routeAirports);
     } else {
-      // Text search
+      // Text search - clear route and locate state since this is a new search
+      this.store.getState().setRoute(null);
+      this.store.getState().setLocate(null);
+
       this.store.getState().setLoading(true);
       this.store.getState().setError(null);
 
@@ -1150,14 +1260,16 @@ export class UIManager {
    * Handle route search
    */
   private async handleRouteSearch(routeAirports: string[]): Promise<void> {
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
+    // Clear locate state when starting a new route search
+    this.store.getState().setLocate(null);
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
 
     try {
       const state = this.store.getState();
+      // Read distance from store (single source of truth)
+      const distanceNm = state.filters.search_radius_nm;
 
       // Get original route airport coordinates for route line
       const originalRouteAirports = await this.getRouteAirportCoordinates(routeAirports);
@@ -1224,11 +1336,10 @@ export class UIManager {
    * Handle locate
    */
   private async handleLocate(): Promise<void> {
-    const searchInput = document.getElementById('search-input') as HTMLInputElement;
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-
-    const query = searchInput ? searchInput.value.trim() : '';
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || 50.0 : 50.0;
+    const state = this.store.getState();
+    // Read values from store (single source of truth)
+    const query = state.ui.searchQuery.trim();
+    const radiusNm = state.filters.search_radius_nm;
 
     if (!query) {
       this.store.getState().setError('Enter a place in the search box to locate near.');
@@ -1239,7 +1350,6 @@ export class UIManager {
     this.store.getState().setError(null);
 
     try {
-      const state = this.store.getState();
       const response = await this.apiAdapter.locateAirports(query, radiusNm, state.filters);
 
       if (response.airports) {
@@ -1267,11 +1377,17 @@ export class UIManager {
    * Clear filters
    */
   private clearFilters(): void {
+    // Clear LLM highlights when user clears filters
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
+
     this.store.getState().clearFilters();
     this.store.getState().setRoute(null);
     this.store.getState().setLocate(null);
     this.store.getState().setSearchQuery('');
-    this.applyFilters();
+
+    // Use viewport-based loading instead of full filter reload
+    // This keeps the current map view and loads airports within it
+    window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
   }
 
   /**
@@ -1367,6 +1483,17 @@ export class UIManager {
     if (filters.point_of_entry) {
       const checkbox = document.getElementById('border-crossing-only') as HTMLInputElement;
       if (checkbox) checkbox.checked = true;
+    }
+
+    // Hospitality filters
+    if (filters.hotel) {
+      const select = document.getElementById('hotel-filter') as HTMLSelectElement;
+      if (select) select.value = filters.hotel;
+    }
+
+    if (filters.restaurant) {
+      const select = document.getElementById('restaurant-filter') as HTMLSelectElement;
+      if (select) select.value = filters.restaurant;
     }
 
     // Update store filters

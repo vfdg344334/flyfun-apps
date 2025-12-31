@@ -226,8 +226,13 @@ export class VisualizationEngine {
         color = this.getRelevanceColor(airport);
         radius = 7;
         break;
+
+      case 'notification':
+        color = this.getNotificationColor(airport);
+        radius = 7;
+        break;
     }
-    
+
     const icon = L.divIcon({
       className: 'airport-marker',
       html: `<div style="
@@ -295,6 +300,64 @@ export class VisualizationEngine {
       return getColor('third-quartile');
     } else {
       return getColor('bottom-quartile');
+    }
+  }
+
+  /**
+   * Get notification color based on hours notice required
+   * Green: H24, operating hours only (no advance notice), or ≤12h notice
+   * Blue: On request or 13-24h notice
+   * Yellow/Orange: 25-48h notice or business day
+   * Red: >48h notice or not available
+   * Gray: Unknown/no data
+   */
+  private getNotificationColor(airport: Airport): string {
+    const notification = airport.notification;
+
+    // No notification data
+    if (!notification) {
+      return '#95a5a6'; // Gray
+    }
+
+    // H24 - no notice required
+    if (notification.is_h24) {
+      return '#28a745'; // Green
+    }
+
+    // Not available
+    if (notification.notification_type === 'not_available') {
+      return '#dc3545'; // Red
+    }
+
+    // On request - need to call ahead
+    if (notification.is_on_request) {
+      return '#007bff'; // Blue - moderate hassle
+    }
+
+    // Business day notice
+    if (notification.notification_type === 'business_day') {
+      return '#ffc107'; // Yellow - some hassle
+    }
+
+    const hours = notification.hours_notice;
+
+    // "hours" type with no hours_notice = operating hours only, no advance notice needed
+    if (hours === null || hours === undefined) {
+      if (notification.notification_type === 'hours') {
+        return '#28a745'; // Green - just operating hours constraint
+      }
+      return '#95a5a6'; // Gray - truly unknown
+    }
+
+    // Color based on hours
+    if (hours <= 12) {
+      return '#28a745'; // Green - easy, ≤12h
+    } else if (hours <= 24) {
+      return '#007bff'; // Blue - moderate, 13-24h
+    } else if (hours <= 48) {
+      return '#ffc107'; // Yellow - some hassle, 25-48h
+    } else {
+      return '#dc3545'; // Red - difficult, >48h
     }
   }
   
@@ -389,39 +452,72 @@ export class VisualizationEngine {
    * Add highlight
    */
   private addHighlight(highlight: Highlight): void {
-    // Reference points (locate center, route airports) use larger blue dots
-    // Default styling for reference points vs other highlights
-    const isReferencePoint = highlight.id.startsWith('locate-center') || highlight.id.startsWith('route-airport-');
-    
-    const radius = highlight.radius || (isReferencePoint ? 14 : 15);
-    const fillColor = highlight.color || (isReferencePoint ? '#007bff' : '#ff0000');
-    const weight = isReferencePoint ? 3 : 3;
-    const fillOpacity = isReferencePoint ? 0.6 : 0.7; // Slightly transparent so airport colors show through
-    
-    const marker = L.circleMarker([highlight.lat, highlight.lng], {
-      radius,
-      fillColor,
-      color: '#ffffff',
-      weight,
-      opacity: 1,
-      fillOpacity,
-      id: highlight.id,
-      // Ensure reference points are clickable but don't interfere with airport markers
-      interactive: true
-    });
-    
+    let marker: any;
+
+    // Use pin marker for 'point' type (search locations like "Bromley")
+    if (highlight.type === 'point') {
+      const pinIcon = L.divIcon({
+        className: 'location-pin-marker',
+        html: `<div style="
+          position: relative;
+          width: 24px;
+          height: 36px;
+        ">
+          <div style="
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            border: 3px solid white;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+          "></div>
+          <div style="
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            width: 12px;
+            height: 12px;
+            background: white;
+            border-radius: 50%;
+            transform: rotate(-45deg);
+          "></div>
+        </div>`,
+        iconSize: [24, 36],
+        iconAnchor: [12, 36], // Point at bottom center
+        popupAnchor: [0, -36]
+      });
+
+      marker = L.marker([highlight.lat, highlight.lng], {
+        icon: pinIcon,
+        id: highlight.id,
+        interactive: true,
+        zIndexOffset: 1000 // Ensure pin is above airport markers
+      });
+    } else {
+      // Use circle marker for 'airport' type (blue dots behind airport markers)
+      const isReferencePoint = highlight.id.startsWith('locate-center') || highlight.id.startsWith('route-airport-');
+
+      const radius = highlight.radius || (isReferencePoint ? 14 : 15);
+      const fillColor = highlight.color || (isReferencePoint ? '#007bff' : '#007bff');
+      const fillOpacity = isReferencePoint ? 0.6 : 0.7;
+
+      marker = L.circleMarker([highlight.lat, highlight.lng], {
+        radius,
+        fillColor,
+        color: '#ffffff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity,
+        id: highlight.id,
+        interactive: true
+      });
+    }
+
     if (highlight.popup) {
       marker.bindPopup(highlight.popup);
-    } else if (isReferencePoint) {
-      // Add default popup for reference points
-      if (highlight.id.startsWith('locate-center')) {
-        marker.bindPopup('<b>Locate Center</b><br>Search origin point');
-      } else if (highlight.id.startsWith('route-airport-')) {
-        const icao = highlight.id.replace('route-airport-', '');
-        marker.bindPopup(`<b>Route Airport: ${icao}</b><br>Input airport`);
-      }
     }
-    
+
     marker.addTo(this.highlightLayer);
     this.highlights.set(highlight.id, marker);
   }

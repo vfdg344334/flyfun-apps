@@ -37,7 +37,9 @@ def _load_test_cases() -> list[Dict[str, Any]]:
     """Load test cases from JSON fixture file."""
     fixture_path = Path(__file__).parent / "fixtures" / "planner_test_cases.json"
     with open(fixture_path) as f:
-        return json.load(f)
+        all_cases = json.load(f)
+    # Filter out comment-only entries (those without a "question" field)
+    return [tc for tc in all_cases if "question" in tc]
 
 
 def _should_run_behavior_tests() -> bool:
@@ -114,26 +116,48 @@ def test_planner_selects_correct_tool(
     This is a behavioral/integration test that requires a live LLM.
     """
     question = test_case["question"]
-    expected_tool = test_case["expected_tool"]
-    expected_args = test_case.get("expected_arguments", {})
+    expected_tool_raw = test_case["expected_tool"]
+    expected_args_raw = test_case.get("expected_arguments", {})
     description = test_case.get("description", "")
+
+    # Normalize to lists for multiple valid choices
+    # expected_tool can be string or array, expected_arguments must match
+    if isinstance(expected_tool_raw, list):
+        expected_tools = expected_tool_raw
+        expected_args_list = expected_args_raw  # Should be array of same size
+    else:
+        expected_tools = [expected_tool_raw]
+        expected_args_list = [expected_args_raw]
+
+    # Get available tags from rules manager for dynamic prompt injection
+    available_tags = None
+    if behavior_tool_client._context.rules_manager:
+        available_tags = behavior_tool_client._context.rules_manager.get_available_tags()
 
     # Build planner with live LLM
     planner = build_planner_runnable(
         live_planner_llm,
-        tuple(behavior_tool_client.tools.values())
+        tuple(behavior_tool_client.tools.values()),
+        available_tags=available_tags,
     )
 
     # Run planner
     messages = [HumanMessage(content=question)]
     plan = planner.invoke({"messages": messages})
 
-    # Determine if tool and args match
-    tool_match = plan.selected_tool == expected_tool
-
-    # Check args match
-    args_match = True
+    # Determine if tool matches any valid option
     plan_args = plan.arguments or {}
+    tool_match = False
+    matched_index = -1
+    for i, valid_tool in enumerate(expected_tools):
+        if plan.selected_tool == valid_tool:
+            tool_match = True
+            matched_index = i
+            break
+
+    # Check args match for the matched tool (or first if no match)
+    expected_args = expected_args_list[matched_index] if matched_index >= 0 else expected_args_list[0]
+    args_match = True
     for key, expected_value in expected_args.items():
         if key not in plan_args:
             args_match = False
@@ -152,7 +176,7 @@ def test_planner_selects_correct_tool(
         "question": question,
         "description": description,
         "status": "PASS" if (tool_match and args_match) else "FAIL",
-        "expected_tool": expected_tool,
+        "expected_tool": json.dumps(expected_tools),
         "actual_tool": plan.selected_tool,
         "tool_match": "YES" if tool_match else "NO",
         "expected_args": json.dumps(expected_args),
@@ -163,15 +187,15 @@ def test_planner_selects_correct_tool(
     # Print actual results for visibility
     print(f"\n{'='*60}")
     print(f"Question: {question}")
-    print(f"Expected Tool: {expected_tool}")
-    print(f"Actual Tool:   {plan.selected_tool}")
+    print(f"Expected Tool(s): {expected_tools}")
+    print(f"Actual Tool:      {plan.selected_tool}")
     print(f"Expected Args: {json.dumps(expected_args, indent=2)}")
     print(f"Actual Args:   {json.dumps(plan.arguments, indent=2)}")
     print(f"{'='*60}")
 
     # Assertions
-    assert plan.selected_tool == expected_tool, (
-        f"Expected tool '{expected_tool}' but got '{plan.selected_tool}'. "
+    assert plan.selected_tool in expected_tools, (
+        f"Expected one of {expected_tools} but got '{plan.selected_tool}'. "
         f"Description: {description}"
     )
 
@@ -195,13 +219,55 @@ def test_planner_selects_correct_tool(
                     f"got {plan_value[nested_key]}"
                 )
         else:
-            # For simple values, check exact match (case-insensitive for strings)
+            # For simple values, check match
             plan_value = plan_args[key]
             if isinstance(expected_value, str) and isinstance(plan_value, str):
-                assert plan_value.upper() == expected_value.upper(), (
-                    f"Expected '{key}' = '{expected_value}' (case-insensitive), "
-                    f"got '{plan_value}'"
-                )
+                # For 'question' field in answer_rules_question, allow reformulation
+                # The planner can improve/clarify the question, we just check it exists
+                if key == "question":
+                    # Just verify it's non-empty - planner can reformulate
+                    assert len(plan_value) > 0, f"Expected non-empty 'question' field"
+                # For location fields, allow country disambiguation suffix
+                # e.g., "Paris" matches "Paris, France", "Bromley" matches "Bromley, UK"
+                elif key in {"from_location", "to_location", "location_query"}:
+                    # Accept if actual starts with expected (case-insensitive)
+                    # This allows "Paris, France" to match expected "Paris"
+                    assert plan_value.upper().startswith(expected_value.upper()), (
+                        f"Expected '{key}' to start with '{expected_value}', "
+                        f"got '{plan_value}'"
+                    )
+                else:
+                    # Exact match (case-insensitive) for other string fields
+                    assert plan_value.upper() == expected_value.upper(), (
+                        f"Expected '{key}' = '{expected_value}' (case-insensitive), "
+                        f"got '{plan_value}'"
+                    )
+            elif key == "tags" and isinstance(expected_value, list) and isinstance(plan_value, list):
+                # For tags, require exact match (order-independent)
+                # This ensures we notice when planner starts returning extra/different tags
+                expected_set = set(expected_value)
+                actual_set = set(plan_value)
+
+                missing_tags = expected_set - actual_set
+                extra_tags = actual_set - expected_set
+
+                if missing_tags:
+                    assert False, (
+                        f"Missing tags for question: \"{question[:60]}...\"\n"
+                        f"  Missing: {sorted(missing_tags)}\n"
+                        f"  Expected: {sorted(expected_set)}\n"
+                        f"  Actual:   {sorted(actual_set)}"
+                    )
+
+                if extra_tags:
+                    assert False, (
+                        f"New tags appeared for question: \"{question[:60]}...\"\n"
+                        f"  Extra tags: {sorted(extra_tags)}\n"
+                        f"  Expected:   {sorted(expected_set)}\n"
+                        f"  Actual:     {sorted(actual_set)}\n\n"
+                        f"  → Should we expand the expectation to include {sorted(extra_tags)}?\n"
+                        f"  → If yes, update the test fixture. If no, check why planner added these tags."
+                    )
             else:
                 assert plan_value == expected_value, (
                     f"Expected '{key}' = {expected_value}, got {plan_value}"

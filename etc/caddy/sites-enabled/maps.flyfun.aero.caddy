@@ -1,0 +1,22 @@
+# Caddyfile for Web Server at maps.flyfun.aero
+# Main web application for Euro AIP Airport Explorer
+
+maps.flyfun.aero {
+	header {
+		# HTTPS enforcement (1 year)
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Prevent MIME-type sniffing
+		X-Content-Type-Options "nosniff"
+		# Control referrer information
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Restrict embedding (replaces X-Frame-Options)
+		Content-Security-Policy "frame-ancestors 'self'"
+		# Disable unnecessary browser features (allow geolocation for maps)
+		Permissions-Policy "camera=(), microphone=(), geolocation=(self), payment=()"
+	}
+
+	reverse_proxy localhost:8000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+}

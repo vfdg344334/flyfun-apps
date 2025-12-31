@@ -10,7 +10,8 @@ import { UIManager } from './managers/ui-manager';
 import { LLMIntegration } from './adapters/llm-integration';
 import { ChatbotManager } from './managers/chatbot-manager';
 import { PersonaManager } from './managers/persona-manager';
-import type { AppState, RouteState, MapView, FilterConfig } from './store/types';
+import { getThemeManager, ThemeManager } from './managers/theme-manager';
+import type { AppState, RouteState, MapView, FilterConfig, BoundingBox } from './store/types';
 
 // Global instances (for debugging/window access)
 declare global {
@@ -20,6 +21,7 @@ declare global {
     uiManager: UIManager;
     llmIntegration: LLMIntegration;
     personaManager: PersonaManager;
+    themeManager: ThemeManager;
   }
 }
 
@@ -34,8 +36,10 @@ class Application {
   private llmIntegration: LLMIntegration;
   private chatbotManager: ChatbotManager;
   private personaManager: PersonaManager;
+  private themeManager: ThemeManager;
   private currentSelectedIcao: string | null = null;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
+  private isViewportLoading: boolean = false; // Flag to skip fitBounds during viewport loading
   private storeUnsubscribe?: () => void; // Store unsubscribe function
 
   constructor() {
@@ -60,12 +64,16 @@ class Application {
     // Initialize persona manager
     this.personaManager = new PersonaManager(this.apiAdapter);
 
+    // Initialize theme manager
+    this.themeManager = getThemeManager();
+
     // Expose to window for debugging
     window.appState = this.store as any;
     window.visualizationEngine = this.visualizationEngine;
     window.uiManager = this.uiManager;
     window.llmIntegration = this.llmIntegration;
     window.personaManager = this.personaManager;
+    window.themeManager = this.themeManager;
     (window as any).chatbotManager = this.chatbotManager;
   }
 
@@ -81,6 +89,10 @@ class Application {
         document.addEventListener('DOMContentLoaded', resolve);
       });
     }
+
+    // Initialize theme manager (must be early to prevent flash of wrong theme)
+    this.themeManager.init();
+    this.initThemeToggle();
 
     // Initialize map
     this.initMap();
@@ -143,6 +155,37 @@ class Application {
   }
 
   /**
+   * Initialize theme toggle button
+   */
+  private initThemeToggle(): void {
+    const themeToggle = document.getElementById('theme-toggle');
+    if (!themeToggle) return;
+
+    // Update button icon and tooltip
+    const updateButton = () => {
+      const icon = themeToggle.querySelector('i');
+      if (icon) {
+        icon.className = `fas ${this.themeManager.getIconClass()}`;
+      }
+      themeToggle.title = this.themeManager.getTooltip();
+    };
+
+    // Set initial state
+    updateButton();
+
+    // Handle clicks
+    themeToggle.addEventListener('click', () => {
+      this.themeManager.cycleTheme();
+      updateButton();
+    });
+
+    // Subscribe to external theme changes
+    this.themeManager.subscribe(() => {
+      updateButton();
+    });
+  }
+
+  /**
    * Subscribe to store changes for visualization updates
    */
   private subscribeToStore(): void {
@@ -190,14 +233,17 @@ class Application {
               airportsChanged,
               legendModeChanged,
               personaChanged,
-              selectedPersona: state.ga.selectedPersona
+              selectedPersona: state.ga.selectedPersona,
+              isViewportLoading: this.isViewportLoading
             });
 
-            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0;
+            // Only fit bounds when airports change from non-viewport sources (chatbot, search, etc.)
+            // Skip fitBounds during viewport-based loading to prevent zoom loops
+            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0 && !this.isViewportLoading;
             this.visualizationEngine.updateMarkers(
               state.filteredAirports,
               state.visualization.legendMode,
-              shouldFitBounds // Auto-fit bounds when airports change from chatbot
+              shouldFitBounds // Auto-fit bounds when airports change from chatbot/search
             );
 
             lastAirports = [...state.filteredAirports]; // Copy array for comparison
@@ -369,6 +415,21 @@ class Application {
     // Panel resize event (from collapse/expand buttons)
     window.addEventListener('panel-resize', () => {
       this.invalidateMapSize();
+      // After map size is recalculated, refresh airports for the new viewport
+      // Use a delay to ensure Leaflet has updated its bounds
+      setTimeout(() => {
+        const map = this.visualizationEngine.getMap();
+        if (map) {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }
+      }, 200);
     });
 
     // Render route event (from LLM integration)
@@ -376,14 +437,163 @@ class Application {
       this.visualizationEngine.displayRoute(e.detail.route);
     }) as EventListener);
 
-    // Trigger search event
-    window.addEventListener('trigger-search', ((e: CustomEvent<{ query: string }>) => {
-      // This will be handled by UI Manager's search handler
-      const searchInput = document.getElementById('search-input') as HTMLInputElement;
-      if (searchInput) {
-        searchInput.value = e.detail.query;
-        searchInput.dispatchEvent(new Event('input'));
+    // Trigger search event (from LLM integration)
+    // This is for programmatic searches - it updates the store and triggers the search directly,
+    // WITHOUT going through the input event (which would clear LLM highlights)
+    window.addEventListener('trigger-search', (async (e: CustomEvent<{ query: string }>) => {
+      const query = e.detail.query;
+      console.log('🔵 trigger-search event received:', query);
+
+      // Update store (UI syncs automatically via subscription)
+      this.store.getState().setSearchQuery(query);
+
+      // Parse route from query
+      const parts = query.trim().split(/\s+/).filter(part => part.length > 0);
+      const icaoPattern = /^[A-Za-z]{4}$/;
+      const allIcaoCodes = parts.every(part => icaoPattern.test(part));
+
+      if (allIcaoCodes && parts.length >= 1) {
+        // Route search - call API directly
+        const routeAirports = parts.map(part => part.toUpperCase());
+        const state = this.store.getState();
+        const distanceNm = state.filters.search_radius_nm;
+
+        try {
+          this.store.getState().setLoading(true);
+
+          // Get route airport coordinates for route line
+          const originalRouteAirports: Array<{ icao: string; lat: number; lng: number }> = [];
+          for (const icao of routeAirports) {
+            try {
+              const airport = await this.apiAdapter.getAirportDetail(icao);
+              if (airport.latitude_deg && airport.longitude_deg) {
+                originalRouteAirports.push({
+                  icao,
+                  lat: airport.latitude_deg,
+                  lng: airport.longitude_deg
+                });
+              }
+            } catch (error) {
+              console.error(`Error getting coordinates for ${icao}:`, error);
+            }
+          }
+
+          const response = await this.apiAdapter.searchAirportsNearRoute(
+            routeAirports,
+            distanceNm,
+            state.filters
+          );
+
+          // Extract airports
+          const airports = response.airports.map((item: any) => ({
+            ...item.airport,
+            _routeSegmentDistance: item.segment_distance_nm,
+            _routeEnrouteDistance: item.enroute_distance_nm,
+            _closestSegment: item.closest_segment
+          }));
+
+          this.store.getState().setAirports(airports);
+          this.store.getState().setRoute({
+            airports: routeAirports,
+            distance_nm: distanceNm,
+            originalRouteAirports,
+            isChatbotSelection: true,  // Mark as chatbot selection
+            chatbotAirports: null
+          });
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM route search: ${response.airports_found} airports within ${distanceNm}nm`);
+        } catch (error) {
+          console.error('Error in LLM route search:', error);
+          this.store.getState().setLoading(false);
+        }
+      } else {
+        // Text search - call API directly
+        try {
+          this.store.getState().setLoading(true);
+          this.store.getState().setRoute(null);
+          this.store.getState().setLocate(null);
+
+          const response = await this.apiAdapter.searchAirports(query, 50);
+          this.store.getState().setAirports(response.data);
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM text search: ${response.data.length} airports found for "${query}"`);
+        } catch (error) {
+          console.error('Error in LLM text search:', error);
+          this.store.getState().setLoading(false);
+        }
       }
+    }) as EventListener);
+
+    // Trigger locate event (from LLM integration for point_with_markers)
+    window.addEventListener('trigger-locate', (async (e: CustomEvent<{ lat: number; lon: number; label?: string }>) => {
+      const { lat, lon, label } = e.detail;
+      const state = this.store.getState();
+      // Read radius from store (single source of truth)
+      const radiusNm = state.filters.search_radius_nm;
+      console.log('🔵 trigger-locate event received:', { lat, lon, label, radiusNm });
+
+      try {
+        const response = await this.apiAdapter.locateAirportsByCenter(
+          { lat, lon, label: label || 'Location' },
+          radiusNm,
+          state.filters
+        );
+
+        if (response.airports) {
+          this.store.getState().setAirports(response.airports);
+          console.log(`✅ Loaded ${response.airports.length} airports within ${radiusNm}nm of "${label || 'location'}"`);
+        }
+      } catch (error) {
+        console.error('Error in trigger-locate:', error);
+      }
+    }) as EventListener);
+
+    // Trigger filter refresh event (from LLM integration for markers with filters)
+    // Loads ALL airports matching current store filters
+    window.addEventListener('trigger-filter-refresh', (async () => {
+      console.log('🔵 trigger-filter-refresh event received');
+
+      try {
+        const state = this.store.getState();
+        const filters = state.filters;
+
+        console.log('🔵 Loading airports with filters:', filters);
+
+        // Load airports with current filters (high limit to get all matching)
+        const response = await this.apiAdapter.getAirports({ ...filters, limit: 500 });
+
+        if (response.data) {
+          this.store.getState().setAirports(response.data);
+          console.log(`✅ Loaded ${response.data.length} airports matching filters`);
+
+          // Fit bounds to show all airports
+          if (this.visualizationEngine && response.data.length > 0) {
+            setTimeout(() => {
+              this.visualizationEngine.fitBounds();
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error('Error in trigger-filter-refresh:', error);
+      }
+    }) as EventListener);
+
+    // Trigger viewport refresh event (from filter changes in viewport mode)
+    // Reloads airports within current viewport bounds using updated filters
+    window.addEventListener('trigger-viewport-refresh', (() => {
+      const map = this.visualizationEngine.getMap();
+      if (!map) return;
+
+      const bounds = map.getBounds();
+      const bbox: BoundingBox = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        west: bounds.getWest()
+      };
+      this.fetchAirportsInViewport(bbox);
     }) as EventListener);
 
     // Relevance tab listener and Persona selector listener moved to UIManager
@@ -453,12 +663,14 @@ class Application {
       }
     }) as EventListener);
 
-    // Map move/zoom events for URL sync
+    // Map move/zoom events for URL sync and viewport-based airport loading
     // Use a flag to prevent infinite loops
     const map = this.visualizationEngine.getMap();
     if (map) {
       // Debounce map view updates to prevent infinite loops
       let mapUpdateTimeout: number | null = null;
+      // Separate timeout for viewport loading (longer debounce)
+      let viewportLoadTimeout: number | null = null;
 
       map.on('moveend zoomend', () => {
         // Skip if we're updating from store (to prevent infinite loop)
@@ -466,7 +678,7 @@ class Application {
           return;
         }
 
-        // Debounce to prevent rapid-fire updates
+        // Debounce map view state updates (300ms)
         if (mapUpdateTimeout) {
           clearTimeout(mapUpdateTimeout);
         }
@@ -489,7 +701,22 @@ class Application {
             });
           }
         }, 300); // Debounce 300ms
-        // URL sync will be handled separately
+
+        // Debounce viewport-based airport loading (500ms)
+        if (viewportLoadTimeout) {
+          clearTimeout(viewportLoadTimeout);
+        }
+
+        viewportLoadTimeout = window.setTimeout(() => {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }, 500); // Debounce 500ms for API calls
       });
     }
   }
@@ -602,6 +829,41 @@ class Application {
         this.store.getState().setError('Error loading airports: ' + (error.message || 'Unknown error'));
         this.store.getState().setLoading(false);
       }
+    }
+  }
+
+  // Limit for viewport-based airport loading (lower than default to improve performance)
+  private static readonly VIEWPORT_AIRPORT_LIMIT = 500;
+
+  /**
+   * Fetch airports within the current viewport bounds
+   */
+  private async fetchAirportsInViewport(bbox: BoundingBox): Promise<void> {
+    const store = this.store as any;
+    const state = store.getState();
+
+    // Skip if route or locate is active (don't override those results)
+    if (state.route || state.locate) {
+      return;
+    }
+
+    try {
+      // Set flag to prevent fitBounds during viewport loading
+      this.isViewportLoading = true;
+      store.getState().setLoading(true);
+      // Use viewport-specific limit for better performance
+      const filters = { ...state.filters, limit: Application.VIEWPORT_AIRPORT_LIMIT };
+      const response = await this.apiAdapter.getAirportsByBounds(bbox, filters);
+      store.getState().setAirports(response.data);
+    } catch (error: any) {
+      console.error('Error loading airports in viewport:', error);
+      // Don't show error to user for viewport loading - just log it
+    } finally {
+      store.getState().setLoading(false);
+      // Reset flag after a short delay to ensure subscription has processed
+      setTimeout(() => {
+        this.isViewportLoading = false;
+      }, 100);
     }
   }
 

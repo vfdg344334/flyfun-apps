@@ -34,15 +34,10 @@ from shared.airport_tools import (
     find_airports_near_route as shared_find_airports_near_route,
     find_airports_near_location as shared_find_airports_near_location,
     get_airport_details as shared_get_airport_details,
-    get_border_crossing_airports as shared_get_border_crossing_airports,
-    get_airport_statistics as shared_get_airport_statistics,
-    list_rules_for_country as shared_list_rules_for_country,
-    compare_rules_between_countries as shared_compare_rules_between_countries,
-    get_answers_for_questions as shared_get_answers_for_questions,
-    list_rule_categories_and_tags as shared_list_rule_categories_and_tags,
-    list_rule_countries as shared_list_rule_countries,
     get_notification_for_airport as shared_get_notification_for_airport,
-    find_airports_by_notification as shared_find_airports_by_notification,
+    answer_rules_question as shared_answer_rules_question,
+    browse_rules as shared_browse_rules,
+    compare_rules_between_countries as shared_compare_rules_between_countries,
 )
 from shared.tool_context import ToolContext
 
@@ -173,71 +168,83 @@ def get_airport_details(icao_code: str, ctx: Context = None) -> Dict[str, Any]:
     return shared_get_airport_details(context, icao_code)
 
 
-@mcp.tool(name="list_rules_for_country", description=_desc(shared_list_rules_for_country))
-def list_rules_for_country(country: str,
-                           category: Optional[str] = None,
-                           tags: Optional[List[str]] = None,
-                           include_unanswered: bool = False,
-                           search: Optional[str] = None,
-                           tags_mode: str = "any",
-                           ctx: Context = None) -> Dict[str, Any]:
+@mcp.tool(name="find_airports_near_location", description=_desc(shared_find_airports_near_location))
+def find_airports_near_location(
+    location_query: str,
+    max_distance_nm: float = 50.0,
+    max_results: int = 10,
+    filters: Optional[Dict[str, Any]] = None,
+    priority_strategy: str = "cost_optimized",
+    ctx: Context = None,
+) -> Dict[str, Any]:
     context = _require_tool_context()
-    if include_unanswered or tags_mode != "any":  # features not currently exposed via shared helper
-        raise ValueError("include_unanswered and tags_mode parameters are not supported in this implementation.")
-    result = shared_list_rules_for_country(context, country, category=category, tags=tags)
+    result = shared_find_airports_near_location(
+        context,
+        location_query,
+        max_distance_nm=max_distance_nm,
+        max_results=max_results,
+        filters=filters,
+        priority_strategy=priority_strategy,
+    )
     return result
 
 
-@mcp.tool(name="compare_rules_between_countries", description=_desc(shared_compare_rules_between_countries))
-def compare_rules_between_countries(country_a: str,
-                                    country_b: str,
-                                    category: Optional[str] = None,
-                                    ctx: Context = None) -> Dict[str, Any]:
+@mcp.tool(name="get_notification_for_airport", description=_desc(shared_get_notification_for_airport))
+def get_notification_for_airport(
+    icao: str,
+    day_of_week: Optional[str] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
     context = _require_tool_context()
-    result = shared_compare_rules_between_countries(
-        context,
-        country1=country_a,
-        country2=country_b,
-        category=category,
-    )
-    comparison = result.get("comparison", {})
+    return shared_get_notification_for_airport(context, icao, day_of_week)
+
+
+@mcp.tool(name="answer_rules_question", description=_desc(shared_answer_rules_question))
+def answer_rules_question(
+    country_code: str,
+    question: str,
+    tags: Optional[List[str]] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Answer a specific question about aviation rules for a country using RAG."""
+    context = _require_tool_context()
+    return shared_answer_rules_question(context, country_code, question, tags=tags)
+
+
+@mcp.tool(name="browse_rules", description=_desc(shared_browse_rules))
+def browse_rules(
+    country_code: str,
+    tags: Optional[List[str]] = None,
+    offset: int = 0,
+    limit: int = 10,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Browse/list aviation rules for a country with pagination."""
+    context = _require_tool_context()
+    return shared_browse_rules(context, country_code, tags=tags, offset=offset, limit=limit)
+
+
+@mcp.tool(name="compare_rules_between_countries", description=_desc(shared_compare_rules_between_countries))
+def compare_rules_between_countries(
+    countries: List[str],
+    tags: Optional[List[str]] = None,
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Compare aviation rules between multiple countries."""
+    context = _require_tool_context()
+    result = shared_compare_rules_between_countries(context, countries=countries, tags=tags)
     return {
         "found": result.get("found", False),
-        "comparison": comparison,
-        "formatted_summary": result.get("formatted_summary"),
+        "countries": result.get("countries", []),
+        "tags": tags,
+        "total_questions": result.get("total_questions"),
+        "questions_analyzed": result.get("questions_analyzed"),
+        "filtered_by_embedding": result.get("filtered_by_embedding", False),
+        "differences": result.get("differences", []),
         "total_differences": result.get("total_differences"),
-        "pretty": result.get("formatted_summary"),
+        "rules_context": result.get("rules_context"),
+        "message": result.get("message"),
     }
-
-
-@mcp.tool(name="get_answers_for_questions", description=_desc(shared_get_answers_for_questions))
-def get_answers_for_questions(question_ids: List[str], ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_answers_for_questions(context, question_ids)
-
-
-@mcp.tool(name="list_rule_categories_and_tags", description=_desc(shared_list_rule_categories_and_tags))
-def list_rule_categories_and_tags(ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_list_rule_categories_and_tags(context)
-
-
-@mcp.tool(name="list_rule_countries", description=_desc(shared_list_rule_countries))
-def list_rule_countries(ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_list_rule_countries(context)
-
-
-@mcp.tool(name="get_border_crossing_airports", description=_desc(shared_get_border_crossing_airports))
-def get_border_crossing_airports(country: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_border_crossing_airports(context, country)
-
-
-@mcp.tool(name="get_airport_statistics", description=_desc(shared_get_airport_statistics))
-def get_airport_statistics(country: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
-    context = _require_tool_context()
-    return shared_get_airport_statistics(context, country)
 
 
 if __name__ == "__main__":

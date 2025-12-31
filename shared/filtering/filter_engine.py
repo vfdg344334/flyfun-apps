@@ -13,12 +13,15 @@ from .filters import (
     HasAipDataFilter,
     HasHardRunwayFilter,
     PointOfEntryFilter,
+    ExcludeLargeAirportsFilter,
     MaxRunwayLengthFilter,
     MinRunwayLengthFilter,
     HasAvgasFilter,
     HasJetAFilter,
     MaxLandingFeeFilter,
     TripDistanceFilter,
+    HotelFilter,
+    RestaurantFilter,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,17 +58,28 @@ class FilterRegistry:
 
 
 # Auto-register all filters
+#
+# IMPORTANT: If you add or rename a filter that should be exposed to the LLM planner,
+# you MUST also update the filter list in:
+#   configs/aviation_agent/prompts/planner_v1.md
+#
+# Filters NOT exposed to LLM (internal use only):
+#   - has_aip_data, exclude_large_airports, trip_distance
+#
 FilterRegistry.register(CountryFilter())
 FilterRegistry.register(HasProceduresFilter())
 FilterRegistry.register(HasAipDataFilter())
 FilterRegistry.register(HasHardRunwayFilter())
 FilterRegistry.register(PointOfEntryFilter())
+FilterRegistry.register(ExcludeLargeAirportsFilter())
 FilterRegistry.register(MaxRunwayLengthFilter())
 FilterRegistry.register(MinRunwayLengthFilter())
 FilterRegistry.register(HasAvgasFilter())
 FilterRegistry.register(HasJetAFilter())
 FilterRegistry.register(MaxLandingFeeFilter())
 FilterRegistry.register(TripDistanceFilter())
+FilterRegistry.register(HotelFilter())
+FilterRegistry.register(RestaurantFilter())
 
 logger.info(f"Filter registry initialized with {len(FilterRegistry.list_all())} filters")
 

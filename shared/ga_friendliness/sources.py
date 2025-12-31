@@ -1256,3 +1256,22 @@ class AirportsDatabaseSource:
         cursor = conn.execute("SELECT DISTINCT icao_code FROM airports WHERE icao_code IS NOT NULL")
         return {row["icao_code"] for row in cursor}
 
+    def get_airports_with_hospitality_fields(self) -> List[str]:
+        """
+        Get all airport ICAOs that have hotel or restaurant fields in AIP.
+
+        Returns:
+            List of ICAO codes (sorted)
+        """
+        conn = self._get_connection()
+        cursor = conn.execute(
+            """
+            SELECT DISTINCT airport_icao
+            FROM aip_entries
+            WHERE std_field_id IN (?, ?)
+            ORDER BY airport_icao
+            """,
+            (self.STD_FIELD_HOTEL, self.STD_FIELD_RESTAURANT)
+        )
+        return [row["airport_icao"] for row in cursor]
+

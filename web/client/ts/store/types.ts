@@ -18,6 +18,18 @@ export interface GAFriendlySummary {
   notification_hassle?: string | null;
 }
 
+/**
+ * Notification info for an airport (from chatbot tool responses)
+ */
+export interface NotificationSummary {
+  notification_type?: string;  // 'h24', 'hours', 'on_request', etc.
+  hours_notice?: number | null;
+  is_h24?: boolean;
+  is_on_request?: boolean;
+  easiness_score?: number;  // 0-100
+  summary?: string;
+}
+
 export interface Airport {
   ident: string;
   name?: string;
@@ -38,6 +50,8 @@ export interface Airport {
   _closestSegment?: [string, string];
   // GA Friendliness data (populated when include_ga=true)
   ga?: GAFriendlySummary | null;
+  // Notification data (from chatbot tool responses)
+  notification?: NotificationSummary | null;
 }
 
 /**
@@ -57,16 +71,20 @@ export interface FilterConfig {
   max_runway_length_ft: number | null;
   min_runway_length_ft: number | null;
   max_landing_fee: number | null;
+  // Hospitality filters: at_airport (most restrictive) or vicinity (includes at_airport)
+  hotel: 'at_airport' | 'vicinity' | null;
+  restaurant: 'at_airport' | 'vicinity' | null;
   limit: number;
   offset: number;
-  // Route-specific filters (not part of standard FilterConfig but used in API)
-  enroute_distance_max_nm?: number;
+  // Search radius/distance parameters (used for route corridor and locate radius)
+  search_radius_nm: number;
+  enroute_distance_max_nm: number | null;
 }
 
 /**
  * Legend mode types
  */
-export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance';
+export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance' | 'notification';
 
 /**
  * Relevance bucket types (quartile-based)
@@ -236,6 +254,16 @@ export interface LocateState {
 export interface MapView {
   center: [number, number]; // [lat, lng]
   zoom: number;
+}
+
+/**
+ * Bounding box for viewport-based airport loading
+ */
+export interface BoundingBox {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
 }
 
 /**

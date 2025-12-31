@@ -20,7 +20,11 @@ from shared.aviation_agent.adapters import (
     run_aviation_agent,
     stream_aviation_agent,
 )
-from shared.aviation_agent.adapters.logging import log_conversation_from_state
+from shared.aviation_agent.adapters.logging import (
+    find_conversation_by_run_id,
+    log_conversation_from_state,
+    log_feedback,
+)
 from shared.aviation_agent.config import AviationAgentSettings, get_settings
 
 router = APIRouter(tags=["aviation-agent"])
@@ -147,10 +151,11 @@ async def aviation_agent_chat_stream(
         thread_id = request.thread_id or _generate_thread_id()
 
         # Setup conversation logging
-        log_dir = Path(os.getenv("CONVERSATION_LOG_DIR", "conversation_logs"))
+        log_dir = Path(os.getenv("CONVERSATION_LOG_DIR", "logs/conversations"))
 
         async def event_generator():
             final_state = None
+            run_id = None
             try:
                 async for event in stream_aviation_agent(
                     messages,
@@ -165,6 +170,10 @@ async def aviation_agent_chat_stream(
                     # Capture final state when graph completes
                     if event_name == "final_answer":
                         final_state = event_data.get("state")
+                    
+                    # Capture run_id from done event for feedback tracking
+                    if event_name == "done":
+                        run_id = event_data.get("run_id")
 
                     yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
             finally:
@@ -181,6 +190,7 @@ async def aviation_agent_chat_stream(
                             start_time=start_time,
                             end_time=end_time,
                             log_dir=log_dir,
+                            run_id=run_id,
                         )
                         logger.info("Conversation logged successfully")
                     else:
@@ -259,7 +269,8 @@ async def submit_feedback(
     """
     Submit user feedback (thumbs up/down) for a conversation.
 
-    This feedback is sent to LangSmith for quality monitoring and analysis.
+    This feedback is sent to LangSmith for quality monitoring and analysis,
+    and also saved locally to conversation logs.
 
     Args:
         request: FeedbackRequest with run_id, score (1=good, 0=bad), and optional comment
@@ -270,21 +281,42 @@ async def submit_feedback(
     if not settings.enabled:
         raise HTTPException(status_code=404, detail="Aviation agent is disabled.")
 
+    # Send feedback to LangSmith
     client = _get_langsmith_client()
+    feedback_id = None
     if client is None:
-        logger.warning("LangSmith client not available, feedback not recorded")
-        return FeedbackResponse(status="skipped", feedback_id=None)
+        logger.warning("LangSmith client not available, feedback not recorded to LangSmith")
+    else:
+        try:
+            feedback = client.create_feedback(
+                run_id=request.run_id,
+                key="user-rating",
+                score=request.score,
+                comment=request.comment,
+            )
+            feedback_id = str(feedback.id)
+            logger.info(f"Feedback submitted to LangSmith for run {request.run_id}: score={request.score}")
+        except Exception as e:
+            logger.error(f"Failed to submit feedback to LangSmith: {e}")
+            # Continue to save locally even if LangSmith fails
 
+    # Also save feedback locally to conversation logs
     try:
-        feedback = client.create_feedback(
+        log_dir = Path(os.getenv("CONVERSATION_LOG_DIR", "logs/conversations"))
+        conversation_entry = find_conversation_by_run_id(request.run_id, log_dir)
+        log_feedback(
             run_id=request.run_id,
-            key="user-rating",
             score=request.score,
             comment=request.comment,
+            conversation_entry=conversation_entry,
+            log_dir=log_dir,
         )
-        logger.info(f"Feedback submitted for run {request.run_id}: score={request.score}")
-        return FeedbackResponse(status="ok", feedback_id=str(feedback.id))
     except Exception as e:
-        logger.error(f"Failed to submit feedback: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit feedback")
+        logger.error(f"Failed to save feedback locally: {e}", exc_info=True)
+        # Don't fail the request if local logging fails
+
+    return FeedbackResponse(
+        status="ok" if feedback_id else "skipped",
+        feedback_id=feedback_id,
+    )
 

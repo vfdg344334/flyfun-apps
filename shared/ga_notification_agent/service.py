@@ -9,7 +9,10 @@ query functionality.
 import os
 import json
 import sqlite3
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import NotificationInfo
 from pathlib import Path
 import logging
 
@@ -167,6 +170,106 @@ class NotificationService:
     def has_parsed_notification(self, icao: str) -> bool:
         """Check if airport has a parsed notification summary."""
         return self.get_notification_summary(icao) is not None
+
+    def get_notification_info(self, icao: str) -> Optional["NotificationInfo"]:
+        """
+        Get NotificationInfo object for an airport.
+
+        This is the preferred method for getting notification data as it returns
+        a NotificationInfo object with query and calculation methods.
+
+        Args:
+            icao: Airport ICAO code (e.g., LFRG, LFPT)
+
+        Returns:
+            NotificationInfo object or None if not found
+        """
+        from .models import NotificationInfo
+
+        row = self.get_notification_summary(icao)
+        if row is None:
+            return None
+
+        return NotificationInfo.from_db_row(row)
+
+    def get_notification_info_batch(self, icaos: List[str]) -> Dict[str, "NotificationInfo"]:
+        """
+        Get NotificationInfo objects for multiple airports in a single query.
+
+        Args:
+            icaos: List of ICAO codes
+
+        Returns:
+            Dict mapping ICAO -> NotificationInfo (only includes found airports)
+        """
+        from .models import NotificationInfo
+
+        if not self.db_available or not icaos:
+            return {}
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+
+            # Build query with placeholders
+            placeholders = ",".join("?" * len(icaos))
+            cursor = conn.execute(f'''
+                SELECT
+                    icao, rule_type, notification_type, hours_notice,
+                    weekday_rules, summary, confidence
+                FROM ga_notification_requirements
+                WHERE icao IN ({placeholders})
+            ''', [icao.upper() for icao in icaos])
+
+            results = {}
+            for row in cursor:
+                info = NotificationInfo.from_db_row(dict(row))
+                results[row["icao"]] = info
+
+            conn.close()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error batch fetching notifications: {e}")
+            return {}
+
+    def find_icaos_with_notifications(self, country: Optional[str] = None) -> List[str]:
+        """
+        Find all ICAO codes that have notification data.
+
+        Args:
+            country: Optional ISO-2 country code to filter by (e.g., FR, DE)
+
+        Returns:
+            List of ICAO codes with notification data
+        """
+        if not self.db_available:
+            return []
+
+        airports_db = self._get_airports_db_path()
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+
+            if country and airports_db and os.path.exists(airports_db):
+                # Join with airports DB to filter by country
+                conn.execute(f"ATTACH DATABASE '{airports_db}' AS airports_db")
+                cursor = conn.execute('''
+                    SELECT n.icao
+                    FROM ga_notification_requirements n
+                    JOIN airports_db.airports a ON n.icao = a.icao_code
+                    WHERE a.iso_country = ?
+                ''', (country.upper(),))
+            else:
+                cursor = conn.execute('SELECT icao FROM ga_notification_requirements')
+
+            icaos = [row[0] for row in cursor]
+            conn.close()
+            return icaos
+
+        except Exception as e:
+            logger.error(f"Error finding ICAOs with notifications: {e}")
+            return []
     
     def get_notification_for_airport(
         self,

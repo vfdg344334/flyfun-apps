@@ -56,6 +56,16 @@ class ToolContextSettings(BaseSettings):
         description="Path to GA meta database (optional)",
         alias="GA_PERSONA_DB",
     )
+    vector_db_path: Optional[Path] = Field(
+        default=None,
+        description="Path to local ChromaDB vector database for RAG/comparison",
+        alias="VECTOR_DB_PATH",
+    )
+    vector_db_url: Optional[str] = Field(
+        default=None,
+        description="URL to ChromaDB service. If set, takes precedence over vector_db_path.",
+        alias="VECTOR_DB_URL",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -77,6 +87,8 @@ class ToolContext:
     notification_service: Optional[Any] = None  # NotificationService (lazy import to avoid circular deps)
     ga_friendliness_service: Optional[Any] = None  # GAFriendlinessService (lazy import)
     rules_manager: Optional[RulesManager] = None
+    comparison_service: Optional[Any] = None  # RulesComparisonService (lazy import)
+    rules_rag: Optional[Any] = None  # RulesRAG for semantic search (lazy import)
 
     @classmethod
     def create(
@@ -86,6 +98,8 @@ class ToolContext:
         load_rules: bool = True,
         load_notifications: bool = True,
         load_ga_friendliness: bool = True,
+        load_comparison: bool = True,
+        load_rag: bool = True,
     ) -> "ToolContext":
         """
         Create ToolContext with all paths resolved from settings.
@@ -96,10 +110,15 @@ class ToolContext:
             load_rules: Load rules manager (default: True)
             load_notifications: Load notification service (default: True)
             load_ga_friendliness: Load GA friendliness service (default: True)
+            load_comparison: Load comparison service for cross-country analysis (default: True)
+            load_rag: Load RulesRAG for semantic search (default: True)
 
         Returns:
             ToolContext instance with requested services loaded
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Use provided settings or get cached default
         settings = settings or get_tool_context_settings()
 
@@ -116,7 +135,9 @@ class ToolContext:
         if load_notifications:
             try:
                 from shared.ga_notification_agent.service import NotificationService
-                notification_service = NotificationService()
+                ga_notifications_db = settings.ga_notifications_db
+                if ga_notifications_db and ga_notifications_db.exists():
+                    notification_service = NotificationService(db_path=str(ga_notifications_db))
             except Exception:
                 pass  # Service is optional
 
@@ -137,11 +158,50 @@ class ToolContext:
             rules_manager = RulesManager(str(settings.rules_json))
             rules_manager.load_rules()
 
+        # Initialize ComparisonService (optional - requires vector DB and rules)
+        comparison_service = None
+        if load_comparison and rules_manager:
+            vector_db_path = settings.vector_db_path
+            vector_db_url = settings.vector_db_url
+            if vector_db_url or (vector_db_path and vector_db_path.exists()):
+                try:
+                    from shared.aviation_agent.comparison_service import create_comparison_service
+                    comparison_service = create_comparison_service(
+                        vector_db_path=str(vector_db_path) if vector_db_path else None,
+                        vector_db_url=vector_db_url,
+                        rules_manager=rules_manager,
+                    )
+                    if comparison_service:
+                        logger.info("✓ ComparisonService initialized")
+                except Exception as e:
+                    logger.debug(f"ComparisonService not available: {e}")
+                    pass  # Service is optional
+
+        # Initialize RulesRAG (optional - requires vector DB and rules)
+        rules_rag = None
+        if load_rag and rules_manager:
+            vector_db_path = settings.vector_db_path
+            vector_db_url = settings.vector_db_url
+            if vector_db_url or (vector_db_path and vector_db_path.exists()):
+                try:
+                    from shared.aviation_agent.rules_rag import RulesRAG
+                    rules_rag = RulesRAG(
+                        vector_db_path=str(vector_db_path) if vector_db_path and not vector_db_url else None,
+                        vector_db_url=vector_db_url,
+                        rules_manager=rules_manager,
+                    )
+                    logger.info("✓ RulesRAG initialized")
+                except Exception as e:
+                    logger.debug(f"RulesRAG not available: {e}")
+                    pass  # Service is optional
+
         return cls(
             model=model,
             notification_service=notification_service,
             ga_friendliness_service=ga_friendliness_service,
             rules_manager=rules_manager,
+            comparison_service=comparison_service,
+            rules_rag=rules_rag,
         )
 
     def ensure_rules_manager(self) -> RulesManager:

@@ -9,6 +9,7 @@ from .basic_filters import (
     HasAipDataFilter,
     HasHardRunwayFilter,
     PointOfEntryFilter,
+    ExcludeLargeAirportsFilter,
 )
 from .runway_filters import (
     MaxRunwayLengthFilter,
@@ -24,6 +25,10 @@ from .pricing_filters import (
 from .distance_filters import (
     TripDistanceFilter,
 )
+from .hospitality_filters import (
+    HotelFilter,
+    RestaurantFilter,
+)
 
 __all__ = [
     "Filter",
@@ -33,6 +38,7 @@ __all__ = [
     "HasAipDataFilter",
     "HasHardRunwayFilter",
     "PointOfEntryFilter",
+    "ExcludeLargeAirportsFilter",
     # Runway filters
     "MaxRunwayLengthFilter",
     "MinRunwayLengthFilter",
@@ -43,4 +49,7 @@ __all__ = [
     "MaxLandingFeeFilter",
     # Distance filters
     "TripDistanceFilter",
+    # Hospitality filters
+    "HotelFilter",
+    "RestaurantFilter",
 ]

@@ -145,6 +145,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use LLM (OpenAI) for complex notification rules",
     )
+    proc_group.add_argument(
+        "--aip-only",
+        action="store_true",
+        help="Update only AIP-derived fields (IFR, night, hotel, restaurant) without processing reviews. Much faster than full rebuild. Requires --airports-db.",
+    )
     
     # LLM options
     llm_group = parser.add_argument_group("LLM options")
@@ -291,10 +296,18 @@ def main() -> int:
     
     # Check if we're in notification-only mode
     notification_only = source is None and args.parse_notifications and args.airports_db
-    
-    if source is None and not notification_only:
+
+    # Check if we're in AIP-only mode
+    aip_only = getattr(args, 'aip_only', False)
+
+    if source is None and not notification_only and not aip_only:
         logger.error("No source specified. Use --export, --csv, or --json-dir")
         logger.error("Or use --parse-notifications with --airports-db for notification-only mode")
+        logger.error("Or use --aip-only with --airports-db for AIP-only update")
+        return 1
+
+    if aip_only and not args.airports_db:
+        logger.error("--aip-only requires --airports-db")
         return 1
     
     if source:
@@ -338,6 +351,52 @@ def main() -> int:
         airports_db_source = AirportsDatabaseSource(args.airports_db)
         logger.info(f"Using airports database: {args.airports_db}")
     
+    # Handle AIP-only mode
+    if aip_only:
+        logger.info("Running in AIP-only mode (no review processing)")
+
+        # Ensure database and schema exist
+        from shared.ga_friendliness.database import get_connection, ensure_schema_version
+        conn = get_connection(args.output)
+        ensure_schema_version(conn)
+        conn.close()
+
+        # Create builder and run AIP-only update
+        builder = GAFriendlinessBuilder(settings=settings)
+
+        try:
+            result = builder.update_aip_only(
+                airports_db=airports_db_source,
+                icaos=icaos,
+            )
+
+            # Print summary
+            print("\n" + "=" * 60)
+            print("AIP-ONLY UPDATE SUMMARY")
+            print("=" * 60)
+            print(f"Success: {result.success}")
+            print(f"Total airports: {result.metrics.total_airports}")
+            print(f"Successful: {result.metrics.successful_airports}")
+            print(f"Failed: {result.metrics.failed_airports}")
+            print(f"Skipped: {result.metrics.skipped_airports}")
+            if result.metrics.duration_seconds:
+                print(f"Duration: {result.metrics.duration_seconds:.1f} seconds")
+
+            if result.metrics.errors:
+                print(f"\nErrors ({len(result.metrics.errors)}):")
+                for error in result.metrics.errors[:10]:
+                    print(f"  - {error}")
+                if len(result.metrics.errors) > 10:
+                    print(f"  ... and {len(result.metrics.errors) - 10} more")
+
+            return 0 if result.success else 1
+
+        except Exception as e:
+            logger.exception(f"AIP-only update failed: {e}")
+            return 1
+        finally:
+            builder.close()
+
     # Handle notification-only mode
     if notification_only:
         logger.info("Running in notification-only mode (no review processing)")
