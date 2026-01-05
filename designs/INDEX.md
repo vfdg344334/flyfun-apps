@@ -51,11 +51,6 @@ Container deployment setup for web server and services.
 Native iOS application for aviation data. SwiftUI interface, offline-capable, integrates with euro_aip data.
 → Full doc: IOS_APP_DESIGN.md
 
-### iOS App Implementation
-Implementation details and update plans for iOS app.
-→ Full doc: IOS_APP_IMPLEMENTATION.md
-→ Full doc: IOS_APP_UPDATE_PLAN.md
-
 ## Reference
 
 ### Chatbot Web UI
