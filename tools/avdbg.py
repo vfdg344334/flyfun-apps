@@ -23,6 +23,7 @@ Output format:
   --no-answer            Skip showing the answer
 
 Agent options:
+  --config NAME          Behavior config from configs/aviation_agent/NAME.json (offline only)
   --persona ID           Persona ID for prioritization (default: ifr_touring_sr22)
   --database PATH        Path to airports.db
   --rules PATH           Path to rules.json
@@ -32,6 +33,7 @@ Examples:
   python tools/avdbg.py "Find airports near Paris" -v
   python tools/avdbg.py "Find airports near Paris" --plan --tool-result
   python tools/avdbg.py "Find airports near Paris" --json
+  python tools/avdbg.py "Find airports near Paris" --config fast
   python tools/avdbg.py "Find airports near Paris" --api
   python tools/avdbg.py "Find airports near Paris" --api http://localhost:8000
 """
@@ -115,6 +117,7 @@ class AgentDebugResult:
     error: Optional[str] = None
 
     # Metadata
+    config_name: Optional[str] = None
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -132,6 +135,7 @@ async def run_offline(prompt: str, args: argparse.Namespace) -> AgentDebugResult
 
     settings = AviationAgentSettings(
         enabled=True,
+        agent_config_name=args.config,
         airports_db=_resolve_database_path(args.database),
         rules_json=_resolve_rules_path(args.rules),
     )
@@ -139,7 +143,7 @@ async def run_offline(prompt: str, args: argparse.Namespace) -> AgentDebugResult
     graph = build_agent(settings=settings)
     messages = [HumanMessage(content=prompt)]
 
-    result = AgentDebugResult()
+    result = AgentDebugResult(config_name=args.config)
 
     async for event in stream_aviation_agent(messages, graph, persona_id=args.persona):
         event_type = event.get("event")
@@ -252,6 +256,9 @@ async def run_online(prompt: str, args: argparse.Namespace, api_url: str) -> Age
 def print_rich_output(result: AgentDebugResult, args: argparse.Namespace) -> None:
     """Print formatted terminal output with colors."""
 
+    if args.verbose and result.config_name:
+        print(fmt(f"\n=== CONFIG: {result.config_name} ===", BOLD, DIM))
+
     if args.plan or args.verbose:
         print(fmt("\n=== PLAN ===", BOLD, CYAN))
         if result.plan:
@@ -360,6 +367,7 @@ Examples:
   %(prog)s "Find airports near Paris" -v
   %(prog)s "Find airports near Paris" --plan --tool-result
   %(prog)s "Find airports near Paris" --json
+  %(prog)s "Find airports near Paris" --config fast
   %(prog)s "Find airports near Paris" --api
   %(prog)s "Find airports near Paris" --api http://localhost:8000
 """,
@@ -419,6 +427,10 @@ Examples:
 
     # Agent options
     agent_group = parser.add_argument_group("Agent options")
+    agent_group.add_argument(
+        "--config", type=str, default="default", metavar="NAME",
+        help="Behavior config name from configs/aviation_agent/NAME.json (offline mode only)"
+    )
     agent_group.add_argument(
         "--persona", default="ifr_touring_sr22",
         help="Persona ID for prioritization (default: ifr_touring_sr22)"

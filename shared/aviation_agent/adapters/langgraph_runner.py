@@ -257,10 +257,12 @@ def _resolve_llm(
     # Configure LLM with retry support for transient failures
     # max_retries handles: rate limits, timeouts, temporary API errors
     # request_timeout prevents hanging on slow responses
+    # stream_usage: include token usage in streaming responses (required for token tracking)
     llm_instance = ChatOpenAI(
         model=model_name,
         temperature=temperature,
         streaming=streaming,
+        stream_usage=streaming,
         max_retries=max_retries,
         request_timeout=request_timeout,
     )

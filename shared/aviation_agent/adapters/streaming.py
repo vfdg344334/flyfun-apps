@@ -190,12 +190,23 @@ async def stream_aviation_agent(
                         content = chunk.get("content") or chunk.get("text") or chunk.get("delta", {}).get("content", "")
                     elif isinstance(chunk, str):
                         content = chunk
-                    
+
                     if content:
                         yield {
                             "event": "message",
                             "data": {"content": content}
                         }
+
+                    # Capture streaming token usage from usage_metadata (sent on final chunk)
+                    # This is different from non-streaming which uses response_metadata.token_usage
+                    usage_metadata = getattr(chunk, "usage_metadata", None)
+                    if usage_metadata:
+                        if isinstance(usage_metadata, dict):
+                            total_input_tokens += usage_metadata.get("input_tokens", 0)
+                            total_output_tokens += usage_metadata.get("output_tokens", 0)
+                        elif hasattr(usage_metadata, "input_tokens"):
+                            total_input_tokens += usage_metadata.input_tokens or 0
+                            total_output_tokens += usage_metadata.output_tokens or 0
             
             # Also capture streaming from StrOutputParser (which streams strings)
             # This is important - StrOutputParser streams string chunks after LLM
