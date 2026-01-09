@@ -104,13 +104,12 @@ function filterAirports(airports: Airport[], filters: Partial<FilterConfig>): Ai
   console.log('filterAirports called:', {
     airportCount: airports.length,
     filters: filters,
-    sampleAirport: airports[0] ? { ident: airports[0].ident, iso_country: airports[0].iso_country, country: (airports[0] as any).country } : null
+    sampleAirport: airports[0] ? { ident: airports[0].ident, iso_country: airports[0].iso_country } : null
   });
 
   const result = airports.filter(airport => {
-    // Check country - handle both 'iso_country' (from API) and 'country' (from chatbot)
-    const airportCountry = airport.iso_country || (airport as any).country;
-    if (filters.country && airportCountry !== filters.country) {
+    // Check country filter
+    if (filters.country && airport.iso_country !== filters.country) {
       return false;
     }
     // Use truthy checks to handle undefined/null properties

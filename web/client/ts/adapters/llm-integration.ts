@@ -1,11 +1,33 @@
 /**
  * LLM Integration - Clean interface for chatbot interactions
  * Handles visualization data from LLM responses and applies filter profiles
+ *
+ * This adapter normalizes data from chatbot responses to match the app's
+ * internal types. For example, chatbot may send 'country' but app uses 'iso_country'.
  */
 
 import { useStore } from '../store/store';
 import type { Airport, FilterConfig } from '../store/types';
 import { APIAdapter } from './api-adapter';
+
+/**
+ * Normalize airport data from chatbot responses.
+ * Ensures iso_country is always set (chatbot may send 'country' instead).
+ */
+function normalizeAirport(airport: any): Airport {
+  return {
+    ...airport,
+    // Normalize: prefer iso_country, fall back to country for legacy responses
+    iso_country: airport.iso_country || airport.country,
+  };
+}
+
+/**
+ * Normalize an array of airports from chatbot responses.
+ */
+function normalizeAirports(airports: any[]): Airport[] {
+  return airports.map(normalizeAirport);
+}
 
 /**
  * Visualization types from LLM
@@ -154,7 +176,7 @@ export class LLMIntegration {
           color: '#007bff',
           radius: 15,
           popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>${label}</em>`,
-          country: airport.iso_country || airport.country
+          country: airport.iso_country
         });
         highlightCount++;
       }
@@ -174,7 +196,8 @@ export class LLMIntegration {
    */
   private handleMarkers(viz: Visualization): boolean {
     // Airports returned by the tool (these will be highlighted)
-    const toolAirports = viz.data || viz.markers || [];
+    // Normalize at entry point to ensure iso_country is set
+    const toolAirports = normalizeAirports(viz.data || viz.markers || []);
     const filterProfile = viz.filter_profile as Record<string, unknown> | undefined;
 
     if (!Array.isArray(toolAirports) || toolAirports.length === 0) {
@@ -255,7 +278,8 @@ export class LLMIntegration {
     }
 
     const route = viz.route as Visualization['route'];
-    const airports = (viz.markers || []) as Airport[];
+    // Normalize at entry point to ensure iso_country is set
+    const airports = normalizeAirports(viz.markers || []);
     const fromIcao = route?.from?.icao;
     const toIcao = route?.to?.icao;
 
@@ -291,10 +315,10 @@ export class LLMIntegration {
           color: '#007bff',
           radius: 15,
           popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
-          country: airport.iso_country || airport.country  // Add country for filtering
+          country: airport.iso_country
         });
         highlightCount++;
-        console.log(`🔵 Added highlight for ${airport.ident} (${airport.iso_country || airport.country || 'unknown'})`);
+        console.log(`🔵 Added highlight for ${airport.ident} (${airport.iso_country || 'unknown'})`);
       }
     });
 
@@ -422,7 +446,8 @@ export class LLMIntegration {
    * Shows all airports near location via search, highlights specific airports from chat
    */
   private handlePointWithMarkers(viz: Visualization): boolean {
-    const recommendedAirports = (viz.markers || []) as Airport[];
+    // Normalize at entry point to ensure iso_country is set
+    const recommendedAirports = normalizeAirports(viz.markers || []);
     const pointData = viz.point;
     const radiusNm = viz.radius_nm || 50.0;
 
@@ -470,7 +495,7 @@ export class LLMIntegration {
           color: '#007bff',
           radius: 15,
           popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Recommended by assistant</em>`,
-          country: airport.iso_country || airport.country
+          country: airport.iso_country
         });
         highlightCount++;
       }

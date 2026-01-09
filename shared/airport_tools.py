@@ -250,8 +250,7 @@ def _airport_summary(a: Airport) -> Dict[str, Any]:
         "ident": a.ident,
         "name": a.name,
         "municipality": a.municipality,
-        "country": a.iso_country,
-        "iso_country": a.iso_country,  # Include both for compatibility
+        "iso_country": a.iso_country,
         "latitude_deg": getattr(a, "latitude_deg", None),
         "longitude_deg": getattr(a, "longitude_deg", None),
         "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
