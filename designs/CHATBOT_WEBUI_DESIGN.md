@@ -152,8 +152,9 @@ class AviationPlan(BaseModel):
 - Returns structured AviationPlan
 
 **Available Filters:**
-- `has_avgas`: Boolean (AVGAS fuel)
-- `has_jet_a`: Boolean (Jet-A fuel)
+- `fuel_type`: String ('avgas' | 'jet_a') - preferred for UI dropdown
+- `has_avgas`: Boolean (AVGAS fuel) - legacy, kept for backwards compatibility
+- `has_jet_a`: Boolean (Jet-A fuel) - legacy, kept for backwards compatibility
 - `has_hard_runway`: Boolean (paved/hard runways)
 - `has_procedures`: Boolean (IFR procedures)
 - `point_of_entry`: Boolean (customs/border crossing)
@@ -487,7 +488,7 @@ The `LLMIntegration` class handles each visualization type as follows:
 
 1. **`markers`** - Display airports as markers (two modes)
 
-   **Mode 1: With meaningful filters** (country, point_of_entry, has_avgas, etc.):
+   **Mode 1: With meaningful filters** (country, point_of_entry, fuel_type, etc.):
    - Clears old LLM highlights
    - Applies filter profile to store (updates UI filter controls)
    - Adds blue highlights for the specific airports returned by the tool
@@ -600,7 +601,7 @@ All airport filtering uses `FilterEngine` (`shared/filtering/filter_engine.py`) 
 
 **Supported Filters:**
 - `country`, `has_procedures`, `has_aip_data`, `has_hard_runway`, `point_of_entry`
-- `has_avgas`, `has_jet_a`, `hotel`, `restaurant`
+- `fuel_type`, `has_avgas` (legacy), `has_jet_a` (legacy), `hotel`, `restaurant`
 - `min_runway_length_ft`, `max_runway_length_ft`, `max_landing_fee`
 - `trip_distance`, `exclude_large_airports`
 

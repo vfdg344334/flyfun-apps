@@ -152,7 +152,8 @@ Client-side filters (for immediate display):
 - Boolean filters (has_procedures, has_aip_data, has_hard_runway, point_of_entry)
 
 Backend-only filters (via API):
-- `has_avgas`, `has_jet_a`, `hotel`, `restaurant`
+- `fuel_type` (UI dropdown), `has_avgas`/`has_jet_a` (legacy boolean filters)
+- `hotel`, `restaurant`
 - `min_runway_length_ft`, `max_runway_length_ft`, `max_landing_fee`
 - `trip_distance`, `exclude_large_airports`
 
@@ -303,7 +304,7 @@ The LLM can return these visualization types:
 
 1. **`markers`**: Display airports as markers (two modes)
 
-   **Mode 1: With meaningful filters** (country, point_of_entry, has_avgas, etc.):
+   **Mode 1: With meaningful filters** (country, point_of_entry, fuel_type, etc.):
    - Clears old LLM highlights
    - Applies filter profile to store (updates UI filter controls)
    - Adds blue highlights for the specific airports returned by the tool
