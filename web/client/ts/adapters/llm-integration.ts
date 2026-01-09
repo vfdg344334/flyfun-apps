@@ -106,7 +106,7 @@ export class LLMIntegration {
   
   /**
    * Check if filter profile has meaningful filters (not just search_query or empty)
-   * Meaningful filters: country, point_of_entry, has_avgas, has_jet_a, has_procedures, etc.
+   * Meaningful filters: country, point_of_entry, fuel_type, has_procedures, etc.
    */
   private hasMeaningfulFilters(filterProfile: Record<string, unknown> | undefined): boolean {
     if (!filterProfile || typeof filterProfile !== 'object') {
@@ -117,8 +117,9 @@ export class LLMIntegration {
     const meaningfulFilterKeys = [
       'country',
       'point_of_entry',
-      'has_avgas',
-      'has_jet_a',
+      'fuel_type',
+      'has_avgas',   // Keep for backwards compatibility with chatbot
+      'has_jet_a',   // Keep for backwards compatibility with chatbot
       'has_procedures',
       'has_aip_data',
       'has_hard_runway',
@@ -534,8 +535,14 @@ export class LLMIntegration {
     if (profile.has_aip_data) filters.has_aip_data = Boolean(profile.has_aip_data);
     if (profile.has_hard_runway) filters.has_hard_runway = Boolean(profile.has_hard_runway);
     if (profile.point_of_entry) filters.point_of_entry = Boolean(profile.point_of_entry);
-    if (profile.has_avgas) filters.has_avgas = Boolean(profile.has_avgas);
-    if (profile.has_jet_a) filters.has_jet_a = Boolean(profile.has_jet_a);
+    // Handle fuel_type (new style) or has_avgas/has_jet_a (legacy chatbot style)
+    if (profile.fuel_type) {
+      filters.fuel_type = String(profile.fuel_type) as 'avgas' | 'jet_a';
+    } else if (profile.has_avgas) {
+      filters.fuel_type = 'avgas';
+    } else if (profile.has_jet_a) {
+      filters.fuel_type = 'jet_a';
+    }
     if (profile.max_runway_length_ft) filters.max_runway_length_ft = Number(profile.max_runway_length_ft);
     if (profile.min_runway_length_ft) filters.min_runway_length_ft = Number(profile.min_runway_length_ft);
     if (profile.max_landing_fee) filters.max_landing_fee = Number(profile.max_landing_fee);

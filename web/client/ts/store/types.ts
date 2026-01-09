@@ -66,8 +66,8 @@ export interface FilterConfig {
   aip_field: string | null;
   aip_value: string | null;
   aip_operator: 'contains' | 'equals' | 'not_empty' | 'starts_with' | 'ends_with';
-  has_avgas: boolean | null;
-  has_jet_a: boolean | null;
+  // Fuel type filter: single-selection dropdown (avgas, jet_a, or null for no filter)
+  fuel_type: 'avgas' | 'jet_a' | null;
   max_runway_length_ft: number | null;
   min_runway_length_ft: number | null;
   max_landing_fee: number | null;

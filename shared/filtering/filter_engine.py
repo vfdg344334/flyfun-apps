@@ -18,6 +18,7 @@ from .filters import (
     MinRunwayLengthFilter,
     HasAvgasFilter,
     HasJetAFilter,
+    FuelTypeFilter,
     MaxLandingFeeFilter,
     TripDistanceFilter,
     HotelFilter,
@@ -76,6 +77,7 @@ FilterRegistry.register(MaxRunwayLengthFilter())
 FilterRegistry.register(MinRunwayLengthFilter())
 FilterRegistry.register(HasAvgasFilter())
 FilterRegistry.register(HasJetAFilter())
+FilterRegistry.register(FuelTypeFilter())
 FilterRegistry.register(MaxLandingFeeFilter())
 FilterRegistry.register(TripDistanceFilter())
 FilterRegistry.register(HotelFilter())

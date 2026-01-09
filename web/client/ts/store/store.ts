@@ -38,8 +38,7 @@ const initialState: AppState = {
     aip_field: null,
     aip_value: null,
     aip_operator: 'contains',
-    has_avgas: null,
-    has_jet_a: null,
+    fuel_type: null,
     max_runway_length_ft: null,
     min_runway_length_ft: null,
     max_landing_fee: null,
@@ -139,7 +138,7 @@ function filterAirports(airports: Airport[], filters: Partial<FilterConfig>): Ai
     if (filters.point_of_entry === false && airport.point_of_entry === true) {
       return false;
     }
-    // TODO: Add more filters (has_avgas, has_jet_a, runway length, landing fee)
+    // TODO: Add more filters (fuel_type, runway length, landing fee)
     return true;
   });
 

@@ -120,6 +120,8 @@ async def get_airports(
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
     has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
     point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports"),
+    # Fuel type filter
+    fuel_type: Optional[str] = Query(None, description="Filter by fuel type: avgas, jet_a", max_length=10),
     # Hospitality filters (from GA friendliness data)
     hotel: Optional[str] = Query(None, description="Filter by hotel availability: at_airport, vicinity", max_length=20),
     restaurant: Optional[str] = Query(None, description="Filter by restaurant availability: at_airport, vicinity", max_length=20),
@@ -196,6 +198,13 @@ async def get_airports(
         else:
             airports = airports.filter(lambda a: not a.point_of_entry)
 
+    # Apply fuel type filtering
+    if fuel_type:
+        if fuel_type == "avgas":
+            airports = airports.filter(lambda a: getattr(a, "avgas", False))
+        elif fuel_type == "jet_a":
+            airports = airports.filter(lambda a: getattr(a, "jet_a", False))
+
     # Apply hospitality filtering (hotel/restaurant)
     if hotel or restaurant:
         ga_service = get_ga_service()
@@ -259,6 +268,8 @@ async def get_airports_near_route(
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
     has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
     point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports"),
+    # Fuel type filter
+    fuel_type: Optional[str] = Query(None, description="Filter by fuel type: avgas, jet_a", max_length=10),
     # New AIP field filters
     aip_field: Optional[str] = Query(None, description="AIP standardized field name to filter by", max_length=100),
     aip_value: Optional[str] = Query(None, description="Value to search for in the AIP field", max_length=200),
@@ -313,6 +324,8 @@ async def get_airports_near_route(
         filters["has_hard_runway"] = has_hard_runway
     if point_of_entry is not None:
         filters["point_of_entry"] = point_of_entry
+    if fuel_type:
+        filters["fuel_type"] = fuel_type
     if hotel:
         filters["hotel"] = hotel
     if restaurant:
@@ -405,6 +418,8 @@ async def locate_airports(
     has_aip_data: Optional[bool] = Query(None, description="Filter airports with AIP data"),
     has_hard_runway: Optional[bool] = Query(None, description="Filter airports with hard runways"),
     point_of_entry: Optional[bool] = Query(None, description="Filter border crossing airports"),
+    # Fuel type filter
+    fuel_type: Optional[str] = Query(None, description="Filter by fuel type: avgas, jet_a", max_length=10),
     # Hospitality filters
     hotel: Optional[str] = Query(None, description="Filter by hotel availability: at_airport or vicinity", max_length=20),
     restaurant: Optional[str] = Query(None, description="Filter by restaurant availability: at_airport or vicinity", max_length=20),
@@ -429,6 +444,8 @@ async def locate_airports(
         filters["has_hard_runway"] = has_hard_runway
     if point_of_entry is not None:
         filters["point_of_entry"] = point_of_entry
+    if fuel_type:
+        filters["fuel_type"] = fuel_type
     if hotel:
         filters["hotel"] = hotel
     if restaurant:

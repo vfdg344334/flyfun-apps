@@ -599,6 +599,16 @@ export class UIManager {
       });
     }
 
+    // Fuel type filter
+    const fuelFilter = document.getElementById('fuel-filter');
+    if (fuelFilter) {
+      fuelFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'avgas' | 'jet_a' | '';
+        handleFilterChange({ fuel_type: value || null });
+      });
+    }
+
     const maxAirports = document.getElementById('max-airports-filter');
     if (maxAirports) {
       maxAirports.addEventListener('change', (e) => {
@@ -766,6 +776,12 @@ export class UIManager {
     const restaurantFilter = document.getElementById('restaurant-filter') as HTMLSelectElement;
     if (restaurantFilter) {
       restaurantFilter.value = filters.restaurant || '';
+    }
+
+    // Fuel type filter
+    const fuelFilter = document.getElementById('fuel-filter') as HTMLSelectElement;
+    if (fuelFilter) {
+      fuelFilter.value = filters.fuel_type || '';
     }
 
     const maxAirports = document.getElementById('max-airports-filter') as HTMLSelectElement;
@@ -1547,6 +1563,12 @@ export class UIManager {
     if (filters.restaurant) {
       const select = document.getElementById('restaurant-filter') as HTMLSelectElement;
       if (select) select.value = filters.restaurant;
+    }
+
+    // Fuel type filter
+    if (filters.fuel_type) {
+      const select = document.getElementById('fuel-filter') as HTMLSelectElement;
+      if (select) select.value = filters.fuel_type;
     }
 
     // Update store filters
