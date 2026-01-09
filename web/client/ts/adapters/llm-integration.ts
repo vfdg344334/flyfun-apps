@@ -7,8 +7,118 @@
  */
 
 import { useStore } from '../store/store';
-import type { Airport, FilterConfig } from '../store/types';
+import type { Airport, FilterConfig, LegendMode } from '../store/types';
 import { APIAdapter } from './api-adapter';
+
+/**
+ * Tool-to-Legend Mapping Configuration
+ *
+ * Maps chatbot tool names to suggested legend modes.
+ * This allows the UI to automatically switch to the most relevant legend
+ * based on what the user is asking about.
+ *
+ * Priority: More specific mappings should come first if we ever need
+ * to support multiple matching conditions.
+ *
+ * To add a new mapping:
+ * 1. Add the tool name as key
+ * 2. Set the legend mode value
+ * 3. Optionally add a filter-based override in getSuggestedLegend()
+ */
+const TOOL_TO_LEGEND_MAP: Partial<Record<string, LegendMode>> = {
+  // Notification queries → notification legend
+  'get_notification_for_airport': 'notification',
+
+  // Airport details → airport-type (shows border crossing, procedures)
+  'get_airport_details': 'airport-type',
+
+  // Route/location searches → airport-type by default
+  // (can be overridden by filter-based logic below)
+  'find_airports_near_route': 'airport-type',
+  'find_airports_near_location': 'airport-type',
+  'search_airports': 'airport-type',
+
+  // Rules tools don't change legend (they show rules panel, not map)
+  // 'answer_rules_question': null,
+  // 'browse_rules': null,
+  // 'compare_rules_between_countries': null,
+};
+
+/**
+ * Filter-based legend overrides
+ *
+ * When certain filters are present, they suggest a more relevant legend
+ * than the tool default. These take precedence over tool-based mappings.
+ */
+interface FilterLegendOverride {
+  condition: (filters: Record<string, unknown>) => boolean;
+  legend: LegendMode;
+  priority: number; // Higher = more specific
+}
+
+const FILTER_LEGEND_OVERRIDES: FilterLegendOverride[] = [
+  // Notification-related queries → notification legend
+  // max_hours_notice filter indicates user cares about notification requirements
+  {
+    condition: (f) => f.max_hours_notice != null,
+    legend: 'notification',
+    priority: 110,
+  },
+  // Customs/border crossing queries → airport-type
+  {
+    condition: (f) => f.point_of_entry === true,
+    legend: 'airport-type',
+    priority: 100,
+  },
+  // Procedure queries → procedure-precision
+  {
+    condition: (f) => f.has_procedures === true,
+    legend: 'procedure-precision',
+    priority: 90,
+  },
+  // Extensible: add more filter-based overrides here
+  // {
+  //   condition: (f) => f.some_filter === value,
+  //   legend: 'some-legend',
+  //   priority: X,
+  // },
+];
+
+/**
+ * Get suggested legend mode based on tool name and filters.
+ *
+ * Priority:
+ * 1. Filter-based overrides (most specific)
+ * 2. Tool-based mapping
+ * 3. null (no change suggested)
+ *
+ * @param tool - Tool name from ui_payload.tool
+ * @param filters - Optional filter profile from ui_payload.filters
+ * @returns Suggested legend mode or null if no change suggested
+ */
+export function getSuggestedLegend(
+  tool: string | undefined,
+  filters?: Record<string, unknown>
+): LegendMode | null {
+  // 1. Check filter-based overrides first (most specific)
+  if (filters && typeof filters === 'object') {
+    const matchingOverrides = FILTER_LEGEND_OVERRIDES
+      .filter(override => override.condition(filters))
+      .sort((a, b) => b.priority - a.priority);
+
+    if (matchingOverrides.length > 0) {
+      return matchingOverrides[0].legend;
+    }
+  }
+
+  // 2. Fall back to tool-based mapping
+  if (tool && TOOL_TO_LEGEND_MAP[tool]) {
+    return TOOL_TO_LEGEND_MAP[tool]!;
+  }
+
+  // 3. No suggestion (don't change legend)
+  return null;
+}
 
 /**
  * Normalize airport data from chatbot responses.
@@ -577,10 +687,35 @@ export class LLMIntegration {
     // Update store filters
     const store = this.store as any;
     store.getState().setFilters(filters);
-    
+
     // Sync to UI controls (if uiManager available)
     if (this.uiManager && typeof this.uiManager.syncFiltersToUI === 'function') {
       this.uiManager.syncFiltersToUI(filters);
+    }
+  }
+
+  /**
+   * Apply suggested legend mode based on tool and filters from ui_payload.
+   *
+   * Called by chatbot-manager when processing ui_payload events.
+   * Uses the tool-to-legend mapping to automatically switch to the most
+   * relevant legend based on what the user is asking about.
+   *
+   * @param tool - Tool name from ui_payload.tool
+   * @param filters - Optional filter profile from ui_payload.filters
+   */
+  applySuggestedLegend(tool: string | undefined, filters?: Record<string, unknown>): void {
+    const suggestedLegend = getSuggestedLegend(tool, filters);
+
+    if (suggestedLegend) {
+      const store = this.store as any;
+      const currentLegend = store.getState().visualization.legendMode;
+
+      // Only change if different from current
+      if (currentLegend !== suggestedLegend) {
+        store.getState().setLegendMode(suggestedLegend);
+        console.log(`🔵 LLM suggested legend: ${suggestedLegend} (tool: ${tool}, was: ${currentLegend})`);
+      }
     }
   }
 }

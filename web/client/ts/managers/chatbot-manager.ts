@@ -344,6 +344,13 @@ export class ChatbotManager {
                 filterProfile = eventData.filters;
               }
 
+              // Apply suggested legend based on tool and filters
+              // This automatically switches the map legend to be most relevant to the query
+              // (e.g., notification legend for notification queries, airport-type for customs)
+              if (eventData.tool) {
+                this.llmIntegration.applySuggestedLegend(eventData.tool, eventData.filters);
+              }
+
               if (eventData.visualization) {
                 visualization = eventData.visualization;
                 // Merge filter_profile into visualization for unified handling

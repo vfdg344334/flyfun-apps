@@ -422,6 +422,7 @@ async def aviation_agent_chat_stream(
 ```json
 {
   "kind": "route",
+  "tool": "find_airports_near_route",  // Tool name for frontend context
   "departure": "EGTF",
   "destination": "LFMD",
   "filters": {...},  // From tool_result.filter_profile
@@ -441,6 +442,10 @@ async def aviation_agent_chat_stream(
 - ✅ **Lower token usage** - Smaller payloads in LLM context
 - ✅ **Simpler structure** - Easier to work with in frontend
 - ✅ **Clear contract** - Only flattened fields, no hidden data
+
+**Core Fields:**
+1. `kind` - UI category: `route`, `airport`, or `rules`
+2. `tool` - Tool name (e.g., `find_airports_near_route`) - Enables frontend context-aware behavior (e.g., legend mode)
 
 **Flattened Fields:**
 1. `filters` (from `filter_profile`) - UI needs for filter sync
@@ -468,10 +473,11 @@ async def aviation_agent_chat_stream(
 
 The frontend (`ChatbotManager`) processes `ui_payload` events as follows:
 
-1. **Extract `visualization`** → Call `llmIntegration.handleVisualization()`
-2. **Extract `filter_profile`** → Call `llmIntegration.applyFilterProfile()`
-3. **Extract `show_rules`** → Dispatch `show-country-rules` event
-4. **Extract `suggested_queries`** → Render in UI
+1. **Extract `tool` + `filters`** → Call `llmIntegration.applySuggestedLegend()` (switches map legend based on query context)
+2. **Extract `visualization`** → Call `llmIntegration.handleVisualization()`
+3. **Extract `filter_profile`** → Call `llmIntegration.applyFilterProfile()`
+4. **Extract `show_rules`** → Dispatch `show-country-rules` event
+5. **Extract `suggested_queries`** → Render in UI
 
 **Frontend Usage:**
 ```javascript
@@ -555,6 +561,49 @@ When `show_rules` is present in `ui_payload`:
 | `answer_rules_question` | None | Triggers rules panel via `show_rules` field |
 | `browse_rules` | None | Triggers rules panel via `show_rules` field |
 | `compare_rules_between_countries` | None | Triggers rules panel via `show_rules` field |
+
+**Tool-to-Legend Mapping (Automatic Legend Switching):**
+
+The frontend automatically switches the map legend based on the tool used, providing context-relevant visualization. This is implemented in `llm-integration.ts` via `applySuggestedLegend()`.
+
+| Tool | Suggested Legend | Rationale |
+|------|-----------------|-----------|
+| `get_notification_for_airport` | `notification` | Query is about notification requirements |
+| `get_airport_details` | `airport-type` | Shows border crossing, procedures info |
+| `find_airports_near_route` | `airport-type` | Default for route searches |
+| `find_airports_near_location` | `airport-type` | Default for location searches |
+| `search_airports` | `airport-type` | Default for airport searches |
+| Rules tools | No change | Rules don't show on map |
+
+**Filter-Based Legend Overrides:**
+
+When certain filters are present, they take precedence over the tool-based mapping:
+
+| Filter | Legend Override | Priority |
+|--------|----------------|----------|
+| `max_hours_notice` (any value) | `notification` | 110 |
+| `point_of_entry: true` | `airport-type` | 100 |
+| `has_procedures: true` | `procedure-precision` | 90 |
+
+**Extending the Legend Mapping:**
+
+To add a new tool-to-legend or filter-to-legend mapping:
+
+1. **Tool-based mapping**: Add entry to `TOOL_TO_LEGEND_MAP` in `llm-integration.ts`
+   ```typescript
+   const TOOL_TO_LEGEND_MAP = {
+     'my_new_tool': 'relevant-legend',
+     // ...
+   };
+   ```
+
+2. **Filter-based override**: Add entry to `FILTER_LEGEND_OVERRIDES` in `llm-integration.ts`
+   ```typescript
+   const FILTER_LEGEND_OVERRIDES = [
+     { condition: (f) => f.my_filter === true, legend: 'relevant-legend', priority: 85 },
+     // ...
+   ];
+   ```
 
 **Adding New Filters (Important!):**
 

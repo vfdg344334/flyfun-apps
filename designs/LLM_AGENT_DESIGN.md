@@ -297,7 +297,7 @@ class AgentState(TypedDict, total=False):
 ### Hybrid Approach
 
 The UI payload uses a **hybrid design**:
-- **Stable top-level keys** (`kind`, `departure`, `icao`, etc.)
+- **Stable top-level keys** (`kind`, `tool`, `departure`, `icao`, etc.)
 - **Flattened commonly-used fields** (`filters`, `visualization`, `airports`) for convenience
 - **Full MCP result** under `mcp_raw` as authoritative source
 
@@ -322,6 +322,7 @@ def build_ui_payload(
     # Returns:
     # {
     #     "kind": "route" | "airport" | "rules",
+    #     "tool": "find_airports_near_route",  # Tool name for frontend context (e.g., legend mode)
     #     "mcp_raw": {...},  # Full tool result
     #     "filters": {...},  # Flattened from mcp_raw.filter_profile
     #     "visualization": {...},  # Flattened from mcp_raw.visualization

@@ -337,6 +337,16 @@ The LLM can return these visualization types:
    - Triggers search via `trigger-search` event (centers map, shows marker)
    - Triggers `airport-click` event (loads and displays details panel)
 
+#### Legend Suggestion
+
+LLMIntegration automatically switches the map legend based on query context via `applySuggestedLegend(tool, filters)`:
+
+- **Tool-based mapping**: `get_notification_for_airport` → `notification` legend
+- **Filter-based overrides** (take precedence):
+  - `max_hours_notice` filter → `notification` legend
+  - `has_procedures: true` → `procedure-precision` legend
+- See `CHATBOT_WEBUI_DESIGN.md` → "Tool-to-Legend Mapping" for full mapping tables
+
 ## Data Flow
 
 ### User Action Flow
@@ -426,13 +436,14 @@ User types → Input event → store.setSearchQuery() → Store subscription →
 ### LLM Visualization Flow
 
 ```
-Chatbot sends visualization
+Chatbot sends ui_payload
+  → LLMIntegration.applySuggestedLegend(tool, filters) called (switches legend based on query context)
   → LLMIntegration.handleVisualization() called
   → Routes to appropriate handler (markers, route_with_markers, etc.)
   → Handler updates store (setAirports, setRoute, highlightPoint, etc.)
   → If filter_profile present, applyFilterProfile() called
   → Store subscription fires
-  → VisualizationEngine updates map
+  → VisualizationEngine updates map (with context-appropriate legend)
   → UIManager updates UI
 ```
 

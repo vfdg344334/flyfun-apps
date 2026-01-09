@@ -110,9 +110,11 @@ def build_ui_payload(
     if not kind:
         return None
 
-    # Base payload with kind
+    # Base payload with kind and tool name
+    # Tool name enables frontend to derive context-aware behavior (e.g., legend mode)
     base_payload: Dict[str, Any] = {
         "kind": kind,
+        "tool": plan.selected_tool,
     }
 
     # Add kind-specific metadata
