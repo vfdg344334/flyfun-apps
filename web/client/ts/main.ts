@@ -443,9 +443,11 @@ class Application {
     // Trigger search event (from LLM integration)
     // This is for programmatic searches - it updates the store and triggers the search directly,
     // WITHOUT going through the input event (which would clear LLM highlights)
-    window.addEventListener('trigger-search', (async (e: CustomEvent<{ query: string }>) => {
-      const query = e.detail.query;
+    window.addEventListener('trigger-search', ((e: Event) => {
+      const customEvent = e as CustomEvent<{ query: string }>;
+      const query = customEvent.detail.query;
       console.log('🔵 trigger-search event received:', query);
+      (async () => {
 
       // Update store (UI syncs automatically via subscription)
       this.store.getState().setSearchQuery(query);
@@ -527,11 +529,14 @@ class Application {
           this.store.getState().setLoading(false);
         }
       }
-    }) as EventListener);
+      })();
+    }));
 
     // Trigger locate event (from LLM integration for point_with_markers)
-    window.addEventListener('trigger-locate', (async (e: CustomEvent<{ lat: number; lon: number; label?: string }>) => {
-      const { lat, lon, label } = e.detail;
+    window.addEventListener('trigger-locate', ((e: Event) => {
+      const customEvent = e as CustomEvent<{ lat: number; lon: number; label?: string }>;
+      const { lat, lon, label } = customEvent.detail;
+      (async () => {
       const state = this.store.getState();
       // Read radius from store (single source of truth)
       const radiusNm = state.filters.search_radius_nm;
@@ -557,7 +562,8 @@ class Application {
       } catch (error) {
         console.error('Error in trigger-locate:', error);
       }
-    }) as EventListener);
+      })();
+    }));
 
     // Trigger filter refresh event (from LLM integration for markers with filters)
     // Loads ALL airports matching current store filters

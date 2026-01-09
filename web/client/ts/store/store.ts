@@ -1,7 +1,7 @@
 /**
  * Zustand store for application state management
  */
-import { create } from 'zustand';
+import { create, StateCreator } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { 
   AppState,
@@ -188,8 +188,9 @@ interface StoreActions {
 /**
  * Zustand store with actions
  */
-// Create store factory function
-const createStore = (set: any, get: any) => ({
+// Create store factory function with proper types
+type StoreState = AppState & StoreActions;
+const createStore: StateCreator<StoreState, [], [["zustand/devtools", never]]> = (set, get) => ({
       // Initialize state properly - Maps don't serialize to JSON
       airports: [],
       filteredAirports: [],
