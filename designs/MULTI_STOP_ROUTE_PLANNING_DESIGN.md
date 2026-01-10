@@ -102,12 +102,14 @@ cost = (
 
 ### Persona Aircraft Performance
 
-| Persona | Range | Fuel | Min Rwy | Cruise |
-|---------|-------|------|---------|--------|
-| `ifr_touring_sr22` | 800nm | avgas | 2500ft | 160kts |
-| `vfr_budget` | 400nm | avgas | 1500ft | 100kts |
-| `lunch_stop` | 200nm | avgas | 2000ft | 120kts |
-| `training` | 250nm | avgas | 1500ft | 95kts |
+Typical ranges for UK/Europe GA:
+
+| Persona | Leg Cap | Fuel | Min Rwy | Cruise |
+|---------|---------|------|---------|--------|
+| `ifr_touring_sr22` | 700–900nm | avgas | 2000–2500ft | 170–180kts |
+| `vfr_budget` | 300–450nm | avgas/mogas | 1200–1800ft | 95–110kts |
+| `lunch_stop` | 150–250nm | avgas | 1500–2200ft | 110–125kts |
+| `training` | 150–300nm | avgas | 1200–1800ft | 85–100kts |
 
 ---
 
