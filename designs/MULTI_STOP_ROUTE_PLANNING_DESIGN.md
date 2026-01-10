@@ -135,6 +135,42 @@ LFML → LFKJ (Ajaccio, ~182nm)
 LFKJ → LFKO (Propriano, ~16nm)
 ```
 
+### Multi-Turn Human-in-the-Loop Example
+
+For complex multi-stop planning, the AI guides users through iterative stop selection:
+
+```
+Human: I want to plan 3 stops between EGKL and LFKO
+
+AI: Ok, let's plan your route step by step. 
+    Within what distance would you like the first stop to be from EGKL?
+
+Human: 500nm
+
+AI: Ok, here are the best stops within 500nm of EGKL along the route to LFKO:
+    
+    1. LFBL (Limoges) - 304nm from EGKL, good progress toward LFKO
+    2. LFBP (Pau) - 421nm, IFR-capable with AVGAS
+    3. LFBO (Toulouse) - 489nm, major GA hub
+    
+    Which would you like for your first stop?
+Human: LFBL looks good
+
+AI: Great choice! LFBL (Limoges) it is. 
+    Now for the second stop - from LFBL it's about 357nm to LFKO.
+    Within what distance from LFBL would you like the second stop?
+Human: Let's do around 200nm
+
+AI: Here are options around 200nm from LFBL toward LFKO:
+    
+    1. LFML (Marseille) - 226nm, large GA-friendly airport
+    2. LFMP (Perpignan) - 195nm, good facilities
+    
+    Both work well. LFML gives you a shorter final two legs to Corsica.
+```
+
+This iterative approach helps pilots make informed decisions at each step, especially when they have specific preferences or constraints that are hard to specify upfront.
+
 ---
 
 ## Test Cases (Acceptance Criteria)
@@ -145,6 +181,7 @@ LFKJ → LFKO (Propriano, ~16nm)
 | "First stop within 400nm" | Stop where dist(origin, stop1) <= 400nm |
 | Unit parsing: "400nm", "400 NM", "400 nautical miles" | All work |
 | Explanation quality | Shows why stop was chosen (distance + "on the way") |
+| Multi-turn flow | AI asks clarifying questions when constraints unclear |
 
 ---
 
