@@ -185,6 +185,35 @@ class PersonaConfig(BaseModel):
     missing_behaviors: Optional[PersonaMissingBehaviors] = Field(
         default=None, description="How to handle missing features (default: all NEUTRAL)"
     )
+    aircraft: Optional["AircraftPerformance"] = Field(
+        default=None, description="Aircraft performance for route planning"
+    )
+
+
+class AircraftPerformance(BaseModel):
+    """
+    Aircraft performance data for multi-stop route planning.
+    
+    Used by route planner to determine max leg distances, fuel requirements,
+    and runway constraints based on the selected persona.
+    """
+
+    leg_cap_nm: float = Field(
+        default=400,
+        description="Maximum leg distance in nm (accounts for reserves)"
+    )
+    fuel_type: str = Field(
+        default="avgas",
+        description="Required fuel type: 'avgas', 'jet_a', 'mogas', or 'any'"
+    )
+    min_runway_ft: int = Field(
+        default=1500,
+        description="Minimum required runway length in feet"
+    )
+    cruise_speed_kts: float = Field(
+        default=120,
+        description="Typical cruise speed for time calculations"
+    )
 
 
 class PersonasConfig(BaseModel):

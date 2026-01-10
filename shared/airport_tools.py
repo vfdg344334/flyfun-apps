@@ -972,6 +972,267 @@ def get_airport_details(
         }
     }
 
+# -----------------------------------------------------------------------------
+# Multi-Stop Route Planning
+# -----------------------------------------------------------------------------
+
+def plan_multi_leg_route(
+    ctx: ToolContext,
+    from_location: str,
+    to_location: str,
+    num_stops: Optional[int] = None,
+    max_leg_distance_nm: Optional[float] = None,
+    first_leg_max_nm: Optional[float] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Plan a multi-stop route between two locations with intermediate fuel/rest stops.
+
+    **USE THIS TOOL when user asks for:**
+    - "Route from A to B with 3 stops"
+    - "Plan a route with fuel stops"
+    - "First stop within 400nm"
+    - Multi-leg journey planning
+
+    **Parameters:**
+    - num_stops: Desired number of intermediate stops (None = auto-calculate based on distance and persona range)
+    - max_leg_distance_nm: Maximum distance per leg (uses persona's aircraft range if not specified)
+    - first_leg_max_nm: Override max distance for the first leg only (e.g., "first stop within 400nm")
+
+    **Flow:**
+    If constraints are missing, returns clarifying question to ask user.
+    If constraints provided, returns candidate stops for user selection.
+
+    **Examples:**
+    - "Route EGKL to LFKO with 3 stops" → num_stops=3
+    - "First stop within 400nm" → first_leg_max_nm=400
+    - "Route with fuel stops" → uses persona's aircraft range
+    """
+    # Extract persona_id from kwargs (injected by ToolRunner)
+    persona_id = kwargs.pop("_persona_id", None)
+
+    # Resolve departure and destination
+    from_result = _find_nearest_airport_in_db(ctx, from_location)
+    to_result = _find_nearest_airport_in_db(ctx, to_location)
+
+    if not from_result:
+        return {
+            "found": False,
+            "error": f"Could not find departure location '{from_location}'.",
+            "pretty": f"Could not find airport or location '{from_location}'."
+        }
+
+    if not to_result:
+        return {
+            "found": False,
+            "error": f"Could not find destination location '{to_location}'.",
+            "pretty": f"Could not find airport or location '{to_location}'."
+        }
+
+    from_airport = from_result["airport"]
+    to_airport = to_result["airport"]
+
+    # Calculate total route distance
+    from shared.route_planner import haversine_distance
+    total_distance = haversine_distance(
+        from_airport.latitude_deg, from_airport.longitude_deg,
+        to_airport.latitude_deg, to_airport.longitude_deg
+    )
+
+    # Get persona's aircraft performance for default leg distance
+    default_leg_cap = 400  # Default fallback
+    if persona_id:
+        try:
+            from shared.ga_friendliness.config import get_default_personas
+            personas = get_default_personas()
+            if persona_id in personas.personas:
+                persona = personas.personas[persona_id]
+                if persona.aircraft:
+                    default_leg_cap = persona.aircraft.leg_cap_nm
+        except Exception:
+            pass  # Use default
+
+    # Determine effective max leg distance
+    effective_max_leg = max_leg_distance_nm or default_leg_cap
+
+    # Check if we need clarification for multi-stop planning
+    if num_stops and num_stops > 0 and not max_leg_distance_nm and not first_leg_max_nm:
+        # User asked for N stops but didn't specify leg distances
+        # Return clarifying question
+        target_leg = total_distance / (num_stops + 1)
+        return {
+            "found": True,
+            "needs_clarification": True,
+            "question": f"Within what distance would you like the first stop to be from {from_airport.ident}?",
+            "context": {
+                "from_icao": from_airport.ident,
+                "to_icao": to_airport.ident,
+                "total_distance_nm": round(total_distance, 1),
+                "requested_stops": num_stops,
+                "suggested_leg_distance": round(target_leg, 0),
+                "persona_leg_cap": default_leg_cap,
+            },
+            "pretty": (
+                f"Planning route from **{from_airport.ident}** ({from_airport.name}) "
+                f"to **{to_airport.ident}** ({to_airport.name}) - {round(total_distance)}nm total.\n\n"
+                f"You want {num_stops} stops. Within what distance would you like the first stop to be?"
+            ),
+            "visualization": {
+                "type": "route",
+                "from": {"ident": from_airport.ident, "lat": from_airport.latitude_deg, "lon": from_airport.longitude_deg},
+                "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+            }
+        }
+
+    # If first_leg_max_nm specified, find candidates for first stop
+    if first_leg_max_nm:
+        # Find airports within first_leg_max_nm of departure, on the way to destination
+        candidates = []
+        corridor_width = 50.0  # nm
+
+        # Query airports near the departure
+        try:
+            from_lat = from_airport.latitude_deg
+            from_lon = from_airport.longitude_deg
+            to_lat = to_airport.latitude_deg
+            to_lon = to_airport.longitude_deg
+
+            # Get candidate airports from the database
+            from shared.route_planner import cross_track_distance
+            for icao, airport in ctx.model.airports.items():
+                if icao in (from_airport.ident, to_airport.ident):
+                    continue
+
+                # Calculate distance from departure
+                dist_from_dep = haversine_distance(
+                    from_lat, from_lon,
+                    airport.latitude_deg, airport.longitude_deg
+                )
+
+                if dist_from_dep > first_leg_max_nm:
+                    continue
+
+                # Check cross-track distance (is it "on the way"?)
+                xtd = cross_track_distance(
+                    airport.latitude_deg, airport.longitude_deg,
+                    from_lat, from_lon, to_lat, to_lon
+                )
+
+                if xtd > corridor_width:
+                    continue
+
+                # Calculate progress toward destination
+                dist_to_dest = haversine_distance(
+                    airport.latitude_deg, airport.longitude_deg,
+                    to_lat, to_lon
+                )
+                progress = total_distance - dist_to_dest
+
+                # Skip if not making forward progress
+                if progress < 50:  # At least 50nm forward
+                    continue
+
+                candidates.append({
+                    "airport": airport,
+                    "distance_from_departure_nm": round(dist_from_dep, 1),
+                    "distance_to_destination_nm": round(dist_to_dest, 1),
+                    "progress_nm": round(progress, 1),
+                    "cross_track_nm": round(xtd, 1),
+                })
+
+            # Sort by progress (most progress first)
+            candidates.sort(key=lambda x: x["progress_nm"], reverse=True)
+
+            # Limit results and build response
+            max_candidates = 5
+            top_candidates = candidates[:max_candidates]
+
+            if not top_candidates:
+                return {
+                    "found": True,
+                    "stops": [],
+                    "pretty": f"No suitable stops found within {first_leg_max_nm}nm of {from_airport.ident} along the route to {to_airport.ident}.",
+                }
+
+            # Build response with candidate stops
+            stops_info = []
+            for c in top_candidates:
+                apt = c["airport"]
+                stops_info.append({
+                    "ident": apt.ident,
+                    "name": apt.name,
+                    "distance_from_departure_nm": c["distance_from_departure_nm"],
+                    "distance_to_destination_nm": c["distance_to_destination_nm"],
+                    "has_avgas": getattr(apt, "has_avgas", False),
+                    "has_hard_runway": getattr(apt, "has_hard_runway", False),
+                    "longest_runway_ft": getattr(apt, "longest_runway_length_ft", None),
+                })
+
+            pretty_lines = [
+                f"**First stop candidates within {first_leg_max_nm}nm of {from_airport.ident}:**\n"
+            ]
+            for i, s in enumerate(stops_info, 1):
+                fuel_info = "AVGAS" if s["has_avgas"] else ""
+                runway_info = f"{s['longest_runway_ft']}ft" if s["longest_runway_ft"] else ""
+                extras = ", ".join(filter(None, [fuel_info, runway_info]))
+                extras_str = f" ({extras})" if extras else ""
+                pretty_lines.append(
+                    f"{i}. **{s['ident']}** ({s['name']}) - {s['distance_from_departure_nm']}nm from {from_airport.ident}{extras_str}"
+                )
+
+            pretty_lines.append(f"\nWhich stop would you like? From there it's ~{round(top_candidates[0]['distance_to_destination_nm'])}nm to {to_airport.ident}.")
+
+            return {
+                "found": True,
+                "needs_selection": True,
+                "from_icao": from_airport.ident,
+                "to_icao": to_airport.ident,
+                "constraint": {"first_leg_max_nm": first_leg_max_nm},
+                "stops": stops_info,
+                "pretty": "\n".join(pretty_lines),
+                "visualization": {
+                    "type": "route_with_stops",
+                    "from": {"ident": from_airport.ident, "lat": from_airport.latitude_deg, "lon": from_airport.longitude_deg},
+                    "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+                    "candidates": [{"ident": s["ident"], "lat": c["airport"].latitude_deg, "lon": c["airport"].longitude_deg} for s, c in zip(stops_info, top_candidates)],
+                }
+            }
+
+        except Exception as e:
+            return {
+                "found": False,
+                "error": str(e),
+                "pretty": f"Error finding stop candidates: {e}"
+            }
+
+    # Default: return route info with suggested leg distance
+    suggested_stops = max(0, int(total_distance / effective_max_leg) - 1)
+
+    return {
+        "found": True,
+        "from_icao": from_airport.ident,
+        "from_name": from_airport.name,
+        "to_icao": to_airport.ident,
+        "to_name": to_airport.name,
+        "total_distance_nm": round(total_distance, 1),
+        "effective_max_leg_nm": effective_max_leg,
+        "suggested_stops": suggested_stops,
+        "pretty": (
+            f"Route from **{from_airport.ident}** ({from_airport.name}) to **{to_airport.ident}** ({to_airport.name})\n"
+            f"- Total distance: {round(total_distance)}nm\n"
+            f"- Max leg distance: {effective_max_leg}nm (from persona)\n"
+            f"- Suggested stops: {suggested_stops}\n\n"
+            f"Would you like me to find stop options? You can specify:\n"
+            f"- 'First stop within Xnm'\n"
+            f"- 'Plan {suggested_stops} stops'"
+        ),
+        "visualization": {
+            "type": "route",
+            "from": {"ident": from_airport.ident, "lat": from_airport.latitude_deg, "lon": from_airport.longitude_deg},
+            "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+        }
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -1419,6 +1680,45 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         "max_hours_notice": {
                             "type": "integer",
                             "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h). Use when user asks for airports with specific notification constraints.",
+                        },
+                    },
+                    "required": ["from_location", "to_location"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "plan_multi_leg_route",
+            {
+                "name": "plan_multi_leg_route",
+                "handler": plan_multi_leg_route,
+                "description": _get_tool_description(plan_multi_leg_route, "plan_multi_leg_route"),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from_location": {
+                            "type": "string",
+                            "description": "Departure airport ICAO code or location name (e.g., 'EGKL', 'Paris').",
+                        },
+                        "to_location": {
+                            "type": "string",
+                            "description": "Destination airport ICAO code or location name (e.g., 'LFKO', 'Corsica').",
+                        },
+                        "num_stops": {
+                            "type": "integer",
+                            "description": "Number of intermediate stops requested (e.g., '3 stops' → num_stops=3). Auto-calculates if not specified.",
+                        },
+                        "max_leg_distance_nm": {
+                            "type": "number",
+                            "description": "Maximum distance per leg in nm. Uses persona's aircraft range if not specified.",
+                        },
+                        "first_leg_max_nm": {
+                            "type": "number",
+                            "description": "Maximum distance for first leg only (e.g., 'first stop within 400nm' → first_leg_max_nm=400).",
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Airport filters for stops (fuel type, runway, customs, etc.).",
                         },
                     },
                     "required": ["from_location", "to_location"],

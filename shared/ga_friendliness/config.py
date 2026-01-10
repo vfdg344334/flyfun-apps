@@ -313,6 +313,12 @@ DEFAULT_PERSONAS: Dict[str, Any] = {
                 "review_fun_score": 0.05,
                 "review_hospitality_score": 0.05,
             },
+            "aircraft": {
+                "leg_cap_nm": 800,
+                "fuel_type": "avgas",
+                "min_runway_ft": 2200,
+                "cruise_speed_kts": 175,
+            },
         },
         "vfr_budget": {
             "id": "vfr_budget",
@@ -324,6 +330,12 @@ DEFAULT_PERSONAS: Dict[str, Any] = {
                 "review_ops_vfr_score": 0.20,
                 "review_review_score": 0.10,
                 "review_access_score": 0.10,
+            },
+            "aircraft": {
+                "leg_cap_nm": 350,
+                "fuel_type": "avgas",
+                "min_runway_ft": 1500,
+                "cruise_speed_kts": 100,
             },
         },
         "lunch_stop": {
@@ -342,6 +354,12 @@ DEFAULT_PERSONAS: Dict[str, Any] = {
                 "review_hospitality_score": "negative",  # Required for lunch stops
                 "aip_hospitality_score": "negative",  # Required for lunch stops
             },
+            "aircraft": {
+                "leg_cap_nm": 200,
+                "fuel_type": "avgas",
+                "min_runway_ft": 1800,
+                "cruise_speed_kts": 115,
+            },
         },
         "training": {
             "id": "training",
@@ -352,6 +370,12 @@ DEFAULT_PERSONAS: Dict[str, Any] = {
                 "review_cost_score": 0.30,
                 "review_hassle_score": 0.20,
                 "review_review_score": 0.20,
+            },
+            "aircraft": {
+                "leg_cap_nm": 220,
+                "fuel_type": "avgas",
+                "min_runway_ft": 1500,
+                "cruise_speed_kts": 90,
             },
         },
     },
