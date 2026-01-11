@@ -73,7 +73,6 @@ def cross_track_distance(
     Calculate cross-track distance from a point to the great-circle path.
     
     Returns the perpendicular distance in nm from the point to the route.
-    Positive = right of track, negative = left of track.
     """
     R = 3440.065  # Earth radius in nm
     
@@ -88,20 +87,20 @@ def cross_track_distance(
     # Angular distance from start to point
     d13 = haversine_distance(start_lat, start_lon, point_lat, point_lon) / R
     
-    # Initial bearing from start to end
-    theta13 = math.atan2(
+    # Initial bearing from start to point
+    bearing_to_point = math.atan2(
         math.sin(lon3 - lon1) * math.cos(lat3),
         math.cos(lat1) * math.sin(lat3) - math.sin(lat1) * math.cos(lat3) * math.cos(lon3 - lon1)
     )
     
-    # Initial bearing from start to point
-    theta12 = math.atan2(
+    # Initial bearing from start to end
+    bearing_to_end = math.atan2(
         math.sin(lon2 - lon1) * math.cos(lat2),
         math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(lon2 - lon1)
     )
     
     # Cross-track distance
-    dxt = math.asin(math.sin(d13) * math.sin(theta13 - theta12))
+    dxt = math.asin(math.sin(d13) * math.sin(bearing_to_point - bearing_to_end))
     
     return abs(dxt * R)
 

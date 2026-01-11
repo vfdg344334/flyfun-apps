@@ -87,3 +87,4 @@ web/server/.env.backup
 # Sqlite artifacts
 *.db-shm
 *.db-wal
+tools/start_services.sh
