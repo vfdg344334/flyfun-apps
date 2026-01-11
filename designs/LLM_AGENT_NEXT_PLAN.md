@@ -282,5 +282,5 @@ in a follow-up message, use the conversation history to:
 3. [x] Update planner prompt for follow-up context awareness
 4. [x] Update formatter to handle `missing_info` gracefully
 5. [x] Add `max_leg_time_hours` filter to `find_airports_near_route`
-6. [ ] Test conversational flows end-to-end
+6. [x] Test conversational flows end-to-end (formatter + planner follow-up tests)
 7. [x] Add unit tests for `missing_info` behavior
