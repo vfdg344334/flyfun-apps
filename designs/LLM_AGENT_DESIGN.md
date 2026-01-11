@@ -104,6 +104,10 @@ shared/aviation_agent/
     streaming.py          # SSE streaming adapter
     logging.py            # Conversation logging
     langgraph_runner.py   # Orchestration helpers
+
+shared/
+  aircraft_speeds.py        # GA aircraft cruise speed lookup table
+  airport_tools.py          # MCP tool implementations (including calculate_flight_distance)
 ```
 
 ```
@@ -114,15 +118,19 @@ web/server/api/
 ```
 tests/aviation_agent/
   __init__.py
-  conftest.py               # Shared fixtures + MCP doubles
+  conftest.py                        # Shared fixtures + MCP doubles
   test_planning.py
-  test_planner_behavior.py  # Planner tool selection tests
+  test_planner_behavior.py           # Planner tool selection tests (LLM)
+  test_planner_followup.py           # Planner follow-up context tests (LLM)
   test_formatting.py
+  test_formatter_behavior.py         # Formatter missing_info tests (LLM)
+  test_calculate_flight_distance.py  # Flight distance tool tests
+  test_find_airports_near_route_time.py  # Time-constrained route tests
   test_graph_e2e.py
   test_streaming.py
   test_integration.py
-  test_rules_rag.py         # RAG system tests
-  test_answer_comparer.py   # Comparison system tests
+  test_rules_rag.py                  # RAG system tests
+  test_answer_comparer.py            # Comparison system tests
   test_state_and_thinking.py
 ```
 
@@ -356,8 +364,9 @@ The planner LLM selects the appropriate tool based on the user query:
 |------|----------|---------------|
 | `search_airports` | Text search for airports | `query`, `filters` |
 | `find_airports_near_location` | Airports near a location | `location_query`, `filters` |
-| `find_airports_near_route` | Airports along a route | `from_location`, `to_location`, `filters` |
+| `find_airports_near_route` | Airports along a route | `from_location`, `to_location`, `filters`, `max_leg_time_hours` |
 | `get_airport_details` | Details for specific airport | `icao_code` |
+| `calculate_flight_distance` | Distance/time between airports | `from_location`, `to_location`, `cruise_speed_kts`, `aircraft_type` |
 
 ### Planner Prompt Guidance
 
@@ -535,7 +544,7 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 | --- | --- | --- | --- | --- |
 | `search_airports` | `query` | `max_results`, `filters`, `priority_strategy` | `route` | `markers` |
 | `find_airports_near_location` | `location_query` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `point_with_markers` |
-| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `route_with_markers` |
+| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice`, `max_leg_time_hours`, `cruise_speed_kts`, `aircraft_type` | `route` | `route_with_markers` |
 | `get_airport_details` | `icao_code` | – | `airport` | `marker_with_details` |
 | `get_notification_for_airport` | `icao` | `day_of_week` | `airport` | `marker_with_details` |
 | `calculate_flight_distance` | `from_location`, `to_location` | `cruise_speed_kts`, `aircraft_type` | `route` | `route` |
@@ -634,6 +643,41 @@ def compare_rules_between_countries(...) -> Dict[str, Any]:
 - Uses `astream_events()` for streaming
 - Uses state reducers (`operator.add` for messages)
 - Errors propagate through state, not exceptions
+
+### Missing Info Pattern (Conversational Follow-ups)
+
+Tools can request additional information from the user via the `missing_info` pattern:
+
+```python
+# Tool returns partial results with missing_info
+{
+    "found": True,
+    "distance_nm": 558.3,
+    "estimated_time_formatted": None,  # Can't calculate without speed
+    "missing_info": [{
+        "key": "cruise_speed",
+        "reason": "Required to calculate flight time",
+        "prompt": "What's your cruise speed or aircraft type?",
+        "examples": ["120 knots", "Cessna 172", "SR22"]
+    }]
+}
+```
+
+**How it works:**
+1. **Tool** returns partial results + `missing_info` array describing what's needed
+2. **Formatter** sees `missing_info`, includes the prompt in response, presents partial results
+3. **User** provides the missing info (e.g., "140 knots")
+4. **Planner** recognizes follow-up context, re-runs tool with complete parameters
+
+**Supported tools:**
+- `calculate_flight_distance`: Asks for `cruise_speed` or `aircraft_type` when calculating time
+- `find_airports_near_route`: Asks for speed when `max_leg_time_hours` is specified without speed
+
+**Aircraft Speed Lookup:**
+The agent includes a curated lookup table (`shared/aircraft_speeds.py`) for common GA aircraft:
+- Normalizes input ("Cessna 172", "C172", "Skyhawk" → "c172")
+- Returns typical cruise speed (e.g., C172 → 120 kts, SR22 → 170 kts)
+- Explicit `cruise_speed_kts` overrides aircraft lookup
 
 ---
 
