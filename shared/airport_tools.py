@@ -975,6 +975,206 @@ def get_airport_details(
 # -----------------------------------------------------------------------------
 # Multi-Stop Route Planning
 # -----------------------------------------------------------------------------
+def _find_best_stop_in_range(
+    ctx: ToolContext,
+    from_airport,
+    to_airport,
+    max_distance_nm: float,
+    corridor_width: float = 150.0,
+    excluded_icaos: Optional[List[str]] = None,
+    persona_id: Optional[str] = None,
+    require_fuel: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Find the best stop within max_distance_nm from from_airport toward to_airport.
+    
+    Uses the cost function from design document:
+    cost = distance - progress_score - persona_score*50 + fuel_penalty*500 + runway_penalty*1000
+    
+    Lower cost = better airport for stop.
+    
+    Args:
+        require_fuel: If True, airports without required fuel type get -500 penalty (effectively eliminated).
+                     If False, airports without fuel get -50 soft penalty (can still be selected).
+    """
+    from shared.route_planner import haversine_distance, cross_track_distance
+    
+    excluded_icaos = excluded_icaos or []
+    from_lat, from_lon = from_airport.latitude_deg, from_airport.longitude_deg
+    to_lat, to_lon = to_airport.latitude_deg, to_airport.longitude_deg
+    
+    total_dist = haversine_distance(from_lat, from_lon, to_lat, to_lon)
+    
+    # Get persona requirements if available
+    min_runway_ft = 1500  # Default
+    fuel_type_required = None
+    if persona_id:
+        try:
+            from shared.ga_friendliness.config import get_default_personas
+            personas = get_default_personas()
+            if persona_id in personas.personas:
+                persona = personas.personas[persona_id]
+                if persona.aircraft:
+                    min_runway_ft = persona.aircraft.min_runway_ft
+                    fuel_type_required = persona.aircraft.fuel_type
+        except Exception:
+            pass
+    
+    best_candidate = None
+    best_score = float('-inf')  # Higher is better (we negate cost)
+    
+    for airport in ctx.model.airports:
+        if airport.ident in excluded_icaos or airport.ident in (from_airport.ident, to_airport.ident):
+            continue
+        if airport.latitude_deg is None or airport.longitude_deg is None:
+            continue
+        
+        dist_from = haversine_distance(from_lat, from_lon, airport.latitude_deg, airport.longitude_deg)
+        if dist_from > max_distance_nm or dist_from < 30:  # Min 30nm
+            continue
+        
+        xtd = cross_track_distance(airport.latitude_deg, airport.longitude_deg, from_lat, from_lon, to_lat, to_lon)
+        if xtd > corridor_width:
+            continue
+        
+        dist_to_dest = haversine_distance(airport.latitude_deg, airport.longitude_deg, to_lat, to_lon)
+        progress = total_dist - dist_to_dest
+        
+        if progress < 50:
+            continue
+        
+        # ============================================
+        # COST FUNCTION FROM DESIGN DOCUMENT
+        # ============================================
+        # cost = distance - progress - persona_score*50 + fuel_penalty*500 + runway_penalty*1000
+        # We maximize: score = progress + persona_score*50 - fuel_penalty*500 - runway_penalty*1000
+        
+        score = progress  # Base: progress toward destination
+        reasons = [f"Leg: {round(dist_from)}nm, remaining: {round(dist_to_dest)}nm to {to_airport.ident}"]
+        
+        # --- Runway Assessment ---
+        runway_length = getattr(airport, "longest_runway_length_ft", 0) or 0
+        has_hard_runway = getattr(airport, "has_hard_runway", False)
+        
+        if runway_length < min_runway_ft:
+            # Runway too short - major penalty (effectively eliminates)
+            score -= 1000
+            reasons.append(f"⚠️ Runway too short: {round(runway_length)}ft < required {min_runway_ft}ft")
+        else:
+            # Runway adequate
+            runway_margin = runway_length - min_runway_ft
+            runway_bonus = min(runway_margin / 100, 20)  # Up to +20 for long runway
+            score += runway_bonus
+            reasons.append(f"✓ Runway: {round(runway_length)}ft")
+        
+        if has_hard_runway:
+            score += 15
+            reasons.append("✓ Hard surface")
+        
+        # --- Fuel Assessment ---
+        has_avgas = getattr(airport, "has_avgas", False)
+        has_jeta = getattr(airport, "has_jeta", False)
+        has_any_fuel = has_avgas or has_jeta
+        
+        # When require_fuel=True, SKIP airports without fuel entirely
+        if require_fuel and not has_any_fuel:
+            continue  # Skip this airport - must have fuel
+        
+        fuel_match = False
+        if fuel_type_required:
+            if fuel_type_required.lower() == "avgas" and has_avgas:
+                fuel_match = True
+                score += 30
+                reasons.append("✓ AVGAS available")
+            elif fuel_type_required.lower() == "jet-a" and has_jeta:
+                fuel_match = True
+                score += 30
+                reasons.append("✓ JET-A available")
+            elif has_any_fuel:
+                # Has some fuel but not the required type - skip if require_fuel
+                if require_fuel:
+                    continue  # Skip - wrong fuel type
+                score -= 20
+                reasons.append(f"⚠️ No {fuel_type_required} (has {'AVGAS' if has_avgas else 'JET-A'})")
+            else:
+                # No fuel - soft penalty (we already skipped if require_fuel)
+                score -= 50
+                reasons.append("⚠️ No fuel available")
+        else:
+            # No specific fuel type required
+            if has_avgas:
+                score += 30 if require_fuel else 20
+                reasons.append("✓ AVGAS available")
+            elif has_jeta:
+                score += 25 if require_fuel else 15
+                reasons.append("✓ JET-A available")
+            elif not require_fuel:
+                # Only penalize if fuel not required (otherwise we already skipped)
+                score -= 50
+                reasons.append("⚠️ No fuel available")
+        
+        # --- Cross-Track Distance (detour penalty) ---
+        if xtd > 0:
+            detour_penalty = xtd * 0.5  # 0.5 points per nm off course
+            score -= detour_penalty
+            if xtd > 30:
+                reasons.append(f"Detour: {round(xtd)}nm off direct route")
+        
+        # --- Final Score Check ---
+        if score > best_score:
+            best_score = score
+            best_candidate = {
+                "airport": airport,
+                "distance_from_prev_nm": round(dist_from, 1),
+                "distance_to_dest_nm": round(dist_to_dest, 1),
+                "cross_track_nm": round(xtd, 1),
+                "score": round(score, 1),
+                "reasons": reasons,
+            }
+    
+    return best_candidate
+
+
+def _auto_plan_all_stops(
+    ctx: ToolContext,
+    from_airport,
+    to_airport,
+    num_stops: int,
+    max_leg_nm: float,
+    persona_id: Optional[str] = None,
+    require_fuel: bool = False,
+) -> List[Dict[str, Any]]:
+    """Find all stops using greedy algorithm with full cost function."""
+    stops = []
+    current = from_airport
+    excluded = [from_airport.ident, to_airport.ident]
+    
+    from shared.route_planner import haversine_distance
+    
+    for i in range(num_stops):
+        remaining_dist = haversine_distance(
+            current.latitude_deg, current.longitude_deg,
+            to_airport.latitude_deg, to_airport.longitude_deg
+        )
+        
+        # If close enough to destination, stop adding stops
+        if remaining_dist < max_leg_nm * 0.7:
+            break
+        
+        best = _find_best_stop_in_range(
+            ctx, current, to_airport, max_leg_nm, 
+            excluded_icaos=excluded, persona_id=persona_id, require_fuel=require_fuel
+        )
+        
+        if not best:
+            break
+        
+        stops.append(best)
+        excluded.append(best["airport"].ident)
+        current = best["airport"]
+    
+    return stops
+
 
 def plan_multi_leg_route(
     ctx: ToolContext,
@@ -983,6 +1183,11 @@ def plan_multi_leg_route(
     num_stops: Optional[int] = None,
     max_leg_distance_nm: Optional[float] = None,
     first_leg_max_nm: Optional[float] = None,
+    selected_stop: Optional[str] = None,
+    auto_plan: Optional[bool] = None,
+    require_fuel: Optional[bool] = None,
+    confirmed_stops_count: int = 0,  # Track which stop number we're on
+    continuation_token: Optional[str] = None,  # Server-side state token for reliable multi-turn tracking
     filters: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
@@ -994,21 +1199,107 @@ def plan_multi_leg_route(
     - "Plan a route with fuel stops"
     - "First stop within 400nm"
     - Multi-leg journey planning
+    - User selects a stop by ICAO code (e.g., "LFSD" or "I choose LFSD")
 
     **Parameters:**
     - num_stops: Desired number of intermediate stops (None = auto-calculate based on distance and persona range)
     - max_leg_distance_nm: Maximum distance per leg (uses persona's aircraft range if not specified)
     - first_leg_max_nm: Override max distance for the first leg only (e.g., "first stop within 400nm")
+    - selected_stop: ICAO code of a stop the user selected from candidates. When provided, 
+      the tool continues planning from that stop to find the next leg.
 
-    **Flow:**
-    If constraints are missing, returns clarifying question to ask user.
-    If constraints provided, returns candidate stops for user selection.
+    **Multi-turn flow:**
+    1. User: "Route EGKL to LFKO with 3 stops" → returns choice: Automatic or Manual
+    2. User: "first stop within 200nm" → returns 5 candidates
+    3. User: "LFFZ" → call with selected_stop="LFFZ" to continue from that airport
 
     **Examples:**
     - "Route EGKL to LFKO with 3 stops" → num_stops=3
     - "First stop within 400nm" → first_leg_max_nm=400
-    - "Route with fuel stops" → uses persona's aircraft range
+    - "LFSD" (selecting from candidates) → selected_stop="LFSD"
+    - "I'll stop at LFBL" → selected_stop="LFBL"
     """
+    # DEBUG: Log all parameters received - use stderr and logging
+    import sys
+    import logging
+    import base64
+    import json as json_module
+    logger = logging.getLogger(__name__)
+    debug_msg = f"[plan_multi_leg_route] from={from_location}, to={to_location}, num_stops={num_stops}, auto_plan={auto_plan}, selected_stop={selected_stop}"
+    print(debug_msg, file=sys.stderr)
+    logger.info(debug_msg)
+    
+    # ========== SERVER-SIDE ROUTE STATE STORAGE ==========
+    # Use server-side storage keyed by thread_id for reliable state tracking
+    # This is more reliable than continuation_token which depends on LLM passing it correctly
+    from shared.route_state import get_route_state_storage
+    
+    # Extract thread_id from kwargs (injected by ToolRunner)
+    thread_id = kwargs.pop("_thread_id", None)
+    logger.info(f"[plan_multi_leg_route] thread_id={thread_id}")
+    
+    # Get or create route state from server-side storage
+    route_state_storage = get_route_state_storage()
+    route_state = route_state_storage.get(thread_id) if thread_id else None
+    
+    # If we have a route state and it matches this route, use it
+    if route_state:
+        logger.info(f"[plan_multi_leg_route] Found existing route state: {route_state.to_dict()}")
+        original_num_stops = route_state.original_num_stops
+        confirmed_stops_list = route_state.confirmed_stops.copy()
+        confirmed_stops_count = route_state.confirmed_stops_count
+        original_departure_icao = route_state.original_departure
+        # Ignore LLM-passed num_stops and use remaining from state
+        num_stops = route_state.remaining_stops
+    else:
+        # No existing state - this is a new route request or continuation token fallback
+        original_num_stops = num_stops  # Track original request
+        confirmed_stops_list = []
+        original_departure_icao = None
+        
+        # Try continuation_token as fallback (for backward compatibility)
+        if continuation_token:
+            try:
+                token_data = json_module.loads(base64.b64decode(continuation_token).decode('utf-8'))
+                original_num_stops = token_data.get("original_num_stops", num_stops)
+                confirmed_stops_count = token_data.get("confirmed_stops_count", confirmed_stops_count)
+                confirmed_stops_list = token_data.get("confirmed_stops", [])
+                original_departure_icao = token_data.get("original_departure")
+                remaining_from_token = original_num_stops - confirmed_stops_count
+                if num_stops is None or num_stops > remaining_from_token:
+                    num_stops = remaining_from_token
+                logger.info(f"[continuation_token] Decoded: original={original_num_stops}, confirmed={confirmed_stops_count}, stops={confirmed_stops_list}, departure={original_departure_icao}")
+            except Exception as e:
+                logger.warning(f"Failed to decode continuation_token: {e}")
+    
+    def _create_continuation_token(orig_stops: int, confirmed: int, confirmed_stops: list = None, original_departure: str = None) -> str:
+        """Create a base64-encoded continuation token with full route state."""
+        token_data = {
+            "original_num_stops": orig_stops, 
+            "confirmed_stops_count": confirmed,
+            "confirmed_stops": confirmed_stops or [],
+            "original_departure": original_departure
+        }
+        return base64.b64encode(json_module.dumps(token_data).encode('utf-8')).decode('ascii')
+    
+    def _save_route_state(departure: str, destination: str, original_stops: int, confirmed: list = None):
+        """Save or update route state in server-side storage."""
+        if not thread_id:
+            return
+        existing = route_state_storage.get(thread_id)
+        if existing:
+            # Update confirmed stops
+            if confirmed:
+                for stop in confirmed:
+                    if stop not in existing.confirmed_stops:
+                        existing.confirm_stop(stop)
+        else:
+            # Create new state
+            state = route_state_storage.create(thread_id, departure, destination, original_stops)
+            if confirmed:
+                for stop in confirmed:
+                    state.confirm_stop(stop)
+    
     # Extract persona_id from kwargs (injected by ToolRunner)
     persona_id = kwargs.pop("_persona_id", None)
 
@@ -1033,6 +1324,181 @@ def plan_multi_leg_route(
     from_airport = from_result["airport"]
     to_airport = to_result["airport"]
 
+    # If a stop was selected, continue planning from that stop
+    if selected_stop:
+        selected_result = _find_nearest_airport_in_db(ctx, selected_stop)
+        if not selected_result:
+            return {
+                "found": False,
+                "error": f"Could not find selected stop '{selected_stop}'.",
+                "pretty": f"Could not find airport '{selected_stop}'. Please select from the list or provide a valid ICAO code."
+            }
+        
+        # The selected stop becomes the new departure point
+        selected_airport = selected_result["airport"]
+        
+        # Save stop to server-side storage immediately
+        # This ensures state is preserved even if LLM doesn't pass token correctly
+        if thread_id:
+            if not route_state:
+                # Create new route state if not exists
+                route_state = route_state_storage.create(
+                    thread_id, 
+                    original_departure_icao or from_airport.ident, 
+                    to_airport.ident, 
+                    original_num_stops
+                )
+            route_state_storage.confirm_stop(thread_id, selected_airport.ident)
+            logger.info(f"[plan_multi_leg_route] Saved stop {selected_airport.ident} to server state")
+        
+        # Calculate remaining distance
+        from shared.route_planner import haversine_distance
+        remaining_distance = haversine_distance(
+            selected_airport.latitude_deg, selected_airport.longitude_deg,
+            to_airport.latitude_deg, to_airport.longitude_deg
+        )
+        
+        # Decrement remaining stops
+        remaining_stops = (num_stops or 1) - 1
+        
+        # Check if this is the final stop based on confirmed count
+        # This handles the case where LLM passes wrong values
+        # Use original_num_stops (from token) which is reliable, not num_stops from LLM
+        is_final_stop = (confirmed_stops_count + 1) >= original_num_stops
+        
+        if remaining_stops <= 0 or remaining_distance < 100 or is_final_stop:
+            # Final leg - build complete route summary matching auto mode format
+            all_stops = confirmed_stops_list + [selected_airport.ident]
+            departure = original_departure_icao or from_airport.ident
+            
+            # Look up departure airport details
+            departure_result = _find_nearest_airport_in_db(ctx, departure)
+            departure_airport = departure_result["airport"] if departure_result else None
+            
+            # Build detailed route output matching auto mode format
+            route_lines = []
+            route_lines.append(f"✅ **Route planned: {departure} → {to_airport.ident}**\n")
+            
+            # Calculate total distance
+            if departure_airport:
+                total_distance = haversine_distance(
+                    departure_airport.latitude_deg, departure_airport.longitude_deg,
+                    to_airport.latitude_deg, to_airport.longitude_deg
+                )
+                route_lines.append(f"**Total distance:** {round(total_distance)}nm with {len(all_stops)} stop(s)\n")
+            
+            route_lines.append("---\n")
+            route_lines.append("**Route:**\n")
+            
+            # Start point
+            if departure_airport:
+                route_lines.append(f"🛫 **{departure}** ({departure_airport.name})\n")
+            else:
+                route_lines.append(f"🛫 **{departure}**\n")
+            
+            # Build detailed info for each stop
+            prev_airport = departure_airport
+            for i, stop_icao in enumerate(all_stops):
+                stop_result = _find_nearest_airport_in_db(ctx, stop_icao)
+                if stop_result:
+                    stop_apt = stop_result["airport"]
+                    
+                    # Calculate leg distance
+                    if prev_airport:
+                        leg_dist = haversine_distance(
+                            prev_airport.latitude_deg, prev_airport.longitude_deg,
+                            stop_apt.latitude_deg, stop_apt.longitude_deg
+                        )
+                    else:
+                        leg_dist = 0
+                    
+                    # Calculate remaining distance to destination
+                    dist_to_dest = haversine_distance(
+                        stop_apt.latitude_deg, stop_apt.longitude_deg,
+                        to_airport.latitude_deg, to_airport.longitude_deg
+                    )
+                    
+                    # Get runway info - use same attributes as auto_plan
+                    runway_length = getattr(stop_apt, 'longest_runway_length_ft', None) or 0
+                    has_hard_runway = getattr(stop_apt, 'has_hard_runway', False)
+                    has_fuel = getattr(stop_apt, 'has_avgas', False)
+                    
+                    # Build stop line
+                    runway_info = f" / {round(runway_length)}ft" if runway_length else ""
+                    route_lines.append(f"⛽ → **{stop_icao}** ({stop_apt.name}) - {round(leg_dist)}nm{runway_info}\n")
+                    route_lines.append(f"  *↳ {round(dist_to_dest)}nm to {to_airport.ident}*\n")
+                    route_lines.append(f"  Leg: {round(leg_dist)}nm, remaining: {round(dist_to_dest)}nm to {to_airport.ident}\n")
+                    if runway_length:
+                        route_lines.append(f"  ✅ Runway: {round(runway_length)}ft\n")
+                    if has_hard_runway:
+                        route_lines.append(f"  ✅ Hard surface\n")
+                    if has_fuel:
+                        route_lines.append(f"  ✅ Fuel available\n")
+                    else:
+                        route_lines.append(f"  ⚠️ No fuel available\n")
+                    route_lines.append("\n")
+                    
+                    prev_airport = stop_apt
+                else:
+                    route_lines.append(f"⛽ → **{stop_icao}**\n\n")
+            
+            # Final destination
+            route_lines.append(f"🛬 → **{to_airport.ident}** ({to_airport.name}) - {round(remaining_distance)}nm\n")
+            
+            return {
+                "found": True,
+                "route_complete": True,
+                "stops": all_stops,
+                "pretty": "".join(route_lines),
+                "visualization": {
+                    "type": "route_with_stops",
+                    "from": {"ident": departure, "lat": departure_airport.latitude_deg if departure_airport else from_airport.latitude_deg, "lon": departure_airport.longitude_deg if departure_airport else from_airport.longitude_deg},
+                    "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+                    "stops": [{"ident": s} for s in all_stops],
+                }
+            }
+        
+        # Need more stops - update context
+        return {
+            "found": True,
+            "needs_next_leg": True,
+            "needs_input": True,  # Flag for formatter
+            "confirmed_stop": selected_airport.ident,
+            "from_icao": selected_airport.ident,
+            "to_icao": to_airport.ident,
+            "remaining_stops": remaining_stops,
+            "remaining_distance_nm": round(remaining_distance, 1),
+            # Explicit hint for LLM on how to continue this flow
+            "next_call_hint": {
+                "tool": "plan_multi_leg_route",
+                "required_args": {
+                    "from_location": selected_airport.ident,
+                    "to_location": to_airport.ident,
+                    "num_stops": remaining_stops,
+                },
+                "user_provides": "first_leg_max_nm (from 'within Xnm') OR auto_plan=true (from 'automatic' or '1')"
+            },
+            "pretty": (
+                f"✅ **Stop {confirmed_stops_count + 1} confirmed: {selected_airport.ident}** ({selected_airport.name})\n\n"
+                f"Now finding {remaining_stops} more stop(s) for the {round(remaining_distance)}nm from {selected_airport.ident} to {to_airport.ident}.\n\n"
+                f"---\n"
+                f"❓ **How would you like to proceed?**\n\n"
+                f"**1.** Automatic - let me find the best stops\n"
+                f"**2.** Specify distance (e.g., 'within 200nm')\n\n"
+                # Hidden context for LLM continuation - include continuation_token for reliable state
+                # Include complete route history: all confirmed stops + original departure
+                f"[NEXT CALL >>> from_location={selected_airport.ident} | to_location={to_airport.ident} | num_stops={remaining_stops} | confirmed_stops_count={confirmed_stops_count + 1} | "
+                f"continuation_token={_create_continuation_token(original_num_stops, confirmed_stops_count + 1, confirmed_stops_list + [selected_airport.ident], original_departure_icao or from_airport.ident)} | "
+                f"ALWAYS PASS continuation_token! | USER CHOICE: add auto_plan=True OR first_leg_max_nm=X]"
+            ),
+            "visualization": {
+                "type": "route_with_stops",
+                "from": {"ident": from_airport.ident, "lat": from_airport.latitude_deg, "lon": from_airport.longitude_deg},
+                "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+                "stops": [{"ident": selected_airport.ident, "lat": selected_airport.latitude_deg, "lon": selected_airport.longitude_deg}],
+            }
+        }
+
     # Calculate total route distance
     from shared.route_planner import haversine_distance
     total_distance = haversine_distance(
@@ -1056,27 +1522,148 @@ def plan_multi_leg_route(
     # Determine effective max leg distance
     effective_max_leg = max_leg_distance_nm or default_leg_cap
 
-    # Check if we need clarification for multi-stop planning
-    if num_stops and num_stops > 0 and not max_leg_distance_nm and not first_leg_max_nm:
-        # User asked for N stops but didn't specify leg distances
-        # Return clarifying question
-        target_leg = total_distance / (num_stops + 1)
+    # AUTOMATIC MODE: Find all stops automatically
+    if auto_plan and num_stops and num_stops > 0:
+        if require_fuel:
+            # For fuel stops: use aircraft's full range - find fuel as far as possible
+            max_leg = effective_max_leg
+        else:
+            # For regular stops: divide distance equally with some flexibility
+            target_leg = total_distance / (num_stops + 1)
+            max_leg = min(target_leg * 1.3, effective_max_leg)  # 30% flexibility
+        
+        planned_stops = _auto_plan_all_stops(
+            ctx, from_airport, to_airport, num_stops, max_leg, 
+            persona_id=persona_id, require_fuel=bool(require_fuel)
+        )
+        
+        if not planned_stops:
+            return {
+                "found": True,
+                "stops": [],
+                "pretty": (
+                    f"Could not find suitable stops for the route from {from_airport.ident} to {to_airport.ident}. "
+                    f"The distance is {round(total_distance)}nm with {num_stops} requested stops. "
+                    f"Try reducing the number of stops or using manual mode."
+                ),
+            }
+        
+        # Build the complete route response
+        stops_info = []
+        route_parts = []
+        total_route_dist = 0
+        prev_airport = from_airport
+        
+        # Calculate all leg distances first to know next stop distances
+        all_legs = []
+        for i, stop in enumerate(planned_stops):
+            apt = stop["airport"]
+            dist = stop["distance_from_prev_nm"]
+            all_legs.append({"airport": apt, "dist": dist, "stop": stop})
+        
+        # Add final leg info
+        if planned_stops:
+            last_apt = planned_stops[-1]["airport"]
+            final_dist = haversine_distance(
+                last_apt.latitude_deg, last_apt.longitude_deg,
+                to_airport.latitude_deg, to_airport.longitude_deg
+            )
+        else:
+            final_dist = total_distance
+        
+        # Build route parts with next stop info
+        route_parts.append(f"🛫 **{from_airport.ident}** ({from_airport.name})")
+        
+        for i, leg in enumerate(all_legs):
+            apt = leg["airport"]
+            dist = leg["dist"]
+            stop = leg["stop"]
+            total_route_dist += dist
+            
+            # Calculate distance to next stop
+            if i + 1 < len(all_legs):
+                next_stop = all_legs[i + 1]["airport"]
+                dist_to_next = all_legs[i + 1]["dist"]
+                next_info = f"→ {dist_to_next}nm to {next_stop.ident}"
+            else:
+                next_info = f"→ {round(final_dist)}nm to {to_airport.ident}"
+            
+            # Format reasons on separate lines
+            reasons_list = stop.get("reasons", [])
+            reasons_formatted = "\n   ".join(reasons_list) if reasons_list else ""
+            
+            stops_info.append({
+                "ident": apt.ident,
+                "name": apt.name,
+                "leg_distance_nm": dist,
+                "has_avgas": getattr(apt, "has_avgas", False),
+                "has_hard_runway": getattr(apt, "has_hard_runway", False),
+                "longest_runway_ft": getattr(apt, "longest_runway_length_ft", None),
+                "score": stop.get("score", 0),
+                "reasons": ", ".join(reasons_list),
+            })
+            
+            runway_info = f"{apt.longest_runway_length_ft}ft" if getattr(apt, "longest_runway_length_ft", None) else ""
+            route_parts.append(
+                f"⛽ → **{apt.ident}** ({apt.name}) - {dist}nm{' / ' + runway_info if runway_info else ''}\n"
+                f"   *{next_info}*\n"
+                f"   {reasons_formatted}"
+            )
+        
+        total_route_dist += final_dist
+        route_parts.append(f"🛬 → **{to_airport.ident}** ({to_airport.name}) - {round(final_dist)}nm")
+        
+        pretty_lines = [
+            f"✅ **Route planned: {from_airport.ident} → {to_airport.ident}**\n",
+            f"Total distance: {round(total_route_dist)}nm with {len(planned_stops)} stop(s)\n",
+            "\n**Route:**\n",
+        ]
+        for part in route_parts:
+            pretty_lines.append(part)
+        
+        # Build visualization stops
+        viz_stops = [{"ident": s["airport"].ident, "lat": s["airport"].latitude_deg, "lon": s["airport"].longitude_deg} for s in planned_stops]
+        
         return {
             "found": True,
-            "needs_clarification": True,
-            "question": f"Within what distance would you like the first stop to be from {from_airport.ident}?",
-            "context": {
-                "from_icao": from_airport.ident,
-                "to_icao": to_airport.ident,
-                "total_distance_nm": round(total_distance, 1),
-                "requested_stops": num_stops,
-                "suggested_leg_distance": round(target_leg, 0),
-                "persona_leg_cap": default_leg_cap,
-            },
+            "route_complete": True,
+            "from_icao": from_airport.ident,
+            "to_icao": to_airport.ident,
+            "stops": stops_info,
+            "total_distance_nm": round(total_route_dist, 1),
+            "pretty": "\n".join(pretty_lines),
+            "visualization": {
+                "type": "route_with_stops",
+                "from": {"ident": from_airport.ident, "lat": from_airport.latitude_deg, "lon": from_airport.longitude_deg},
+                "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
+                "stops": viz_stops,
+            }
+        }
+
+    # If num_stops specified but no leg distance, give user a choice
+    if num_stops and num_stops > 0 and not first_leg_max_nm and not max_leg_distance_nm:
+        # Calculate suggested target leg for reference
+        target_leg = total_distance / (num_stops + 1)
+        suggested_leg = min(round(target_leg, 0), effective_max_leg)
+        
+        return {
+            "found": True,
+            "needs_user_choice": True,
+            "needs_input": True,  # Flag for formatter to know input is required
+            "from_icao": from_airport.ident,
+            "to_icao": to_airport.ident,
+            "total_distance_nm": round(total_distance, 1),
+            "requested_stops": num_stops,
+            "suggested_first_leg_nm": suggested_leg,
+            "persona_leg_cap": default_leg_cap,
             "pretty": (
                 f"Planning route from **{from_airport.ident}** ({from_airport.name}) "
                 f"to **{to_airport.ident}** ({to_airport.name}) - {round(total_distance)}nm total.\n\n"
-                f"You want {num_stops} stops. Within what distance would you like the first stop to be?"
+                f"You want {num_stops} stops.\n\n"
+                f"---\n"
+                f"❓ **How would you like to proceed?**\n\n"
+                f"1. **Automatic**: I'll find the best stops automatically (suggested first leg ~{suggested_leg}nm)\n"
+                f"2. **Manual**: Tell me within what distance you'd like the first stop (e.g., 'first stop within 300nm')"
             ),
             "visualization": {
                 "type": "route",
@@ -1084,12 +1671,17 @@ def plan_multi_leg_route(
                 "to": {"ident": to_airport.ident, "lat": to_airport.latitude_deg, "lon": to_airport.longitude_deg},
             }
         }
+    
+    # If num_stops specified with max_leg_distance (automatic mode), calculate first_leg
+    if num_stops and num_stops > 0 and not first_leg_max_nm:
+        target_leg = total_distance / (num_stops + 1)
+        first_leg_max_nm = min(target_leg * 1.2, effective_max_leg)
 
     # If first_leg_max_nm specified, find candidates for first stop
     if first_leg_max_nm:
         # Find airports within first_leg_max_nm of departure, on the way to destination
         candidates = []
-        corridor_width = 50.0  # nm
+        corridor_width = 150.0  # nm - wider corridor for GA flexibility
 
         # Query airports near the departure
         try:
@@ -1100,8 +1692,12 @@ def plan_multi_leg_route(
 
             # Get candidate airports from the database
             from shared.route_planner import cross_track_distance
-            for icao, airport in ctx.model.airports.items():
-                if icao in (from_airport.ident, to_airport.ident):
+            for airport in ctx.model.airports:
+                if airport.ident in (from_airport.ident, to_airport.ident):
+                    continue
+                
+                # Skip airports without coordinates
+                if airport.latitude_deg is None or airport.longitude_deg is None:
                     continue
 
                 # Calculate distance from departure
@@ -1133,16 +1729,94 @@ def plan_multi_leg_route(
                 if progress < 50:  # At least 50nm forward
                     continue
 
+                # ============================================
+                # FULL COST FUNCTION (same as auto mode)
+                # ============================================
+                score = progress  # Base: progress toward destination
+                reasons = [f"Leg: {round(dist_from_dep)}nm, remaining: {round(dist_to_dest)}nm to {to_airport.ident}"]
+                
+                # --- Runway Assessment ---
+                runway_length = getattr(airport, "longest_runway_length_ft", 0) or 0
+                has_hard_runway = getattr(airport, "has_hard_runway", False)
+                
+                # Get persona's min runway requirement
+                min_runway_ft = 1500  # Default
+                fuel_type_required = None
+                if persona_id:
+                    try:
+                        from shared.ga_friendliness.config import get_default_personas
+                        personas = get_default_personas()
+                        if persona_id in personas.personas:
+                            persona = personas.personas[persona_id]
+                            if persona.aircraft:
+                                min_runway_ft = persona.aircraft.min_runway_ft
+                                fuel_type_required = persona.aircraft.fuel_type
+                    except Exception:
+                        pass
+                
+                if runway_length < min_runway_ft:
+                    score -= 1000
+                    reasons.append(f"⚠️ Short runway: {round(runway_length)}ft < {min_runway_ft}ft")
+                else:
+                    runway_margin = runway_length - min_runway_ft
+                    runway_bonus = min(runway_margin / 100, 20)
+                    score += runway_bonus
+                    reasons.append(f"✓ Runway: {round(runway_length)}ft")
+                
+                if has_hard_runway:
+                    score += 15
+                    reasons.append("✓ Hard surface")
+                
+                # --- Fuel Assessment ---
+                has_avgas = getattr(airport, "has_avgas", False)
+                has_jeta = getattr(airport, "has_jeta", False)
+                has_any_fuel = has_avgas or has_jeta
+                
+                # When require_fuel=True, SKIP airports without fuel
+                if require_fuel and not has_any_fuel:
+                    continue  # Skip this airport - must have fuel
+                
+                if fuel_type_required:
+                    if fuel_type_required.lower() == "avgas" and has_avgas:
+                        score += 30
+                        reasons.append("✓ AVGAS")
+                    elif fuel_type_required.lower() == "jet-a" and has_jeta:
+                        score += 30
+                        reasons.append("✓ JET-A")
+                    elif has_any_fuel and require_fuel:
+                        continue  # Skip - wrong fuel type
+                    elif has_any_fuel:
+                        score -= 20
+                        reasons.append(f"⚠️ No {fuel_type_required}")
+                    else:
+                        score -= 50
+                        reasons.append("⚠️ No fuel")
+                else:
+                    if has_avgas:
+                        score += 30 if require_fuel else 20
+                        reasons.append("✓ AVGAS")
+                    elif has_jeta:
+                        score += 25 if require_fuel else 15
+                        reasons.append("✓ JET-A")
+                
+                # --- Detour Penalty ---
+                if xtd > 30:
+                    detour_penalty = xtd * 0.5
+                    score -= detour_penalty
+                    reasons.append(f"Detour: {round(xtd)}nm")
+
                 candidates.append({
                     "airport": airport,
                     "distance_from_departure_nm": round(dist_from_dep, 1),
                     "distance_to_destination_nm": round(dist_to_dest, 1),
                     "progress_nm": round(progress, 1),
                     "cross_track_nm": round(xtd, 1),
+                    "score": round(score, 1),
+                    "reasons": reasons,
                 })
 
-            # Sort by progress (most progress first)
-            candidates.sort(key=lambda x: x["progress_nm"], reverse=True)
+            # Sort by score (best score first - combines progress + runway bonuses)
+            candidates.sort(key=lambda x: x["score"], reverse=True)
 
             # Limit results and build response
             max_candidates = 5
@@ -1159,6 +1833,7 @@ def plan_multi_leg_route(
             stops_info = []
             for c in top_candidates:
                 apt = c["airport"]
+                reasons_str = ", ".join(c.get("reasons", []))
                 stops_info.append({
                     "ident": apt.ident,
                     "name": apt.name,
@@ -1167,27 +1842,46 @@ def plan_multi_leg_route(
                     "has_avgas": getattr(apt, "has_avgas", False),
                     "has_hard_runway": getattr(apt, "has_hard_runway", False),
                     "longest_runway_ft": getattr(apt, "longest_runway_length_ft", None),
+                    "score": c.get("score", 0),
+                    "reasons": reasons_str,
                 })
 
             pretty_lines = [
-                f"**First stop candidates within {first_leg_max_nm}nm of {from_airport.ident}:**\n"
+                f"**Stop candidates within {first_leg_max_nm}nm of {from_airport.ident}** (ranked by score):\n"
             ]
             for i, s in enumerate(stops_info, 1):
-                fuel_info = "AVGAS" if s["has_avgas"] else ""
                 runway_info = f"{s['longest_runway_ft']}ft" if s["longest_runway_ft"] else ""
-                extras = ", ".join(filter(None, [fuel_info, runway_info]))
-                extras_str = f" ({extras})" if extras else ""
+                reason_note = f" ✓ *{s['reasons']}*" if s['reasons'] else ""
                 pretty_lines.append(
-                    f"{i}. **{s['ident']}** ({s['name']}) - {s['distance_from_departure_nm']}nm from {from_airport.ident}{extras_str}"
+                    f"{i}. **{s['ident']}** ({s['name']}) - {s['distance_from_departure_nm']}nm{' / ' + runway_info if runway_info else ''}{reason_note}"
                 )
 
-            pretty_lines.append(f"\nWhich stop would you like? From there it's ~{round(top_candidates[0]['distance_to_destination_nm'])}nm to {to_airport.ident}.")
+            remaining_stops = (num_stops or 1) - 1
+            dist_remaining = round(top_candidates[0]['distance_to_destination_nm'])
+            
+            # Map candidate numbers to ICAO codes for the hint
+            candidate_map = ", ".join([f"{i+1}={s['ident']}" for i, s in enumerate(stops_info)])
+            
+            if remaining_stops > 0:
+                pretty_lines.append(f"\n---\n❓ **Select a stop** by number (1-{len(stops_info)}) or ICAO code (e.g., '{stops_info[0]['ident']}').")
+                pretty_lines.append(f"After selection, we'll find {remaining_stops} more stop(s) for the remaining {dist_remaining}nm to {to_airport.ident}.")
+            else:
+                pretty_lines.append(f"\n---\n❓ **Which stop would you like?** Enter a number (1-{len(stops_info)}) or ICAO code.\nFrom there it's {dist_remaining}nm direct to {to_airport.ident}.")
+            
+            # Add hidden context for LLM continuation - include continuation_token for reliable state
+            # IMPORTANT: Pass current num_stops, NOT remaining_stops. The stop confirmation code handles decrement.
+            token = _create_continuation_token(original_num_stops, confirmed_stops_count, confirmed_stops_list, original_departure_icao or from_airport.ident)
+            continue_hint = f"\n[NEXT CALL >>> from_location={from_airport.ident} | to_location={to_airport.ident} | num_stops={num_stops} | confirmed_stops_count={confirmed_stops_count} | continuation_token={token} | selected_stop=USER_CHOICE | Mapping: {candidate_map}]"
+            pretty_lines.append(continue_hint)
+            print(f"[DEBUG] Added NEXT CALL hint: num_stops={num_stops}, token={token}")  # Debug
 
             return {
                 "found": True,
                 "needs_selection": True,
+                "needs_input": True,  # Flag for formatter - don't say "results shown on map"
                 "from_icao": from_airport.ident,
                 "to_icao": to_airport.ident,
+                "remaining_stops": remaining_stops,
                 "constraint": {"first_leg_max_nm": first_leg_max_nm},
                 "stops": stops_info,
                 "pretty": "\n".join(pretty_lines),
@@ -1200,6 +1894,13 @@ def plan_multi_leg_route(
             }
 
         except Exception as e:
+            import traceback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in plan_multi_leg_route: {e}")
+            logger.error(traceback.format_exc())
+            print(f"ERROR in plan_multi_leg_route: {e}")  # Debug print
+            print(traceback.format_exc())
             return {
                 "found": False,
                 "error": str(e),
@@ -1714,7 +2415,23 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "first_leg_max_nm": {
                             "type": "number",
-                            "description": "Maximum distance for first leg only (e.g., 'first stop within 400nm' → first_leg_max_nm=400).",
+                            "description": "Maximum distance for next leg (e.g., 'within 200nm' → first_leg_max_nm=200). NEVER use together with selected_stop. Use ONLY when user specifies distance like 'within Xnm'.",
+                        },
+                        "selected_stop": {
+                            "type": "string",
+                            "description": "ICAO code the user picked from candidate list. Use ONLY when user selects by ICAO or number (e.g., 'LFMN' or '3'). NEVER use when user says 'within Xnm' or 'automatic'.",
+                        },
+                        "auto_plan": {
+                            "type": "boolean",
+                            "description": "Set true when user says 'automatic' or '1'. NEVER use together with selected_stop. Do not set when user says 'within Xnm'.",
+                        },
+                        "require_fuel": {
+                            "type": "boolean",
+                            "description": "Set to true when user specifically needs FUEL stops (e.g., 'fuel stops', 'refueling stops'). When true, airports without fuel are eliminated. Default false for rest/lunch stops.",
+                        },
+                        "confirmed_stops_count": {
+                            "type": "integer",
+                            "description": "Number of stops already confirmed in multi-turn flow. Extract from '[CONTINUE: ...confirmed_stops_count=N]' in previous message. Default 0 for new routes.",
                         },
                         "filters": {
                             "type": "object",
