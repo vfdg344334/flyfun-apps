@@ -21,5 +21,10 @@ class ToolRunner:
             arguments = dict(arguments)  # Make a copy to avoid mutating original
             arguments["_persona_id"] = state["persona_id"]
         
+        # Inject thread_id for server-side route state management
+        if state and "thread_id" in state:
+            arguments = dict(arguments)  # Make a copy if not already done
+            arguments["_thread_id"] = state["thread_id"]
+        
         return self.tool_client.invoke(plan.selected_tool, arguments)
 

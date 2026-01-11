@@ -66,6 +66,9 @@ async def stream_aviation_agent(
         # Generate thread_id if not provided (checkpointing requires it)
         # This enables conversation memory even for single-turn requests
         effective_thread_id = thread_id or f"thread_{uuid.uuid4().hex[:12]}"
+        
+        # Add thread_id to state for route state management
+        initial_state["thread_id"] = effective_thread_id
 
         # Config for LangSmith observability and checkpointing
         # See: https://docs.langchain.com/langsmith

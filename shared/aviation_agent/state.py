@@ -43,6 +43,7 @@ class AgentState(TypedDict, total=False):
 
     # User preferences
     persona_id: Optional[str]  # Persona ID for airport prioritization
+    thread_id: Optional[str]  # Thread ID for conversation tracking and route state
 
     # Next query prediction
     suggested_queries: Optional[List[dict]]  # Suggested follow-up queries
