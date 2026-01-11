@@ -238,13 +238,15 @@ prompt | llm | StrOutputParser()
 ```python
 def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> Dict[str, Any] | None:
     """
-    Build UI payload using hybrid approach:
+    Build UI payload using flattened approach:
+    - Include tool name for frontend context (e.g., legend mode switching)
     - Flatten commonly-used fields (filters, visualization, airports) for convenience
     - Build show_rules for rules tools to trigger frontend rules panel
     """
-    # Base payload with kind
+    # Base payload with kind and tool
     base_payload = {
         "kind": _determine_kind(plan.selected_tool),
+        "tool": plan.selected_tool,  # For frontend context-aware behavior
     }
 
     # Add kind-specific metadata (departure, destination, icao, etc.)

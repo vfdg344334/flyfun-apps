@@ -65,10 +65,10 @@ class AgentState(TypedDict, total=False):
 
 ## Architecture Rules
 
-1. **UI Payload Stability** - Hybrid approach must be maintained:
-   - Stable top-level keys (`kind`, `departure`, `icao`, `region`, etc.)
+1. **UI Payload Stability** - Flattened approach must be maintained:
+   - Stable top-level keys (`kind`, `tool`, `departure`, `icao`, `region`, etc.)
    - Flattened common fields (`filters`, `visualization`, `airports`)
-   - Full MCP result in `mcp_raw` as authoritative source
+   - `suggested_queries` for follow-up suggestions
 
 2. **Tool Name Consistency** - Tool names must match exactly with `shared/airport_tools.get_shared_tool_specs()`
    - Planner uses literal tool names from manifest
@@ -81,7 +81,7 @@ class AgentState(TypedDict, total=False):
 
 4. **UI Payload Building** - Only `build_ui_payload()` creates `ui_payload`:
    - Centralized in `formatting.py`
-   - Must preserve hybrid structure
+   - Must include `tool` field for frontend context
    - Tool-to-kind mapping must be correct
 
 5. **Visualization Types** - Must match UI expectations:
@@ -122,7 +122,7 @@ class AgentState(TypedDict, total=False):
 
 ### 1. UI Payload Structure
 - [ ] `ui_payload` has `kind` field (route/airport/rules)?
-- [ ] `mcp_raw` contains full tool result as authoritative source?
+- [ ] `ui_payload` has `tool` field for frontend context?
 - [ ] Common fields (`filters`, `visualization`, `airports`) are flattened at top level?
 - [ ] No breaking changes to stable top-level fields?
 - [ ] `build_ui_payload()` is the only place creating `ui_payload`?
@@ -193,7 +193,7 @@ Flag these violations immediately:
 - 🔴 **Hardcoded visualization types**: Generating visualization types instead of using tool results
 - 🔴 **Filters in wrong place**: Filters extracted in formatter instead of planner
 - 🔴 **Breaking kind mapping**: Tools not mapped to correct UI `kind` buckets
-- 🔴 **Missing mcp_raw**: UI payload without `mcp_raw` field
+- 🔴 **Missing tool field**: UI payload without `tool` field for frontend context
 - 🔴 **Hardcoded config values**: LLM models, temperatures, thresholds, or feature flags hardcoded in code
 - 🔴 **Config logic in code**: Feature flags or settings determined by code logic instead of behavior_config
 - 🔴 **Prompt hardcoding**: System prompts embedded in code instead of loaded from config
@@ -239,14 +239,15 @@ planning.py:150
 **UI Payload Building:**
 ```python
 # ✅ GOOD: Use build_ui_payload() function
-ui_payload = build_ui_payload(plan, tool_result)
+ui_payload = build_ui_payload(plan, tool_result, suggested_queries)
 
-# ✅ GOOD: Preserves hybrid structure
+# ✅ GOOD: Preserves flattened structure
 base_payload = {
     "kind": kind,
-    "mcp_raw": tool_result,  # Authoritative source
+    "tool": plan.selected_tool,  # For frontend context (e.g., legend mode)
     "filters": tool_result.get("filter_profile"),  # Flattened
     "visualization": tool_result.get("visualization"),  # Flattened
+    "airports": tool_result.get("airports"),  # Flattened
 }
 ```
 
@@ -336,9 +337,9 @@ def build_agent_graph(...):
 ## Key Considerations
 
 ### UI Payload Stability
-- **Never remove** stable top-level fields (`kind`, `departure`, `icao`, `region`)
-- **Always include** `mcp_raw` with full tool result
-- **Flatten common fields** for convenience, but don't remove from `mcp_raw`
+- **Never remove** stable top-level fields (`kind`, `tool`, `departure`, `icao`, `region`)
+- **Always include** `tool` field for frontend context-aware behavior
+- **Flatten common fields** (`filters`, `visualization`, `airports`) at top level
 - **Test UI integration** - changes to `ui_payload` structure can break frontend
 
 ### Tool Name Validation
@@ -355,7 +356,7 @@ def build_agent_graph(...):
 ### Visualization Enhancement
 - **Preserve route endpoints** when filtering markers
 - **Don't generate** visualization types (use tool results)
-- **Update both** `visualization` and `mcp_raw.visualization` when enhancing
+- **Update** `visualization` field when enhancing
 
 ### Configuration Management
 - **All behavioral settings** must come from `behavior_config` JSON files
@@ -369,7 +370,7 @@ def build_agent_graph(...):
 ## Things to Ensure
 
 ✅ **DO:**
-- Maintain UI payload hybrid structure
+- Maintain UI payload flattened structure with `tool` field
 - Validate tool names against manifest
 - Store errors in state, not raise exceptions
 - Use `build_ui_payload()` exclusively

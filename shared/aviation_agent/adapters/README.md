@@ -93,7 +93,7 @@ POST /api/aviation-agent/chat
 {
   "answer": "Here are airports near Paris...",
   "planner_meta": {"selected_tool": "find_airports_near_location", ...},
-  "ui_payload": {"kind": "route", "mcp_raw": {...}}
+  "ui_payload": {"kind": "route", "tool": "find_airports_near_location", "visualization": {...}, "airports": [...]}
 }
 ```
 

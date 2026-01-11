@@ -2,19 +2,17 @@
 
 This document describes the architecture, components, and design principles for the aviation-focused LangGraph agent that uses the custom **aviation MCP database** (routes, airports, rules) and exposes **structured outputs** suitable for a modern chat UI (including side panels such as maps, airport cards, or rules checklists).
 
-## UI Payload Design (Hybrid Approach)
+## UI Payload Design (Flattened Approach)
 
-The agent implements a **hybrid UI payload design**:
+The agent implements a **flattened UI payload design**:
 
 - The UI receives a **stable, curated JSON payload (`ui_payload`)**
 - It contains:
   - `kind`: `"route"`, `"airport"`, or `"rules"`
+  - `tool`: The tool name (enables frontend context-aware behavior like legend mode)
   - A small set of stable **top-level fields** (e.g. `departure`, `icao`, `region`)
   - **Flattened commonly-used fields** for convenience (`filters`, `visualization`, `airports`)
-  - A **full MCP tool output** stored under the key:
-    ```
-    "mcp_raw": { ... }
-    ```
+  - `suggested_queries`: Follow-up query suggestions (optional)
 
 - Internally, the agent's planner (`AviationPlan`) is **decoupled** from the UI.
 - Only the `build_ui_payload(plan, tool_result)` function must be updated if planner output evolves.
@@ -294,12 +292,12 @@ class AgentState(TypedDict, total=False):
 
 ## 7. UI Payload Building (`build_ui_payload()`)
 
-### Hybrid Approach
+### Flattened Approach
 
-The UI payload uses a **hybrid design**:
+The UI payload uses a **flattened design**:
 - **Stable top-level keys** (`kind`, `tool`, `departure`, `icao`, etc.)
 - **Flattened commonly-used fields** (`filters`, `visualization`, `airports`) for convenience
-- **Full MCP result** under `mcp_raw` as authoritative source
+- **`suggested_queries`** for follow-up query suggestions
 
 ### Implementation
 
@@ -310,11 +308,11 @@ def build_ui_payload(
     suggested_queries: List[dict] | None = None
 ) -> dict | None:
     """
-    Builds UI payload with hybrid structure:
+    Builds UI payload with flattened structure:
     - Determines kind (route/airport/rules) from tool name
+    - Adds tool name for frontend context (e.g., legend mode switching)
     - Adds kind-specific metadata (departure, icao, region, etc.)
     - Flattens commonly-used fields (filters, visualization, airports)
-    - Includes full mcp_raw as authoritative source
     - Adds suggested_queries if provided
     """
     # ... implementation ...
@@ -323,11 +321,10 @@ def build_ui_payload(
     # {
     #     "kind": "route" | "airport" | "rules",
     #     "tool": "find_airports_near_route",  # Tool name for frontend context (e.g., legend mode)
-    #     "mcp_raw": {...},  # Full tool result
-    #     "filters": {...},  # Flattened from mcp_raw.filter_profile
-    #     "visualization": {...},  # Flattened from mcp_raw.visualization
-    #     "airports": [...],  # Flattened from mcp_raw.airports
-    #     "suggested_queries": [...],  # Optional
+    #     "filters": {...},  # Flattened from tool_result.filter_profile
+    #     "visualization": {...},  # Flattened from tool_result.visualization
+    #     "airports": [...],  # Flattened from tool_result.airports
+    #     "suggested_queries": [...],  # Optional follow-up suggestions
     #     # Plus kind-specific fields: departure, destination, icao, region, topic, etc.
     # }
 ```
@@ -336,9 +333,8 @@ def build_ui_payload(
 
 - **Highly stable**: UI structure rarely changes (only `kind` and a few metadata fields at top level)
 - **Convenient access**: Common fields (`filters`, `visualization`, `airports`) are flattened for easy UI access
-- **Fully future-proof**: Planner can evolve without breaking UI (new fields automatically in `mcp_raw`)
-- **Authoritative source**: `mcp_raw` contains complete tool result
-- **No breaking changes**: UI can use either flattened fields or `mcp_raw`
+- **Fully future-proof**: Planner can evolve without breaking UI
+- **No breaking changes**: UI depends only on stable flattened fields
 
 ---
 
@@ -430,7 +426,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
     # {
     #     "final_answer": str,  # Formatted markdown answer
     #     "thinking": str,  # Combined planning + formatting reasoning
-    #     "ui_payload": dict | None,  # UI structure with kind, mcp_raw, etc.
+    #     "ui_payload": dict | None,  # UI structure with kind, tool, flattened fields
     # }
 ```
 
@@ -522,7 +518,7 @@ The UI uses `ui_payload` to determine visualization:
 - `"kind": "route"` → show route map with markers
 - `"kind": "airport"` → show airport info card
 - `"kind": "rules"` → show rules panel
-- `mcp_raw` provides all underlying details for drawing polylines, markers, etc.
+- `"tool"` → enables context-aware behavior (e.g., legend mode switching)
 - Flattened fields (`filters`, `visualization`, `airports`) provide convenient access
 
 ---
@@ -535,23 +531,23 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 
 **Tools Exposed to LLM Planner (8 tools):**
 
-| Tool | Required args | Optional args | Default `ui_payload.kind` | Notable `mcp_raw` keys |
+| Tool | Required args | Optional args | Default `ui_payload.kind` | Visualization Type |
 | --- | --- | --- | --- | --- |
-| `search_airports` | `query` | `max_results`, `filters`, `priority_strategy` | `route` | `airports`, `filter_profile`, `visualization.type='markers'` |
-| `find_airports_near_location` | `location_query` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `center`, `airports`, `filter_profile`, `visualization.type='point_with_markers'` |
-| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `airports`, `filter_profile`, `visualization.type='route_with_markers'`, `substitutions` |
-| `get_airport_details` | `icao_code` | – | `airport` | `airport`, `runways`, `visualization.type='marker_with_details'` |
-| `get_notification_for_airport` | `icao` | `day_of_week` | `airport` | `notification`, `requirements` |
-| `answer_rules_question` | `country_code`, `question` | `tags`, `use_rag` | `rules` | `rules`, `formatted_text`, `source` |
-| `browse_rules` | `country_code` | `tags`, `offset`, `limit` | `rules` | `rules`, `formatted_text`, `has_more`, `next_offset` |
-| `compare_rules_between_countries` | `countries` | `category`, `tags` | `rules` | `differences`, `rules_context`, `_tool_type`, `total_differences`, `filtered_by_embedding` |
+| `search_airports` | `query` | `max_results`, `filters`, `priority_strategy` | `route` | `markers` |
+| `find_airports_near_location` | `location_query` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `point_with_markers` |
+| `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `route_with_markers` |
+| `get_airport_details` | `icao_code` | – | `airport` | `marker_with_details` |
+| `get_notification_for_airport` | `icao` | `day_of_week` | `airport` | `marker_with_details` |
+| `answer_rules_question` | `country_code`, `question` | `tags`, `use_rag` | `rules` | – |
+| `browse_rules` | `country_code` | `tags`, `offset`, `limit` | `rules` | – |
+| `compare_rules_between_countries` | `countries` | `category`, `tags` | `rules` | – |
 
 ### Documentation Workflow
 
 1. **Tool manifest** - Tools are defined in `shared/airport_tools.py` as the single source of truth.
 2. **Planner alignment** - `AviationPlan.selected_tool` uses literal tool names from the manifest.
 3. **UI payload mapping** - `build_ui_payload()` maps tool names to `kind` buckets.
-4. **Payload stability** - The `Notable mcp_raw keys` column serves as a contract with the UI.
+4. **Flattened fields** - Common fields (`filters`, `visualization`, `airports`) are flattened for UI convenience.
 
 See `designs/UI_FILTER_STATE_DESIGN.md` for complete tool-to-visualization mapping and LLM integration details.
 
@@ -560,29 +556,34 @@ See `designs/UI_FILTER_STATE_DESIGN.md` for complete tool-to-visualization mappi
 ## 13. Design Benefits
 
 ### ✔ Stable for the UI
-Only `kind`, `departure`, `icao`, etc. matter at the top level. UI structure rarely changes.
+Only `kind`, `tool`, `departure`, `icao`, etc. matter at the top level. UI structure rarely changes.
 
 ### ✔ Convenient Access
 Commonly-used fields (`filters`, `visualization`, `airports`) are flattened for easy access.
 
 ### ✔ Internal Evolution is Painless
-Planner and tool schemas can change freely. New fields automatically appear in `mcp_raw`.
+Planner and tool schemas can change freely without breaking the UI.
 
-### ✔ Full Richness Preserved
-`mcp_raw` always contains everything from the tool result.
+### ✔ Context-Aware Frontend
+The `tool` field enables frontend to derive context-aware behavior (e.g., legend mode switching based on query type).
 
 ### ✔ Clean, Simple UI Dispatch
 ```typescript
 switch(ui_payload.kind) {
   case "route":
-    renderRoute(ui_payload.visualization || ui_payload.mcp_raw.visualization);
+    renderRoute(ui_payload.visualization);
     break;
   case "airport":
-    renderAirport(ui_payload.mcp_raw);
+    renderAirport(ui_payload);
     break;
   case "rules":
-    renderRules(ui_payload.mcp_raw);
+    renderRules(ui_payload);
     break;
+}
+
+// Tool-based context switching
+if (ui_payload.tool === 'get_notification_for_airport') {
+  switchLegendMode('notification');
 }
 ```
 
@@ -621,7 +622,7 @@ def compare_rules_between_countries(...) -> Dict[str, Any]:
 ### Filters as Arguments
 - Filters are part of `plan.arguments.filters`
 - Tools return `filter_profile` (what was actually applied)
-- UI gets filters from flattened `ui_payload.filters` or `ui_payload.mcp_raw.filter_profile`
+- UI gets filters from flattened `ui_payload.filters`
 
 ### Error Handling in State
 - Errors stored in state (`error` field)
@@ -686,9 +687,9 @@ class AgentState(TypedDict, total=False):
 - No need to pass entire state through - just the delta
 
 **Clear Separation of Concerns:**
-- Routing state: `router_decision`, `retrieved_rules`
 - Planning state: `plan`, `planning_reasoning`, `tool_result`
 - Output state: `final_answer`, `thinking`, `ui_payload`, `error`
+- Prediction state: `suggested_queries`
 - Each node owns specific state fields
 
 ### 16.2 RAG Implementation (Hybrid RAG Pattern)
@@ -889,22 +890,18 @@ def build_planner_runnable(
 
 **Try/Except in All Nodes with Graceful Fallbacks:**
 ```python
-def router_node(state: AgentState) -> Dict[str, Any]:
+def planner_node(state: AgentState) -> Dict[str, Any]:
     try:
-        decision = router.route(query, conversation=messages)
-        return {"router_decision": decision}
+        plan: AviationPlan = planner.invoke({"messages": state.get("messages") or []})
+        reasoning = f"Selected tool: {plan.selected_tool}."
+        return {"plan": plan, "planning_reasoning": reasoning}
     except Exception as e:
-        # Fallback to database path on error
-        return {"router_decision": RouterDecision(
-            path="database",
-            confidence=0.5,
-            reasoning=f"Router failed, defaulting to database: {e}"
-        )}
+        return {"error": str(e)}
 ```
 - Every node has try/except
-- Graceful degradation (router fails → default to database)
+- Errors stored in state, not raised as exceptions
 - Errors don't crash entire graph
-- Reasoning explains fallback to user
+- Downstream nodes can check for errors and skip gracefully
 
 **Error State Propagation Through Graph:**
 ```python
@@ -922,7 +919,7 @@ def tool_node(state: AgentState) -> Dict[str, Any]:
 
 **Fallback Behaviors:**
 ```python
-# Example: Router fails → default to database path
+# Example: Planner fails → error stored in state, formatter produces error message
 # Example: RAG retrieval fails → return empty list, not crash
 # Example: Formatter fails → return error message as answer
 ```
@@ -965,7 +962,9 @@ planner = build_planner_runnable(llm=mock_llm, tools=tools)
 def test_ui_payload_structure():
     # Assert ui_payload has stable fields
     assert "kind" in payload
-    assert "mcp_raw" in payload
+    assert "tool" in payload
+    # Flattened fields
+    assert "filters" in payload or "visualization" in payload
     # Prevents accidental breaking changes
 ```
 - Validates UI contract
@@ -983,8 +982,6 @@ The comparison system enables semantic comparison of aviation rules across count
 ```
 User Query: "Compare VFR rules between France and Germany"
     ↓
-Router (priority routing for comparisons)
-    ↓ database path
 Planner (selects compare_rules_between_countries)
     ↓
 Tool (returns DATA only via ComparisonService)
