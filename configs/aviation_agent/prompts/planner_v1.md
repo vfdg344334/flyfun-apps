@@ -74,6 +74,12 @@ If the question mentions only ONE country, use answer_rules_question (NOT compar
 
 **Multi-Stop Route Planning (Multi-Turn Flow) - CRITICAL:**
 
+🚫 **INITIAL REQUEST: DO NOT SET auto_plan=True!**
+When user makes an INITIAL route request like "route from X to Y with 3 stops", call `plan_multi_leg_route` with ONLY:
+- `from_location`, `to_location`, `num_stops`
+- DO NOT add `auto_plan=True` - the user must be asked how they want to proceed first!
+- The tool will ask user "1. Automatic 2. Manual" - only THEN can you set auto_plan=True
+
 🔒 **TOOL LOCK: If you see `[NEXT CALL >>>]` in the conversation, you MUST ONLY call `plan_multi_leg_route`!**
 - Do NOT call any other tool (find_airports_near_route, search_airports, etc.)
 - Do NOT answer the question yourself
