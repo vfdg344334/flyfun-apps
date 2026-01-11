@@ -529,7 +529,7 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 
 ### Tool Catalog
 
-**Tools Exposed to LLM Planner (8 tools):**
+**Tools Exposed to LLM Planner (9 tools):**
 
 | Tool | Required args | Optional args | Default `ui_payload.kind` | Visualization Type |
 | --- | --- | --- | --- | --- |
@@ -538,6 +538,7 @@ The shared code centralizes every MCP tool signature in `shared/airport_tools.py
 | `find_airports_near_route` | `from_location`, `to_location` | `max_distance_nm`, `filters`, `max_hours_notice` | `route` | `route_with_markers` |
 | `get_airport_details` | `icao_code` | – | `airport` | `marker_with_details` |
 | `get_notification_for_airport` | `icao` | `day_of_week` | `airport` | `marker_with_details` |
+| `calculate_flight_distance` | `from_location`, `to_location` | `cruise_speed_kts`, `aircraft_type` | `route` | `route` |
 | `answer_rules_question` | `country_code`, `question` | `tags`, `use_rag` | `rules` | – |
 | `browse_rules` | `country_code` | `tags`, `offset`, `limit` | `rules` | – |
 | `compare_rules_between_countries` | `countries` | `category`, `tags` | `rules` | – |

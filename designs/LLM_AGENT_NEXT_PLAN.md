@@ -1,635 +1,286 @@
 # Aviation Agent - Next Implementation Plan
 
-This document captures planned improvements for the aviation agent.
-
-**Last Updated:** 2024-12-20
-**Session:** `langsmith-feedback`
-
----
-
 ## Overview
 
-Two main improvements identified during code review:
-
-1. **LangSmith Feedback Integration** - Enable thumbs up/down rating from UI - **IMPLEMENTED**
-2. **Tests for NextQueryPredictor** - Currently untested module - **PENDING**
+This document tracks planned enhancements to the aviation agent, focusing on flight time/distance calculations and multi-tool architecture.
 
 ---
 
-## 1. LangSmith Feedback Integration
+## Phase 1: Flight Distance & Time Tool
 
-### Implementation Summary (Completed 2024-12-20)
+### New Tool: `calculate_flight_distance`
 
-**Files Modified:**
-- `shared/aviation_agent/adapters/streaming.py` - Added `run_id` to config and done events
-- `shared/aviation_agent/adapters/langgraph_runner.py` - Added `run_id` to config
-- `web/server/api/aviation_agent_chat.py` - Added `POST /feedback` endpoint
-- `web/client/ts/managers/chatbot-manager.ts` - Added feedback UI (thumbs up/down, comment input)
-- `web/client/css/chatbot.css` - Added feedback styles
+**Purpose**: Calculate distance and flight time between two airports.
 
-**Features:**
-- Thumbs up/down buttons appear after each response
-- Thumbs up submits immediately (score=1)
-- Thumbs down shows comment textarea, then submits (score=0)
-- Skip option for thumbs down without comment
-- Feedback sent to LangSmith via `client.create_feedback()`
-- Thanks message with fade-out after submission
-
-### Original Design (for reference)
-
-#### Current State
-
-LangSmith integration is minimal:
-- Basic tags and metadata in `langgraph_runner.py` and `streaming.py`
-- Run names like `aviation-agent-{run_id[:8]}`
-- Tracing works if `LANGCHAIN_API_KEY` and `LANGCHAIN_PROJECT` env vars are set
-- **No feedback tracking** - run_id is not exposed to UI
-
-### Goal
-
-Allow users to provide thumbs up/down feedback on agent responses, which gets logged to LangSmith for:
-- Quality monitoring
-- Model fine-tuning data collection
-- Identifying problem areas
-
-### Implementation Plan
-
-#### Phase 1: Expose Run ID to UI
-
-**File: `shared/aviation_agent/adapters/streaming.py`**
-
-The `done` event already includes `session_id` and `thread_id`. Add `run_id`:
-
+**Parameters**:
 ```python
-# In stream_aviation_agent()
-# Generate run_id at the start (currently just used for config)
-run_id = str(uuid.uuid4())  # Make this the canonical run_id
+{
+    "from_location": str,        # Required - ICAO or location query
+    "to_location": str,          # Required - ICAO or location query
+    "cruise_speed_kts": float,   # Optional - explicit cruise speed
+    "aircraft_type": str,        # Optional - e.g., "c172", "sr22"
+}
+```
 
-# ... in the done event ...
-yield {
-    "event": "done",
-    "data": {
-        "session_id": session_id,
-        "thread_id": effective_thread_id,
-        "run_id": run_id,  # ADD THIS - for LangSmith feedback
-        "tokens": {...},
-        "metadata": {...}
+**Returns**:
+```python
+{
+    "from": {"icao": "EGTF", "name": "Fairoaks", "lat": 51.348, "lon": -0.559},
+    "to": {"icao": "LFMD", "name": "Cannes-Mandelieu", "lat": 43.542, "lon": 6.953},
+    "distance_nm": 596.4,
+    "cruise_speed_kts": 120,           # null if not provided/resolved
+    "cruise_speed_source": "typical Cessna 172 cruise",  # or "provided", null
+    "estimated_time_hours": 4.97,      # null if no speed
+    "estimated_time_formatted": "4h 58m",  # null if no speed
+    "needs_speed_input": false,        # true if time requested but no speed
+    "visualization": {
+        "type": "route",
+        "route": {"from": {...}, "to": {...}}
     }
 }
 ```
 
-Also update the config to use this run_id:
+### Aircraft Speed Lookup Table
+
+Small curated list of common GA aircraft with typical cruise speeds:
 
 ```python
-config = {
-    "run_id": run_id,  # Ensure LangSmith uses this exact ID
-    "run_name": f"aviation-agent-{run_id[:8]}",
-    ...
+AIRCRAFT_CRUISE_SPEEDS = {
+    "c150": {"name": "Cessna 150", "cruise_kts": 105, "range": "100-110"},
+    "c152": {"name": "Cessna 152", "cruise_kts": 110, "range": "105-115"},
+    "c172": {"name": "Cessna 172", "cruise_kts": 120, "range": "110-130"},
+    "c182": {"name": "Cessna 182", "cruise_kts": 145, "range": "140-155"},
+    "c206": {"name": "Cessna 206", "cruise_kts": 150, "range": "145-160"},
+    "pa28": {"name": "Piper PA-28 Cherokee", "cruise_kts": 125, "range": "115-135"},
+    "pa32": {"name": "Piper PA-32 Cherokee Six", "cruise_kts": 150, "range": "140-160"},
+    "pa34": {"name": "Piper PA-34 Seneca", "cruise_kts": 180, "range": "170-190"},
+    "sr20": {"name": "Cirrus SR20", "cruise_kts": 155, "range": "150-165"},
+    "sr22": {"name": "Cirrus SR22", "cruise_kts": 170, "range": "170-190"},
+    "s22t": {"name": "Cirrus SR22T", "cruise_kts": 180, "range": "170-190"},
+    "da40": {"name": "Diamond DA40", "cruise_kts": 130, "range": "125-140"},
+    "da42": {"name": "Diamond DA42", "cruise_kts": 170, "range": "165-180"},
+    "tb10": {"name": "Socata TB10 Tobago", "cruise_kts": 130, "range": "125-140"},
+    "tb20": {"name": "Socata TB20 Trinidad", "cruise_kts": 155, "range": "150-165"},
+    "dr400": {"name": "Robin DR400", "cruise_kts": 125, "range": "120-135"},
 }
 ```
 
-#### Phase 2: Add Feedback Endpoint
-
-**File: `web/server/api/aviation_agent_chat.py`**
-
-Add new endpoint:
+### Speed Resolution Logic
 
 ```python
-from langsmith import Client
-
-class FeedbackRequest(BaseModel):
-    run_id: str
-    score: int  # 1 = thumbs up, 0 = thumbs down
-    comment: Optional[str] = None
-
-@router.post("/feedback")
-async def submit_feedback(
-    request: FeedbackRequest,
-    settings: AviationAgentSettings = Depends(get_settings),
-) -> dict:
-    """
-    Submit user feedback for a conversation run.
-
-    Args:
-        request: FeedbackRequest with run_id and score (1=good, 0=bad)
-
-    Returns:
-        {"status": "ok", "feedback_id": "..."}
-    """
-    if not settings.enabled:
-        raise HTTPException(status_code=404, detail="Aviation agent is disabled.")
-
-    try:
-        client = Client()  # Uses LANGCHAIN_API_KEY from env
-        feedback = client.create_feedback(
-            run_id=request.run_id,
-            key="user-rating",
-            score=request.score,
-            comment=request.comment,
-        )
-        return {"status": "ok", "feedback_id": str(feedback.id)}
-    except Exception as e:
-        logger.error(f"Failed to submit feedback: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit feedback")
+def resolve_cruise_speed(
+    cruise_speed_kts: float | None,
+    aircraft_type: str | None
+) -> tuple[float | None, str | None]:
+    """Returns (speed, source_description) or (None, None)."""
+    if cruise_speed_kts:
+        return cruise_speed_kts, "provided"
+    if aircraft_type:
+        normalized = normalize_aircraft_type(aircraft_type)  # "Cessna 172" -> "c172"
+        data = AIRCRAFT_CRUISE_SPEEDS.get(normalized)
+        if data:
+            return data["cruise_kts"], f"typical {data['name']} cruise"
+    return None, None
 ```
 
-#### Phase 3: UI Integration
+### Conversation Examples
 
-The UI needs to:
-1. Store `run_id` from the `done` SSE event
-2. Show thumbs up/down buttons after response completes
-3. On thumbs down, show a comment input before submitting
-4. Call `POST /api/aviation-agent/feedback` with the run_id
-
-**UI Flow:**
-
-```
-[Response completes]
-     |
-     v
-[👍] [👎]  <-- Thumbs buttons appear
-     |
-     v (user clicks 👎)
-     |
-+----------------------------------+
-| What went wrong?                 |
-| +------------------------------+ |
-| |                              | |
-| +------------------------------+ |
-| [Skip]              [Submit]    |
-+----------------------------------+
-     |
-     v
-[Feedback sent - thank you!]
-```
-
-**UI changes (not in this repo):**
-
-```typescript
-// State
-const [runId, setRunId] = useState<string | null>(null);
-const [showFeedbackInput, setShowFeedbackInput] = useState(false);
-const [feedbackComment, setFeedbackComment] = useState('');
-const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
-
-// After receiving 'done' event:
-const handleDoneEvent = (event: SSEEvent) => {
-    setRunId(event.data.run_id);
-};
-
-// Thumbs up - submit immediately
-const handleThumbsUp = async () => {
-    await submitFeedback(1, null);
-    setFeedbackSubmitted(true);
-};
-
-// Thumbs down - show comment input first
-const handleThumbsDown = () => {
-    setShowFeedbackInput(true);
-};
-
-// Submit feedback (with optional comment for thumbs down)
-const submitFeedback = async (score: number, comment: string | null) => {
-    await fetch('/api/aviation-agent/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            run_id: runId,
-            score: score,
-            comment: comment
-        })
-    });
-    setFeedbackSubmitted(true);
-    setShowFeedbackInput(false);
-};
-
-// Skip comment (submit thumbs down without comment)
-const handleSkip = () => submitFeedback(0, null);
-
-// Submit with comment
-const handleSubmitComment = () => submitFeedback(0, feedbackComment);
-```
-
-**Component structure:**
-
-```tsx
-{runId && !feedbackSubmitted && (
-    <div className="feedback-container">
-        {!showFeedbackInput ? (
-            // Initial state: show thumbs buttons
-            <div className="thumbs-buttons">
-                <button onClick={handleThumbsUp}>👍</button>
-                <button onClick={handleThumbsDown}>👎</button>
-            </div>
-        ) : (
-            // After thumbs down: show comment input
-            <div className="feedback-input">
-                <label>What went wrong?</label>
-                <textarea
-                    value={feedbackComment}
-                    onChange={(e) => setFeedbackComment(e.target.value)}
-                    placeholder="The answer was incorrect because..."
-                />
-                <div className="feedback-actions">
-                    <button onClick={handleSkip}>Skip</button>
-                    <button onClick={handleSubmitComment}>Submit</button>
-                </div>
-            </div>
-        )}
-    </div>
-)}
-
-{feedbackSubmitted && (
-    <div className="feedback-thanks">Thanks for your feedback!</div>
-)}
-```
-
-### Dependencies
-
-```bash
-pip install langsmith  # If not already installed
-```
-
-### Environment Variables
-
-Already configured if LangSmith tracing works:
-- `LANGCHAIN_API_KEY` - API key for LangSmith
-- `LANGCHAIN_PROJECT` - Project name in LangSmith
-
-### Testing Strategy
-
-1. **Unit test for feedback endpoint:**
-   - Mock the LangSmith client
-   - Test success and error cases
-
-2. **Integration test:**
-   - Run a query, capture run_id
-   - Submit feedback with that run_id
-   - Verify in LangSmith (manual or API check)
+| User Query | Tool Response | Formatter Output |
+|------------|---------------|------------------|
+| "How far is EGTF from LFMD" | `distance_nm: 596, needs_speed_input: false` | "The distance is 596 nm." |
+| "How long to fly EGTF to LFMD" | `needs_speed_input: true` | "The distance is 596 nm. To estimate flight time, what's your cruise speed or aircraft type?" |
+| "How long with a C172" | `cruise_speed_kts: 120, estimated_time: "4h 58m"` | "At typical C172 cruise (~120 kts), estimated flight time is ~5 hours." |
+| Follow-up: "140 knots" | `cruise_speed_kts: 140, estimated_time: "4h 16m"` | "At 140 kts, estimated flight time is 4h 16m." |
 
 ---
 
-## 2. Tests for NextQueryPredictor
+## Phase 2: Time-Constrained Airport Search
 
-### Current State
+### Enhancement to `find_airports_near_route`
 
-`shared/aviation_agent/next_query_predictor.py` has:
-- `QueryContext` dataclass
-- `SuggestedQuery` dataclass
-- `extract_context_from_plan()` function
-- `NextQueryPredictor` class with rule-based prediction
+**New Optional Parameters**:
+```python
+{
+    "max_leg_time_hours": float,  # Filter airports within this flight time from departure
+    "cruise_speed_kts": float,    # Required if max_leg_time_hours provided
+    "aircraft_type": str,         # Alternative to cruise_speed_kts
+}
+```
 
-**No tests exist** for this module.
+**Logic**:
+- If `max_leg_time_hours` provided, compute `max_distance_nm = max_leg_time_hours * cruise_speed_kts`
+- Filter airports where `enroute_distance_nm <= max_distance_nm`
 
-### Implementation Plan
+### Example
 
-**File: `tests/aviation_agent/test_next_query_predictor.py`**
+**Query**: "Where can I stop within 3h flight from EGTF on the way to LFMD with my SR22"
+
+**Planner extracts**:
+```python
+{
+    "tool": "find_airports_near_route",
+    "arguments": {
+        "from_location": "EGTF",
+        "to_location": "LFMD",
+        "max_leg_time_hours": 3,
+        "aircraft_type": "sr22"
+    }
+}
+```
+
+**Tool computes**: 3h × 180kts = 540nm max, filters airports
+
+---
+
+## Architecture Decision: Single Tool + Conversational Follow-ups
+
+### Decision
+
+**Keep single-tool architecture.** Handle complex queries through natural conversation flow rather than multi-tool execution.
+
+### Rationale
+
+1. **Users naturally use follow-ups**: "How long to fly?" → "At what speed?" → "140 knots" is natural
+2. **Simpler architecture**: No multi-tool orchestration, merging, or error multiplication
+3. **Lower latency**: Single tool call per turn
+4. **Clearer UX**: User understands what info is missing and why
+
+### Implementation Pattern: "Missing Info" Signals
+
+**Generic, reusable pattern** - any tool can return `missing_info` when it needs clarification.
+
+#### Schema
 
 ```python
-"""Tests for next_query_predictor module."""
-import pytest
-from shared.aviation_agent.next_query_predictor import (
-    NextQueryPredictor,
-    QueryContext,
-    SuggestedQuery,
-    extract_context_from_plan,
-)
-from shared.aviation_agent.planning import AviationPlan
+class MissingInfoItem(TypedDict):
+    key: str          # Machine-readable identifier
+    reason: str       # Why this info is needed
+    prompt: str       # Suggested question for user
+    examples: list[str]  # Help user understand what to provide
 
-
-class TestExtractContextFromPlan:
-    """Tests for extract_context_from_plan function."""
-
-    def test_extracts_route_locations(self):
-        """Extracts from_location and to_location from route query."""
-        plan = AviationPlan(
-            selected_tool="find_airports_near_route",
-            arguments={
-                "from_location": "EGTF",
-                "to_location": "LFMD",
-                "filters": {}
-            },
-            answer_style="brief"
-        )
-
-        context = extract_context_from_plan("Find airports from EGTF to LFMD", plan)
-
-        assert context.tool_used == "find_airports_near_route"
-        assert "EGTF" in context.locations_mentioned
-        assert "LFMD" in context.locations_mentioned
-        assert "EGTF" in context.icao_codes_mentioned
-        assert "LFMD" in context.icao_codes_mentioned
-
-    def test_extracts_location_query(self):
-        """Extracts location_query from near-location search."""
-        plan = AviationPlan(
-            selected_tool="find_airports_near_location",
-            arguments={
-                "location_query": "Paris",
-                "filters": {"has_avgas": True}
-            },
-            answer_style="detailed"
-        )
-
-        context = extract_context_from_plan("Find airports near Paris", plan)
-
-        assert context.tool_used == "find_airports_near_location"
-        assert "Paris" in context.locations_mentioned
-        assert context.filters_applied.get("has_avgas") is True
-
-    def test_extracts_icao_code(self):
-        """Extracts icao_code from airport details query."""
-        plan = AviationPlan(
-            selected_tool="get_airport_details",
-            arguments={"icao_code": "EGLL"},
-            answer_style="detailed"
-        )
-
-        context = extract_context_from_plan("Details for EGLL", plan)
-
-        assert "EGLL" in context.icao_codes_mentioned
-
-    def test_extracts_countries(self):
-        """Extracts country from various argument positions."""
-        plan = AviationPlan(
-            selected_tool="list_rules_for_country",
-            arguments={"country_code": "FR"},
-            answer_style="detailed"
-        )
-
-        context = extract_context_from_plan("Rules for France", plan)
-
-        assert "FR" in context.countries_mentioned
-
-    def test_extracts_country_from_filters(self):
-        """Extracts country from filters dict."""
-        plan = AviationPlan(
-            selected_tool="search_airports",
-            arguments={
-                "query": "airports",
-                "filters": {"country": "DE"}
-            },
-            answer_style="brief"
-        )
-
-        context = extract_context_from_plan("Airports in Germany", plan)
-
-        assert "DE" in context.countries_mentioned
-
-
-class TestNextQueryPredictor:
-    """Tests for NextQueryPredictor class."""
-
-    @pytest.fixture
-    def predictor(self):
-        """Create predictor without rules.json."""
-        return NextQueryPredictor(rules_json_path=None)
-
-    def test_route_suggestions_include_customs(self, predictor):
-        """Route queries suggest customs when not filtered."""
-        context = QueryContext(
-            user_query="Find airports from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={},
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        # Should suggest customs since not filtered
-        customs_suggestions = [s for s in suggestions if "customs" in s.query_text.lower()]
-        assert len(customs_suggestions) > 0
-
-    def test_route_suggestions_include_avgas(self, predictor):
-        """Route queries suggest AVGAS when not filtered."""
-        context = QueryContext(
-            user_query="Find airports from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={},
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        avgas_suggestions = [s for s in suggestions if "avgas" in s.query_text.lower()]
-        assert len(avgas_suggestions) > 0
-
-    def test_route_suggestions_skip_avgas_if_filtered(self, predictor):
-        """Route queries don't suggest AVGAS when already filtered."""
-        context = QueryContext(
-            user_query="Find airports with AVGAS from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={"has_avgas": True},  # Already filtering
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        # Should NOT suggest AVGAS filter since already applied
-        avgas_filter_suggestions = [
-            s for s in suggestions
-            if "avgas" in s.query_text.lower() and s.tool_name == "find_airports_near_route"
-        ]
-        assert len(avgas_filter_suggestions) == 0
-
-    def test_airport_details_suggests_pricing(self, predictor):
-        """Airport details queries suggest pricing."""
-        context = QueryContext(
-            user_query="Details for EGLL",
-            tool_used="get_airport_details",
-            tool_arguments={"icao_code": "EGLL"},
-            filters_applied={},
-            locations_mentioned=[],
-            icao_codes_mentioned=["EGLL"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        pricing_suggestions = [s for s in suggestions if s.category == "pricing"]
-        assert len(pricing_suggestions) > 0
-        assert any("EGLL" in s.query_text for s in pricing_suggestions)
-
-    def test_airport_details_suggests_fuel(self, predictor):
-        """Airport details queries suggest fuel prices."""
-        context = QueryContext(
-            user_query="Details for LFPG",
-            tool_used="get_airport_details",
-            tool_arguments={"icao_code": "LFPG"},
-            filters_applied={},
-            locations_mentioned=[],
-            icao_codes_mentioned=["LFPG"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        fuel_suggestions = [s for s in suggestions if "fuel" in s.query_text.lower()]
-        assert len(fuel_suggestions) > 0
-
-    def test_rules_query_suggests_customs_airports(self, predictor):
-        """Rules queries suggest border crossing airports."""
-        context = QueryContext(
-            user_query="What are the rules for France?",
-            tool_used="list_rules_for_country",
-            tool_arguments={"country_code": "FR"},
-            filters_applied={},
-            locations_mentioned=[],
-            icao_codes_mentioned=[],
-            countries_mentioned=["FR"]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        # Should suggest searching for customs airports
-        customs_suggestions = [s for s in suggestions if "customs" in s.query_text.lower()]
-        assert len(customs_suggestions) > 0
-
-    def test_max_suggestions_respected(self, predictor):
-        """Respects max_suggestions limit."""
-        context = QueryContext(
-            user_query="Find airports from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={},
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=2)
-
-        assert len(suggestions) <= 2
-
-    def test_suggestions_are_unique(self, predictor):
-        """No duplicate suggestions."""
-        context = QueryContext(
-            user_query="Find airports from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={},
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=10)
-
-        query_texts = [s.query_text for s in suggestions]
-        assert len(query_texts) == len(set(query_texts))
-
-    def test_suggestions_have_diverse_categories(self, predictor):
-        """First suggestions should cover different categories."""
-        context = QueryContext(
-            user_query="Find airports from EGTF to LFMD",
-            tool_used="find_airports_near_route",
-            tool_arguments={"from_location": "EGTF", "to_location": "LFMD"},
-            filters_applied={},
-            locations_mentioned=["EGTF", "LFMD"],
-            icao_codes_mentioned=["EGTF", "LFMD"],
-            countries_mentioned=[]
-        )
-
-        suggestions = predictor.predict_next_queries(context, max_suggestions=4)
-
-        if len(suggestions) >= 3:
-            categories = set(s.category for s in suggestions[:3])
-            # Should have at least 2 different categories in first 3
-            assert len(categories) >= 2
-
-
-class TestSuggestedQuery:
-    """Tests for SuggestedQuery dataclass."""
-
-    def test_has_required_fields(self):
-        """SuggestedQuery has all required fields."""
-        sq = SuggestedQuery(
-            query_text="Test query",
-            tool_name="search_airports",
-            category="route",
-            priority=3
-        )
-
-        assert sq.query_text == "Test query"
-        assert sq.tool_name == "search_airports"
-        assert sq.category == "route"
-        assert sq.priority == 3
-
-
-class TestQueryContext:
-    """Tests for QueryContext dataclass."""
-
-    def test_has_required_fields(self):
-        """QueryContext has all required fields."""
-        ctx = QueryContext(
-            user_query="test",
-            tool_used="search_airports",
-            tool_arguments={},
-            filters_applied={},
-            locations_mentioned=[],
-            icao_codes_mentioned=[],
-            countries_mentioned=[]
-        )
-
-        assert ctx.user_query == "test"
-        assert ctx.tool_used == "search_airports"
+# Tool response includes
+{
+    # ... partial results ...
+    "missing_info": [MissingInfoItem, ...]  # Empty list if nothing missing
+}
 ```
 
-### Test Coverage Areas
+#### Example: Flight Distance Tool
 
-| Area | Tests |
-|------|-------|
-| `extract_context_from_plan()` | Route locations, location_query, ICAO codes, countries from args, countries from filters |
-| `NextQueryPredictor.predict_next_queries()` | Route suggestions, filter awareness, airport details suggestions, rules suggestions, max limit, uniqueness, diversity |
-| Dataclasses | Field validation |
-
-### Running Tests
-
-```bash
-# Run just the new tests
-pytest tests/aviation_agent/test_next_query_predictor.py -v
-
-# Run with coverage
-pytest tests/aviation_agent/test_next_query_predictor.py --cov=shared/aviation_agent/next_query_predictor
+```python
+{
+    "distance_nm": 596.4,
+    "estimated_time_formatted": null,
+    "missing_info": [{
+        "key": "cruise_speed",
+        "reason": "Required to calculate flight time",
+        "prompt": "What's your cruise speed or aircraft type?",
+        "examples": ["120 knots", "Cessna 172", "SR22"]
+    }]
+}
 ```
+
+#### Example: Ambiguous Location
+
+```python
+{
+    "candidates": [
+        {"icao": "LFPG", "name": "Paris Charles de Gaulle"},
+        {"icao": "LFPO", "name": "Paris Orly"},
+        {"icao": "LFPB", "name": "Paris Le Bourget"}
+    ],
+    "missing_info": [{
+        "key": "location_clarification",
+        "reason": "Multiple airports match 'Paris'",
+        "prompt": "Which Paris airport did you mean?",
+        "examples": ["Le Bourget", "LFPB", "the GA-friendly one"]
+    }]
+}
+```
+
+#### Example: Country Not Specified (Rules)
+
+```python
+{
+    "missing_info": [{
+        "key": "country",
+        "reason": "Rules vary by country",
+        "prompt": "Which country are you asking about?",
+        "examples": ["France", "UK", "Germany"]
+    }]
+}
+```
+
+#### Example: Time Constraint Without Speed
+
+```python
+{
+    "airports": [...],  # All airports along route (unfiltered)
+    "missing_info": [{
+        "key": "cruise_speed",
+        "reason": "Required to filter airports within 3h flight time",
+        "prompt": "What's your cruise speed to calculate the 3-hour range?",
+        "examples": ["120 knots", "Cessna 172"]
+    }]
+}
+```
+
+Formatter sees `missing_info` and asks the follow-up question naturally, incorporating any partial results already available.
+
+### Conversational Flow Example
+
+```
+Turn 1:
+  User: "How long to fly from EGTF to LFMD"
+  Tool: calculate_flight_distance → {distance: 596, missing_info: {cruise_speed: ...}}
+  Answer: "The distance is 596 nm. To estimate flight time, what's your cruise speed or aircraft type?"
+
+Turn 2:
+  User: "140 knots"
+  Planner: Sees conversation history, extracts speed=140, same route context
+  Tool: calculate_flight_distance → {distance: 596, cruise_speed: 140, time: "4h 16m"}
+  Answer: "At 140 knots, the estimated flight time is 4 hours 16 minutes."
+
+Turn 3:
+  User: "What about with a C172?"
+  Planner: Same route, different aircraft
+  Tool: calculate_flight_distance → {distance: 596, cruise_speed: 120, source: "typical C172"}
+  Answer: "At typical C172 cruise speed (~120 kts), it would take about 5 hours."
+```
+
+### Planner Context Awareness
+
+The planner must be context-aware to handle follow-ups:
+
+```python
+# Planner prompt guidance
+"""
+When the user provides missing information (speed, aircraft type, etc.)
+in a follow-up message, use the conversation history to:
+1. Identify what query they're continuing
+2. Extract the newly provided information
+3. Call the appropriate tool with complete parameters
+"""
+```
+
+### Benefits of This Approach
+
+| Aspect | Multi-Tool | Single + Follow-up |
+|--------|------------|-------------------|
+| Complexity | High | Low |
+| Latency per turn | Higher (multiple tools) | Lower (one tool) |
+| User clarity | May overwhelm | Clear, guided |
+| Error handling | Complex | Simple |
+| Token usage | Higher | Lower per turn |
 
 ---
 
 ## Implementation Priority
 
-| Task | Effort | Value | Priority |
-|------|--------|-------|----------|
-| NextQueryPredictor tests | Low | Medium | 1 (do first - quick win) |
-| LangSmith Phase 1 (expose run_id) | Low | High | 2 |
-| LangSmith Phase 2 (feedback endpoint) | Medium | High | 3 |
-| LangSmith Phase 3 (UI integration) | Medium | High | 4 (requires UI work) |
-
----
-
-## Files to Modify
-
-### For LangSmith Feedback:
-- `shared/aviation_agent/adapters/streaming.py` - Add run_id to done event
-- `shared/aviation_agent/adapters/langgraph_runner.py` - Ensure run_id in config
-- `web/server/api/aviation_agent_chat.py` - Add feedback endpoint
-- `requirements.txt` or `pyproject.toml` - Add `langsmith` dependency if needed
-
-### For NextQueryPredictor Tests:
-- `tests/aviation_agent/test_next_query_predictor.py` - New file
-
----
-
-## Notes
-
-- The `AviationPlan` class is imported from `planning.py` - check if it needs `answer_style` or if that's optional
-- LangSmith client uses `LANGCHAIN_API_KEY` from environment
-- UI changes for feedback buttons are outside this repo
+1. [x] `calculate_flight_distance` tool with aircraft lookup
+2. [x] Add `missing_info` pattern to tool responses (implemented in calculate_flight_distance)
+3. [ ] Update planner prompt for follow-up context awareness
+4. [ ] Update formatter to handle `missing_info` gracefully
+5. [ ] Add `max_leg_time_hours` filter to `find_airports_near_route`
+6. [ ] Test conversational flows end-to-end
+7. [ ] Add unit tests for `missing_info` behavior

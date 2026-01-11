@@ -12,6 +12,7 @@ AIRPORT TOOLS (Section 5):
     - find_airports_near_route: Find airports along a flight route
     - get_airport_details: Get comprehensive airport information
     - get_notification_for_airport: Customs notification requirements
+    - calculate_flight_distance: Calculate distance and flight time between airports
 
 RULES TOOLS (Section 6):
     - answer_rules_question: Answer specific questions about rules for a country (RAG-based)
@@ -38,6 +39,7 @@ import urllib.request
 from euro_aip.models.airport import Airport
 from euro_aip.models.navpoint import NavPoint
 
+from .aircraft_speeds import resolve_cruise_speed, get_aircraft_info, format_time
 from .filtering import FilterEngine
 from .prioritization import PriorityEngine
 from .tool_context import ToolContext
@@ -1002,6 +1004,166 @@ def get_notification_for_airport(
     return ctx.notification_service.get_notification_for_airport(icao, day_of_week)
 
 
+# -----------------------------------------------------------------------------
+# Flight Distance & Time Calculation
+# -----------------------------------------------------------------------------
+
+def calculate_flight_distance(
+    ctx: ToolContext,
+    from_location: str,
+    to_location: str,
+    cruise_speed_kts: Optional[float] = None,
+    aircraft_type: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Calculate distance and estimated flight time between two airports or locations.
+
+    **USE THIS TOOL when user asks about:**
+    - Flight distance: "How far is EGTF from LFMD?"
+    - Flight time: "How long to fly from London to Nice?"
+    - Route planning: "What's the distance between Paris and Munich?"
+
+    **Speed/Aircraft handling:**
+    - If user specifies aircraft type (e.g., "with a C172"), use aircraft_type parameter
+    - If user specifies speed (e.g., "at 140 knots"), use cruise_speed_kts parameter
+    - If neither provided and user asks about TIME, tool returns distance and asks for speed
+    - If user only asks about DISTANCE, no speed needed
+
+    **Location resolution:**
+    - Accepts ICAO codes (e.g., "EGTF", "LFMD")
+    - Accepts city/location names (e.g., "Paris", "Nice, France")
+    - Automatically finds nearest airport for non-ICAO locations
+
+    Returns distance in nautical miles and estimated flight time if speed is known.
+    """
+    # Try to resolve both locations
+    from_result = _find_nearest_airport_in_db(ctx, from_location)
+    to_result = _find_nearest_airport_in_db(ctx, to_location)
+
+    if not from_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode departure location '{from_location}'.",
+            "missing_info": [{
+                "key": "from_location",
+                "reason": "Location not found in database or could not be geocoded",
+                "prompt": f"Could not find '{from_location}'. Please provide an ICAO code or valid location name.",
+                "examples": ["EGTF", "Paris", "Nice, France"],
+            }],
+        }
+
+    if not to_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode destination location '{to_location}'.",
+            "missing_info": [{
+                "key": "to_location",
+                "reason": "Location not found in database or could not be geocoded",
+                "prompt": f"Could not find '{to_location}'. Please provide an ICAO code or valid location name.",
+                "examples": ["LFMD", "Cannes", "Munich, Germany"],
+            }],
+        }
+
+    from_airport = from_result["airport"]
+    to_airport = to_result["airport"]
+
+    # Calculate great circle distance
+    distance_nm: Optional[float] = None
+    if hasattr(from_airport, 'navpoint') and hasattr(to_airport, 'navpoint'):
+        try:
+            _, distance_nm = from_airport.navpoint.haversine_distance(to_airport.navpoint)
+            distance_nm = round(distance_nm, 1)
+        except Exception:
+            pass
+
+    if distance_nm is None:
+        return {
+            "found": False,
+            "error": "Could not calculate distance between airports (missing coordinates).",
+        }
+
+    # Resolve cruise speed
+    speed, speed_source = resolve_cruise_speed(cruise_speed_kts, aircraft_type)
+
+    # Build response
+    response: Dict[str, Any] = {
+        "found": True,
+        "from": {
+            "icao": from_airport.ident,
+            "name": from_airport.name,
+            "municipality": from_airport.municipality,
+            "lat": getattr(from_airport, "latitude_deg", None),
+            "lon": getattr(from_airport, "longitude_deg", None),
+        },
+        "to": {
+            "icao": to_airport.ident,
+            "name": to_airport.name,
+            "municipality": to_airport.municipality,
+            "lat": getattr(to_airport, "latitude_deg", None),
+            "lon": getattr(to_airport, "longitude_deg", None),
+        },
+        "distance_nm": distance_nm,
+        "cruise_speed_kts": speed,
+        "cruise_speed_source": speed_source,
+        "estimated_time_hours": None,
+        "estimated_time_formatted": None,
+        "missing_info": [],
+        "visualization": {
+            "type": "route",
+            "route": {
+                "from": {
+                    "icao": from_airport.ident,
+                    "name": from_airport.name,
+                    "lat": getattr(from_airport, "latitude_deg", None),
+                    "lon": getattr(from_airport, "longitude_deg", None),
+                },
+                "to": {
+                    "icao": to_airport.ident,
+                    "name": to_airport.name,
+                    "lat": getattr(to_airport, "latitude_deg", None),
+                    "lon": getattr(to_airport, "longitude_deg", None),
+                },
+            },
+        },
+    }
+
+    # Add substitution notes if locations were geocoded
+    if from_result["was_geocoded"] or to_result["was_geocoded"]:
+        response["substitutions"] = {
+            "from": {
+                "original": from_location,
+                "resolved": from_airport.ident,
+                "was_geocoded": from_result["was_geocoded"],
+                "geocoded_location": from_result.get("geocoded_location"),
+                "distance_nm": from_result.get("distance_nm", 0.0),
+            } if from_result["was_geocoded"] else None,
+            "to": {
+                "original": to_location,
+                "resolved": to_airport.ident,
+                "was_geocoded": to_result["was_geocoded"],
+                "geocoded_location": to_result.get("geocoded_location"),
+                "distance_nm": to_result.get("distance_nm", 0.0),
+            } if to_result["was_geocoded"] else None,
+        }
+
+    # Calculate time if speed is known
+    if speed:
+        time_hours = distance_nm / speed
+        response["estimated_time_hours"] = round(time_hours, 2)
+        response["estimated_time_formatted"] = format_time(time_hours)
+    else:
+        # No speed provided - add missing_info for formatter to ask
+        response["missing_info"] = [{
+            "key": "cruise_speed",
+            "reason": "Required to calculate flight time",
+            "prompt": "What's your cruise speed or aircraft type?",
+            "examples": ["120 knots", "Cessna 172", "SR22"],
+        }]
+
+    return response
+
+
 # =============================================================================
 # SECTION 6: RULES TOOLS
 # =============================================================================
@@ -1279,6 +1441,7 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
     - find_airports_near_route
     - get_airport_details
     - get_notification_for_airport
+    - calculate_flight_distance
 
     RULES TOOLS:
     - answer_rules_question
@@ -1466,6 +1629,40 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                     },
                     "required": ["icao"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        # -----------------------------------------------------------------
+        # FLIGHT DISTANCE & TIME
+        # -----------------------------------------------------------------
+        (
+            "calculate_flight_distance",
+            {
+                "name": "calculate_flight_distance",
+                "handler": calculate_flight_distance,
+                "description": _get_tool_description(calculate_flight_distance, "calculate_flight_distance"),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from_location": {
+                            "type": "string",
+                            "description": "Departure location - ICAO code (e.g., 'EGTF') or location name (e.g., 'Paris', 'Nice, France').",
+                        },
+                        "to_location": {
+                            "type": "string",
+                            "description": "Destination location - ICAO code (e.g., 'LFMD') or location name (e.g., 'Cannes', 'Munich, Germany').",
+                        },
+                        "cruise_speed_kts": {
+                            "type": "number",
+                            "description": "Cruise speed in knots. Use when user specifies a speed (e.g., '140 knots', 'at 120 kts').",
+                        },
+                        "aircraft_type": {
+                            "type": "string",
+                            "description": "Aircraft type for speed lookup (e.g., 'C172', 'SR22', 'PA28', 'Cessna 182'). Use when user mentions their aircraft type.",
+                        },
+                    },
+                    "required": ["from_location", "to_location"],
                 },
                 "expose_to_llm": True,
             },

@@ -469,5 +469,123 @@
       "tags": ["transponder"]
     },
     "description": "Browse/list transponder rules for Germany"
+  },
+
+  {
+    "_comment": "=== Flight Distance & Time Calculations ==="
+  },
+  {
+    "question": "How long to fly between EGTF and LFMD",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD"
+    },
+    "description": "Flight time query without speed - should use calculate_flight_distance"
+  },
+  {
+    "question": "What is the distance between EGTF and LFMD",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD"
+    },
+    "description": "Distance-only query - should use calculate_flight_distance"
+  },
+  {
+    "question": "How far is Paris from Nice",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "Paris",
+      "to_location": "Nice"
+    },
+    "description": "Distance query with city names"
+  },
+  {
+    "question": "How long to fly from EGTF to LFMD with a Cessna 172",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD",
+      "aircraft_type": "C172"
+    },
+    "description": "Flight time with aircraft type - should extract aircraft_type"
+  },
+  {
+    "question": "How long to fly from London to Cannes with my SR22",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "London",
+      "to_location": "Cannes",
+      "aircraft_type": "SR22"
+    },
+    "description": "Flight time with Cirrus SR22 aircraft type"
+  },
+  {
+    "question": "Flight time from EGKB to LFMD at 140 knots",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "EGKB",
+      "to_location": "LFMD",
+      "cruise_speed_kts": 140
+    },
+    "description": "Flight time with explicit cruise speed"
+  },
+  {
+    "question": "How long will it take to fly from Munich to Barcelona at 120 kts",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "Munich",
+      "to_location": "Barcelona",
+      "cruise_speed_kts": 120
+    },
+    "description": "Flight time with explicit speed using 'kts' abbreviation"
+  },
+  {
+    "question": "Distance from Geneva to Rome",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "Geneva",
+      "to_location": "Rome"
+    },
+    "description": "Simple distance query between cities"
+  },
+  {
+    "question": "How many nautical miles from LFPG to EGLL",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "LFPG",
+      "to_location": "EGLL"
+    },
+    "description": "Distance query with nautical miles mention"
+  },
+  {
+    "question": "What's the flying distance between Fairoaks and Cannes-Mandelieu",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "Fairoaks",
+      "to_location": "Cannes-Mandelieu"
+    },
+    "description": "Distance query using airport names instead of ICAO codes"
+  },
+  {
+    "question": "Estimate flight time EGTF to LFMD in a PA28",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD",
+      "aircraft_type": "PA28"
+    },
+    "description": "Flight time estimate with Piper Cherokee"
+  },
+  {
+    "question": "How long from LFMD to LEBL with a Diamond DA42",
+    "expected_tool": "calculate_flight_distance",
+    "expected_arguments": {
+      "from_location": "LFMD",
+      "to_location": "LEBL",
+      "aircraft_type": "DA42"
+    },
+    "description": "Flight time with Diamond Twin Star"
   }
 ]

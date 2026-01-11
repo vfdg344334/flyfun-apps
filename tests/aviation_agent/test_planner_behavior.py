@@ -236,6 +236,16 @@ def test_planner_selects_correct_tool(
                         f"Expected '{key}' to start with '{expected_value}', "
                         f"got '{plan_value}'"
                     )
+                # For aircraft_type, normalize and allow variations
+                # e.g., "C172", "Cessna 172", "cessna172" should all match
+                elif key == "aircraft_type":
+                    from shared.aircraft_speeds import normalize_aircraft_type
+                    expected_normalized = normalize_aircraft_type(expected_value)
+                    actual_normalized = normalize_aircraft_type(plan_value)
+                    assert expected_normalized == actual_normalized, (
+                        f"Expected aircraft_type '{expected_value}' (normalized: {expected_normalized}), "
+                        f"got '{plan_value}' (normalized: {actual_normalized})"
+                    )
                 else:
                     # Exact match (case-insensitive) for other string fields
                     assert plan_value.upper() == expected_value.upper(), (
