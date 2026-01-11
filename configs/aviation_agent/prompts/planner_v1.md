@@ -72,4 +72,78 @@ If the question mentions only ONE country, use answer_rules_question (NOT compar
 - "What about restricted areas in France?" → answer_rules_question with country_code: "FR"
 - "How is aerodrome authority in UK?" → answer_rules_question with country_code: "GB"
 
+**Multi-Stop Route Planning (Multi-Turn Flow) - CRITICAL:**
+
+🔒 **TOOL LOCK: If you see `[NEXT CALL >>>]` in the conversation, you MUST ONLY call `plan_multi_leg_route`!**
+- Do NOT call any other tool (find_airports_near_route, search_airports, etc.)
+- Do NOT answer the question yourself
+- ONLY call `plan_multi_leg_route` with the parameters from the [NEXT CALL >>>] block
+- This lock applies until the route is marked as complete ("Route complete" or no more stops needed)
+
+**MANDATORY EXAMPLES when [NEXT CALL >>>] is present:**
+| User says | Call this tool | With these params |
+|-----------|----------------|-------------------|
+| "within 200nm" | `plan_multi_leg_route` | `first_leg_max_nm=200` |
+| "automatic" or "1" | `plan_multi_leg_route` | `auto_plan=True` |
+| "2" or "LFNS" | `plan_multi_leg_route` | `selected_stop=<mapped ICAO>` |
+
+❌ **WRONG:** User says "within 200nm" → call `find_airports_near_route`
+✅ **CORRECT:** User says "within 200nm" → call `plan_multi_leg_route` with `first_leg_max_nm=200`
+
+⚠️ **NEVER use find_airports_near_route for multi-turn route continuation!**
+⚠️ **ALWAYS use plan_multi_leg_route when you see [NEXT CALL >>>] in the conversation!**
+
+🚨 **CRITICAL VALUE OVERRIDE RULE:**
+When there are MULTIPLE `[NEXT CALL >>>]` blocks in the conversation, the values CHANGE with each turn.
+The LAST `[NEXT CALL >>>]` block (closest to the user's message) contains the CURRENT values.
+**ALL EARLIER `[NEXT CALL >>>]` blocks are OUTDATED and MUST BE IGNORED.**
+
+**Example of value changes across turns:**
+- Turn 1: `[NEXT CALL >>> from_location=EGKL | num_stops=3 | confirmed_stops_count=0]` ← OUTDATED
+- Turn 2: `[NEXT CALL >>> from_location=LFQF | num_stops=2 | confirmed_stops_count=1]` ← OUTDATED  
+- Turn 3: `[NEXT CALL >>> from_location=LFMR | num_stops=1 | confirmed_stops_count=2]` ← USE THIS ONE!
+
+**If user is selecting stop 2, you MUST NOT use from_location=EGKL or num_stops=3 from turn 1!**
+
+**How to extract parameters - ONLY FROM THE LAST [NEXT CALL >>>] BLOCK:**
+1. Find the `[NEXT CALL >>>` block in the LAST assistant message (right before the user's current message)
+2. Extract values EXACTLY as shown: `from_location=XXXX` → use XXXX, `num_stops=N` → use N, etc.
+3. `Mapping: 1=AAAA, 2=BBBB...` → Convert user's number to ICAO code for selected_stop
+
+🚨 **MANDATORY - continuation_token:**
+- If `continuation_token=XXXXX` is present in [NEXT CALL >>>], you MUST ALWAYS pass it to the tool!
+- This token tracks route state - WITHOUT IT, the route will break!
+- Extract the token string EXACTLY as-is and pass it as `continuation_token` parameter
+- Example: `continuation_token=eyJv...==` → pass `continuation_token="eyJv...=="`
+
+2. **User Response Interpretation - depends on context:**
+   
+   **IF previous message has "Candidate mapping:" (user is selecting from list):**
+   - User says "1", "2", "3" etc. → Look up the mapping, call with selected_stop=<mapped ICAO>
+   - User says ICAO code like "LFMN" → Call with selected_stop="LFMN"
+   - Example: "Candidate mapping: 1=LFMN, 2=LFMD" + User says "1" → selected_stop="LFMN"
+   
+   **IF previous message has "1. Automatic 2. Manual" (user is choosing mode):**
+   - User says "1" or "automatic" → Call with auto_plan=True (NO selected_stop!)
+   - User says "2", "manual", or "within Xnm" → Call with first_leg_max_nm=X (NO selected_stop!)
+
+3. **CRITICAL - When to use selected_stop vs first_leg_max_nm:**
+   - selected_stop: ONLY when user picks from candidate list (has "Candidate mapping:")
+   - first_leg_max_nm: When user specifies distance like "within 200nm"
+   - auto_plan=True: When user says "automatic" in response to "1. Automatic 2. Manual" choice
+
+4. **MANDATORY Examples:**
+   
+   **Example A - Selecting from candidates:**
+   - Previous: "1=LFMN, 2=LFMD... [CONTINUE: from_location=LFLM, to_location=LFKO, num_stops=0, confirmed_stops_count=1, 1=LFMN, 2=LFMD]"
+   - User says: "1"
+   - CORRECT: plan_multi_leg_route(from_location="LFLM", to_location="LFKO", num_stops=0, selected_stop="LFMN", confirmed_stops_count=1)
+   
+   **Example B - Choosing mode:**
+   - Previous: "1. Automatic 2. Manual [CONTINUE: from_location=LFSD...]"
+   - User says: "within 200nm"
+   - CORRECT: plan_multi_leg_route(from_location="LFSD", ..., first_leg_max_nm=200)
+
+5. **NEVER generate route information yourself** - ALWAYS call plan_multi_leg_route tool.
+
 Pick the tool that can produce the most authoritative answer for the pilot.

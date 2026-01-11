@@ -65,9 +65,65 @@ def _build_agent_graph(
 
     graph = StateGraph(AgentState)
 
+    def _strip_old_continuation_blocks(messages: list) -> list:
+        """
+        Strip [NEXT CALL >>>] and [CONTINUE:] blocks from all assistant messages
+        except the very last one. This prevents the LLM from picking up outdated
+        context from earlier turns in multi-turn conversations.
+        """
+        import re
+        if not messages:
+            return messages
+        
+        # Find the LAST assistant message index
+        last_assistant_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            role = getattr(msg, 'type', None) or getattr(msg, 'role', None) or (msg.get('role') if isinstance(msg, dict) else None)
+            if role in ('assistant', 'ai'):
+                last_assistant_idx = i
+                break
+        
+        if last_assistant_idx == -1:
+            return messages  # No assistant messages
+        
+        # Pattern to match both [NEXT CALL >>>...] and [CONTINUE:...]
+        pattern = r'\[(?:NEXT CALL >>>|CONTINUE:)[^\]]*\]'
+        
+        result = []
+        for i, msg in enumerate(messages):
+            role = getattr(msg, 'type', None) or getattr(msg, 'role', None) or (msg.get('role') if isinstance(msg, dict) else None)
+            if role in ('assistant', 'ai') and i != last_assistant_idx:
+                # Strip continuation blocks from older assistant messages
+                if hasattr(msg, 'content'):
+                    # BaseMessage object
+                    new_content = re.sub(pattern, '', msg.content).strip()
+                    # Create a copy with modified content
+                    from langchain_core.messages import AIMessage
+                    result.append(AIMessage(content=new_content))
+                elif isinstance(msg, dict) and 'content' in msg:
+                    new_content = re.sub(pattern, '', msg['content']).strip()
+                    result.append({**msg, 'content': new_content})
+                else:
+                    result.append(msg)
+            else:
+                result.append(msg)
+        
+        return result
+
     def planner_node(state: AgentState) -> Dict[str, Any]:
         try:
-            plan: AviationPlan = planner.invoke({"messages": state.get("messages") or []})
+            # Preprocess messages to strip old continuation blocks
+            raw_messages = state.get("messages") or []
+            processed_messages = _strip_old_continuation_blocks(raw_messages)
+            # DEBUG: Log last message
+            if processed_messages:
+                last_msg = processed_messages[-1]
+                content = getattr(last_msg, 'content', None) or (last_msg.get('content') if isinstance(last_msg, dict) else str(last_msg))
+                print(f"[DEBUG] Last message for planner: {content[:200] if content else 'None'}...")
+            plan: AviationPlan = planner.invoke({"messages": processed_messages})
+            # DEBUG: Log plan details
+            print(f"[PLANNER] tool={plan.selected_tool}, args={plan.arguments}")
             # Generate simple reasoning from plan
             reasoning_parts = [f"Selected tool: {plan.selected_tool}"]
             if plan.arguments.get("filters"):

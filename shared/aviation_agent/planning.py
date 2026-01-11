@@ -114,9 +114,14 @@ def build_planner_runnable(
     # This is especially important for multi-turn conversations where PydanticOutputParser can fail
     if hasattr(llm, 'with_structured_output'):
         try:
-            # Use function_calling method to avoid OpenAI's strict json_schema validation
+            # Use function_calling method for structured output
             with_structured_output = getattr(llm, 'with_structured_output')
-            structured_llm = with_structured_output(AviationPlan, method="function_calling")
+            structured_llm = with_structured_output(
+                AviationPlan, 
+                method="function_calling",
+                include_raw=False,
+                strict=False,
+            )
             
             final_instruction = (
                 "Analyze the conversation above and select one tool from the manifest. "
