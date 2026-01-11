@@ -587,5 +587,82 @@
       "aircraft_type": "DA42"
     },
     "description": "Flight time with Diamond Twin Star"
+  },
+
+  {
+    "_comment": "=== Time-Constrained Route Searches ==="
+  },
+  {
+    "question": "Where can I stop within 3h flight from EGTF to LFMD with my SR22",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD",
+      "max_leg_time_hours": 3,
+      "aircraft_type": "SR22"
+    },
+    "description": "Time-constrained route search with aircraft type"
+  },
+  {
+    "question": "Fuel stop within 2 hours at 140 knots between London and Nice",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "London",
+      "to_location": "Nice",
+      "max_leg_time_hours": 2,
+      "cruise_speed_kts": 140,
+      "filters": {
+        "has_avgas": true
+      }
+    },
+    "description": "Time-constrained route with fuel filter and explicit speed"
+  },
+  {
+    "question": "Airport within 3h from EGTF on the way to LFMD",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD",
+      "max_leg_time_hours": 3
+    },
+    "description": "Time-constrained route without speed - tool will ask for speed"
+  },
+  {
+    "question": "Find a customs stop within 2.5 hours flying time between EGTF and LFMD in my C172",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "EGTF",
+      "to_location": "LFMD",
+      "max_leg_time_hours": 2.5,
+      "aircraft_type": "C172",
+      "filters": {
+        "point_of_entry": true
+      }
+    },
+    "description": "Time-constrained with customs filter and aircraft type"
+  },
+  {
+    "question": "Where can I refuel within 4 hours from Paris to Rome at 120 knots",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "Paris",
+      "to_location": "Rome",
+      "max_leg_time_hours": 4,
+      "cruise_speed_kts": 120
+    },
+    "description": "Time-constrained refuel stop with city names"
+  },
+  {
+    "question": "Airports reachable in 3h from EGKB towards LFMD with AVGAS",
+    "expected_tool": "find_airports_near_route",
+    "expected_arguments": {
+      "from_location": "EGKB",
+      "to_location": "LFMD",
+      "max_leg_time_hours": 3,
+      "filters": {
+        "has_avgas": true
+      }
+    },
+    "description": "Time-constrained with AVGAS filter - no speed provided"
   }
 ]

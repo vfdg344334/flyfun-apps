@@ -25,6 +25,15 @@ Tools:
   - "Flight time EGKB to LFMD with a Cessna 172" → calculate_flight_distance(from_location="EGKB", to_location="LFMD", aircraft_type="C172")
   - "How long at 140 knots from EGTF to LFMD" → calculate_flight_distance(from_location="EGTF", to_location="LFMD", cruise_speed_kts=140)
 
+**Time-Constrained Route Search:**
+- find_airports_near_route with max_leg_time_hours: For stops "within X hours flight" along a route
+- Use when user asks: "fuel stop within 3h", "where can I stop within 2 hours", "airport reachable in 3h"
+- MUST include speed via cruise_speed_kts or aircraft_type - if user doesn't specify, tool will ask
+- Examples:
+  - "Where can I stop within 3h flight from EGTF to LFMD with my SR22" → find_airports_near_route(from_location="EGTF", to_location="LFMD", max_leg_time_hours=3, aircraft_type="SR22")
+  - "Fuel stop within 2 hours at 140 knots between London and Nice" → find_airports_near_route(from_location="London", to_location="Nice", max_leg_time_hours=2, cruise_speed_kts=140, filters={"has_avgas": True})
+  - "Airport within 3h from EGTF on the way to LFMD" → find_airports_near_route(from_location="EGTF", to_location="LFMD", max_leg_time_hours=3)
+
 **Filter Extraction (for airport tools):**
 If the user mentions specific requirements (AVGAS, customs, runway length, country, etc.),
 extract them as a 'filters' object in the 'arguments' field.
@@ -96,6 +105,10 @@ When the user provides a SHORT response that seems to answer a previous question
 - If user provides an aircraft type after a distance query:
   → User: "How long from EGTF to LFMD" ... Assistant asks for speed ... User: "I fly a DA40"
   → calculate_flight_distance(from_location="EGTF", to_location="LFMD", aircraft_type="DA40")
+
+- If user provides speed after a time-constrained route search:
+  → User: "Where can I stop within 3h from EGTF to LFMD" ... Assistant asks for speed ... User: "120 knots"
+  → find_airports_near_route(from_location="EGTF", to_location="LFMD", max_leg_time_hours=3, cruise_speed_kts=120)
 
 Extract the original query context (locations, filters, etc.) from the conversation history and combine with the new information.
 

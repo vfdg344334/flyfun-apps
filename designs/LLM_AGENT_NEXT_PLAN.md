@@ -279,8 +279,8 @@ in a follow-up message, use the conversation history to:
 
 1. [x] `calculate_flight_distance` tool with aircraft lookup
 2. [x] Add `missing_info` pattern to tool responses (implemented in calculate_flight_distance)
-3. [ ] Update planner prompt for follow-up context awareness
-4. [ ] Update formatter to handle `missing_info` gracefully
-5. [ ] Add `max_leg_time_hours` filter to `find_airports_near_route`
+3. [x] Update planner prompt for follow-up context awareness
+4. [x] Update formatter to handle `missing_info` gracefully
+5. [x] Add `max_leg_time_hours` filter to `find_airports_near_route`
 6. [ ] Test conversational flows end-to-end
-7. [ ] Add unit tests for `missing_info` behavior
+7. [x] Add unit tests for `missing_info` behavior

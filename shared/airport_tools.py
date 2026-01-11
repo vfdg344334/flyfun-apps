@@ -742,6 +742,9 @@ def find_airports_near_route(
     include_large_airports: bool = False,
     priority_strategy: str = "persona_optimized",
     max_hours_notice: Optional[int] = None,  # Filter by notification requirements
+    max_leg_time_hours: Optional[float] = None,  # Filter by max flight time from departure
+    cruise_speed_kts: Optional[float] = None,  # Cruise speed for time-based filtering
+    aircraft_type: Optional[str] = None,  # Aircraft type for speed lookup
     **kwargs: Any,  # Accept _persona_id injected by ToolRunner
 ) -> Dict[str, Any]:
     """
@@ -760,6 +763,16 @@ def find_airports_near_route(
       - "between LFPO and EDDM" → from_location="LFPO", to_location="EDDM"
       - "border entry between EGTF and LFMD with less than 24h notice" → use with point_of_entry=True, max_hours_notice=24
 
+    **Time-based filtering:**
+    When user asks for stops "within X hours flight", use max_leg_time_hours with speed:
+    - max_leg_time_hours: Maximum flight time from departure (e.g., 3 for "within 3 hours")
+    - cruise_speed_kts: Cruise speed in knots (e.g., 140)
+    - aircraft_type: Aircraft type for speed lookup (e.g., "C172", "SR22")
+    - If time is specified but no speed/aircraft, tool returns missing_info asking for speed
+    - Examples:
+      - "stop within 3h flight with my C172" → max_leg_time_hours=3, aircraft_type="C172"
+      - "fuel stop within 2 hours at 140 knots" → max_leg_time_hours=2, cruise_speed_kts=140
+
     **Filters:**
     When user mentions fuel (e.g., AVGAS, Jet-A), customs/border crossing, runway type (paved/hard), IFR procedures, country, or notification requirements, you MUST include the corresponding filter:
     - has_avgas=True for AVGAS
@@ -775,6 +788,32 @@ def find_airports_near_route(
 
     Useful for finding fuel stops, alternates, or customs stops along a route.
     """
+    # Resolve cruise speed if time-based filtering requested
+    max_enroute_distance_nm: Optional[float] = None
+    resolved_speed: Optional[float] = None
+    speed_source: Optional[str] = None
+
+    if max_leg_time_hours is not None:
+        resolved_speed, speed_source = resolve_cruise_speed(cruise_speed_kts, aircraft_type)
+        if resolved_speed:
+            max_enroute_distance_nm = max_leg_time_hours * resolved_speed
+        else:
+            # Time constraint specified but no speed - return missing_info
+            return {
+                "found": True,
+                "count": 0,
+                "airports": [],
+                "missing_info": [{
+                    "key": "cruise_speed",
+                    "reason": f"Required to calculate {max_leg_time_hours}h flight range",
+                    "prompt": "What's your cruise speed or aircraft type?",
+                    "examples": ["120 knots", "Cessna 172", "SR22"],
+                }],
+                "filter_profile": {
+                    "max_leg_time_hours": max_leg_time_hours,
+                },
+            }
+
     # Try to resolve both locations (with fallback to nearest airport via geocoding)
     from_result = _find_nearest_airport_in_db(ctx, from_location)
     to_result = _find_nearest_airport_in_db(ctx, to_location)
@@ -783,14 +822,16 @@ def find_airports_near_route(
         return {
             "found": False,
             "error": f"Could not find or geocode departure location '{from_location}'. Please verify the ICAO code or location name.",
-            "pretty": f"Could not find airport or location '{from_location}'."
+            "pretty": f"Could not find airport or location '{from_location}'.",
+            "missing_info": [],
         }
 
     if not to_result:
         return {
             "found": False,
             "error": f"Could not find or geocode destination location '{to_location}'. Please verify the ICAO code or location name.",
-            "pretty": f"Could not find airport or location '{to_location}'."
+            "pretty": f"Could not find airport or location '{to_location}'.",
+            "missing_info": [],
         }
 
     from_airport = from_result["airport"]
@@ -863,6 +904,14 @@ def find_airports_near_route(
             summary["notification"] = result.notification_infos[airport.ident].to_summary_dict()
         airports.append(summary)
 
+    # Filter by max enroute distance (time-based constraint)
+    if max_enroute_distance_nm is not None:
+        airports = [
+            a for a in airports
+            if a.get("enroute_distance_nm") is not None
+            and a["enroute_distance_nm"] <= max_enroute_distance_nm
+        ]
+
     total_count = len(airports)
     airports_for_llm = airports[:max_results]
 
@@ -873,10 +922,18 @@ def find_airports_near_route(
         max_hours_notice,
     )
 
+    # Add time-based filter info if applicable
+    if max_leg_time_hours is not None and resolved_speed is not None:
+        filter_profile["max_leg_time_hours"] = max_leg_time_hours
+        filter_profile["cruise_speed_kts"] = resolved_speed
+        filter_profile["cruise_speed_source"] = speed_source
+        filter_profile["max_enroute_distance_nm"] = max_enroute_distance_nm
+
     return {
         "count": total_count,
         "airports": airports_for_llm,  # Limited for LLM
         "filter_profile": filter_profile,  # Filter settings for UI sync
+        "missing_info": [],  # No missing info on success
         "substitutions": {
             "from": {
                 "original": from_location,
@@ -1581,6 +1638,18 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         "max_hours_notice": {
                             "type": "integer",
                             "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h). Use when user asks for airports with specific notification constraints.",
+                        },
+                        "max_leg_time_hours": {
+                            "type": "number",
+                            "description": "Maximum flight time from departure in hours. Filters airports to only those reachable within this time. Requires cruise_speed_kts or aircraft_type. Use when user asks for stops 'within X hours flight'.",
+                        },
+                        "cruise_speed_kts": {
+                            "type": "number",
+                            "description": "Cruise speed in knots for time-based filtering. Use when user specifies speed (e.g., '140 knots', 'at 120 kts').",
+                        },
+                        "aircraft_type": {
+                            "type": "string",
+                            "description": "Aircraft type for speed lookup (e.g., 'C172', 'SR22', 'PA28'). Use when user mentions their aircraft type for time-based filtering.",
                         },
                     },
                     "required": ["from_location", "to_location"],
