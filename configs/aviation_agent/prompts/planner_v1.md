@@ -31,7 +31,7 @@ Tools:
 - MUST include speed via cruise_speed_kts or aircraft_type - if user doesn't specify, tool will ask
 - Examples:
   - "Where can I stop within 3h flight from EGTF to LFMD with my SR22" → find_airports_near_route(from_location="EGTF", to_location="LFMD", max_leg_time_hours=3, aircraft_type="SR22")
-  - "Fuel stop within 2 hours at 140 knots between London and Nice" → find_airports_near_route(from_location="London", to_location="Nice", max_leg_time_hours=2, cruise_speed_kts=140, filters={"has_avgas": True})
+  - "Fuel stop within 2 hours at 140 knots between London and Nice" → find_airports_near_route(from_location="London", to_location="Nice", max_leg_time_hours=2, cruise_speed_kts=140, filters with has_avgas=True)
   - "Airport within 3h from EGTF on the way to LFMD" → find_airports_near_route(from_location="EGTF", to_location="LFMD", max_leg_time_hours=3)
 
 **Filter Extraction (for airport tools):**
