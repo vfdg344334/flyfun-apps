@@ -216,7 +216,46 @@ See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuratio
 
 ---
 
-## 4. Testing Strategy
+## 4. Debugging & Investigation
+
+### Aviation Agent Debug CLI (`tools/avdbg.py`)
+
+A command-line tool for testing and debugging agent behavior without running the full web server:
+
+```bash
+# Basic usage - run a query and see the answer
+python tools/avdbg.py "How long to fly from EGTF to LFMD"
+
+# Verbose mode - see plan, tool result, tokens
+python tools/avdbg.py "Find airports near Paris with AVGAS" -v
+
+# See specific components
+python tools/avdbg.py "Where can I stop within 3h" --plan --tool-result
+
+# Test with different config
+python tools/avdbg.py "Compare VFR rules UK vs France" --config fast
+```
+
+**When to use avdbg.py:**
+- Investigating why the planner selected a wrong tool
+- Checking if tool results contain expected data (e.g., `missing_info`)
+- Verifying formatter output for specific scenarios
+- Testing new prompts or tool changes without restarting the server
+- Debugging filter extraction or argument parsing
+
+**Key options:**
+| Option | Description |
+|--------|-------------|
+| `-v, --verbose` | Show all debug info (plan, tool result, tokens, thinking) |
+| `--plan` | Show planner output (selected tool + arguments) |
+| `--tool-result` | Show raw tool execution result |
+| `--ui` | Show ui_payload sent to frontend |
+| `--json` | Output as JSON for programmatic analysis |
+| `--config NAME` | Use specific behavior config |
+
+---
+
+## 5. Testing Strategy
 
 ### Unit Tests
 
@@ -239,7 +278,7 @@ See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuratio
 
 ---
 
-## 5. Planner Schema & Tool Naming
+## 6. Planner Schema & Tool Naming
 
 ### Tool Selection
 
@@ -255,7 +294,7 @@ See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuratio
 
 ---
 
-## 6. Agent State
+## 7. Agent State
 
 ```python
 class AgentState(TypedDict, total=False):
@@ -298,7 +337,7 @@ class AgentState(TypedDict, total=False):
 
 ---
 
-## 7. UI Payload Building (`build_ui_payload()`)
+## 8. UI Payload Building (`build_ui_payload()`)
 
 ### Flattened Approach
 
@@ -346,7 +385,7 @@ def build_ui_payload(
 
 ---
 
-## 8. Tool Selection (Planner)
+## 9. Tool Selection (Planner)
 
 The planner LLM selects the appropriate tool based on the user query:
 
@@ -388,7 +427,7 @@ ONLY use tags from the available list (injected dynamically from rules.json).
 
 ---
 
-## 9. Formatter Node
+## 10. Formatter Node
 
 The formatter node produces both the final answer and the UI payload. It handles multiple scenarios with **strategy-based formatting**.
 
@@ -450,7 +489,7 @@ def formatter_node(state: AgentState) -> Dict[str, Any]:
 
 ---
 
-## 10. Configuration System
+## 11. Configuration System
 
 ### Behavior Configuration
 
@@ -487,7 +526,7 @@ See `designs/AVIATION_AGENT_CONFIGURATION_ANALYSIS.md` for complete configuratio
 
 ---
 
-## 11. FastAPI Endpoint
+## 12. FastAPI Endpoint
 
 ### Streaming Endpoint
 
@@ -532,7 +571,7 @@ The UI uses `ui_payload` to determine visualization:
 
 ---
 
-## 12. MCP Tool & Payload Catalog
+## 13. MCP Tool & Payload Catalog
 
 The shared code centralizes every MCP tool signature in `shared/airport_tools.py`. The agent treats that file as the single source of truth and uses `get_shared_tool_specs()` for planner validation.
 
@@ -563,7 +602,7 @@ See `designs/UI_FILTER_STATE_DESIGN.md` for complete tool-to-visualization mappi
 
 ---
 
-## 13. Design Benefits
+## 14. Design Benefits
 
 ### ✔ Stable for the UI
 Only `kind`, `tool`, `departure`, `icao`, etc. matter at the top level. UI structure rarely changes.
@@ -599,7 +638,7 @@ if (ui_payload.tool === 'get_notification_for_airport') {
 
 ---
 
-## 14. Key Design Principles
+## 15. Key Design Principles
 
 ### Tools Return DATA, Formatters Do SYNTHESIS
 - **Critical principle**: Tools should NEVER do LLM synthesis or formatting
@@ -681,7 +720,7 @@ The agent includes a curated lookup table (`shared/aircraft_speeds.py`) for comm
 
 ---
 
-## 15. Additional Features
+## 16. Additional Features
 
 ### Next Query Prediction
 
@@ -707,11 +746,11 @@ Retrieved rules can be reranked for better relevance:
 
 ---
 
-## 16. Architecture Quality & Best Practices
+## 17. Architecture Quality & Best Practices
 
 This section highlights the excellent architectural patterns and best practices implemented in the aviation agent, which serve as a reference for building robust LangGraph applications.
 
-### 16.1 State Management Excellence
+### 17.1 State Management Excellence
 
 **Proper Use of LangGraph State Reducers:**
 ```python
@@ -737,7 +776,7 @@ class AgentState(TypedDict, total=False):
 - Prediction state: `suggested_queries`
 - Each node owns specific state fields
 
-### 16.2 RAG Implementation (Hybrid RAG Pattern)
+### 17.2 RAG Implementation (Hybrid RAG Pattern)
 
 **Query Reformulation via `QueryReformulator` Class:**
 ```python
@@ -789,7 +828,7 @@ retrieval_config = RetrievalConfig(
 - `rerank_candidates_multiplier` controls how many candidates to rerank
 - Balance between precision and recall
 
-### 16.3 Structured Output (Best Practices)
+### 17.3 Structured Output (Best Practices)
 
 **Using `with_structured_output(method="function_calling")`:**
 ```python
@@ -825,7 +864,7 @@ def _validate_plan(plan: AviationPlan, tools: Sequence[AviationTool]) -> None:
 - Prevents hallucinated tool names
 - Clear error messages for debugging
 
-### 16.4 Streaming (LangGraph Best Practice)
+### 17.4 Streaming (LangGraph Best Practice)
 
 **Using `astream_events(version="v2")`:**
 ```python
@@ -871,7 +910,7 @@ yield {
 - UI can easily distinguish event types
 - Compatible with EventSource API
 
-### 16.5 Configuration Management Excellence
+### 17.5 Configuration Management Excellence
 
 **Hierarchical Pydantic Models for Type Safety:**
 ```python
@@ -931,7 +970,7 @@ def build_planner_runnable(
 - No environment variable dependencies in tests
 - Clear boundaries between configuration and execution
 
-### 16.6 Error Handling Excellence
+### 17.6 Error Handling Excellence
 
 **Try/Except in All Nodes with Graceful Fallbacks:**
 ```python
@@ -972,7 +1011,7 @@ def tool_node(state: AgentState) -> Dict[str, Any]:
 - User always gets a response (even if it's an error message)
 - Logging captures failures for debugging
 
-### 16.7 Testing Excellence
+### 17.7 Testing Excellence
 
 **Comprehensive Test Suite:**
 ```
@@ -1018,7 +1057,7 @@ def test_ui_payload_structure():
 
 ---
 
-## 17. Comparison System
+## 18. Comparison System
 
 The comparison system enables semantic comparison of aviation rules across countries using embedding-based similarity detection.
 
