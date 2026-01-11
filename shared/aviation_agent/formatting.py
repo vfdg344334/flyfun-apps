@@ -118,7 +118,12 @@ def build_ui_payload(
     }
 
     # Add kind-specific metadata
-    if plan.selected_tool in {"search_airports", "find_airports_near_route", "find_airports_near_location"}:
+    if plan.selected_tool in {
+        "search_airports",
+        "find_airports_near_route",
+        "find_airports_near_location",
+        "calculate_flight_distance",
+    }:
         base_payload["departure"] = (
             plan.arguments.get("from_location") or
             plan.arguments.get("from_icao") or
@@ -189,22 +194,27 @@ def build_ui_payload(
 
 def _determine_kind(tool_name: str) -> str | None:
     """Determine UI payload kind based on tool name."""
-    if tool_name in {"search_airports", "find_airports_near_route", "find_airports_near_location"}:
+    if tool_name in {
+        "search_airports",
+        "find_airports_near_route",
+        "find_airports_near_location",
+        "calculate_flight_distance",
+    }:
         return "route"
-    
+
     if tool_name in {
         "get_airport_details",
         "get_notification_for_airport",
     }:
         return "airport"
-    
+
     if tool_name in {
         "answer_rules_question",
         "browse_rules",
         "compare_rules_between_countries",
     }:
         return "rules"
-    
+
     return None
 
 
