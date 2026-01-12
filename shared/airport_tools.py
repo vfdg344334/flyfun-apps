@@ -1236,21 +1236,43 @@ def plan_multi_leg_route(
     
     # Extract thread_id from kwargs (injected by ToolRunner)
     thread_id = kwargs.pop("_thread_id", None)
+    print(f"[plan_multi_leg_route] thread_id={thread_id}, kwargs={list(kwargs.keys())}", file=sys.stderr)
     logger.info(f"[plan_multi_leg_route] thread_id={thread_id}")
+
     
     # Get or create route state from server-side storage
     route_state_storage = get_route_state_storage()
     route_state = route_state_storage.get(thread_id) if thread_id else None
+    print(f"[plan_multi_leg_route] route_state lookup: thread_id={thread_id}, found={route_state is not None}", file=sys.stderr)
     
     # If we have a route state and it matches this route, use it
     if route_state:
+        print(f"[plan_multi_leg_route] Found existing route state: {route_state.to_dict()}", file=sys.stderr)
         logger.info(f"[plan_multi_leg_route] Found existing route state: {route_state.to_dict()}")
+
         original_num_stops = route_state.original_num_stops
         confirmed_stops_list = route_state.confirmed_stops.copy()
         confirmed_stops_count = route_state.confirmed_stops_count
         original_departure_icao = route_state.original_departure
         # Ignore LLM-passed num_stops and use remaining from state
         num_stops = route_state.remaining_stops
+        
+        # CRITICAL: Override from_location if we have confirmed stops
+        # LLM may incorrectly pass original departure, but we should continue from last confirmed stop
+        if confirmed_stops_list:
+            last_confirmed = confirmed_stops_list[-1]
+            if from_location != last_confirmed:
+                print(f"[plan_multi_leg_route] OVERRIDE: from_location={from_location} -> {last_confirmed} (last confirmed stop)", file=sys.stderr)
+                from_location = last_confirmed
+                # Update the airport lookup
+                from_result = _find_nearest_airport_in_db(ctx, from_location)
+            
+            # Also override auto_plan - if user is in manual selection flow with confirmed stops,
+            # LLM should not trigger auto mode (LLM error to pass auto_plan=True when selecting a stop)
+            if auto_plan:
+                print(f"[plan_multi_leg_route] OVERRIDE: auto_plan={auto_plan} -> False (manual selection mode, has confirmed stops)", file=sys.stderr)
+                auto_plan = False
+
     else:
         # No existing state - this is a new route request or continuation token fallback
         original_num_stops = num_stops  # Track original request
@@ -1259,18 +1281,22 @@ def plan_multi_leg_route(
         
         # Try continuation_token as fallback (for backward compatibility)
         if continuation_token:
+
             try:
                 token_data = json_module.loads(base64.b64decode(continuation_token).decode('utf-8'))
                 original_num_stops = token_data.get("original_num_stops", num_stops)
                 confirmed_stops_count = token_data.get("confirmed_stops_count", confirmed_stops_count)
-                confirmed_stops_list = token_data.get("confirmed_stops", [])
+                # Handle LLM typos in key names (e.g., "confirmedt_stops" instead of "confirmed_stops")
+                confirmed_stops_list = token_data.get("confirmed_stops") or token_data.get("confirmedt_stops") or []
                 original_departure_icao = token_data.get("original_departure")
                 remaining_from_token = original_num_stops - confirmed_stops_count
                 if num_stops is None or num_stops > remaining_from_token:
                     num_stops = remaining_from_token
+                print(f"[continuation_token] Decoded: original={original_num_stops}, confirmed={confirmed_stops_count}, stops={confirmed_stops_list}, departure={original_departure_icao}", file=sys.stderr)
                 logger.info(f"[continuation_token] Decoded: original={original_num_stops}, confirmed={confirmed_stops_count}, stops={confirmed_stops_list}, departure={original_departure_icao}")
             except Exception as e:
                 logger.warning(f"Failed to decode continuation_token: {e}")
+
     
     def _create_continuation_token(orig_stops: int, confirmed: int, confirmed_stops: list = None, original_departure: str = None) -> str:
         """Create a base64-encoded continuation token with full route state."""
@@ -1324,8 +1350,24 @@ def plan_multi_leg_route(
     from_airport = from_result["airport"]
     to_airport = to_result["airport"]
 
+    # Create route state on INITIAL request (not on stop selection)
+    # This ensures original_num_stops is captured before LLM can corrupt it
+    if thread_id and not route_state and not selected_stop and num_stops and num_stops > 0:
+        print(f"[plan_multi_leg_route] Creating new route state: {from_airport.ident} -> {to_airport.ident}, {num_stops} stops", file=sys.stderr)
+        route_state = route_state_storage.create(
+            thread_id,
+            from_airport.ident,
+            to_airport.ident,
+            num_stops
+        )
+        original_num_stops = num_stops
+        original_departure_icao = from_airport.ident
+
     # If a stop was selected, continue planning from that stop
+    # BUT: Skip if selected_stop is already in confirmed_stops (LLM error - passing same stop again)
     if selected_stop:
+        print(f"[plan_multi_leg_route] selected_stop={selected_stop}, confirmed_stops_list={confirmed_stops_list}, skip={selected_stop in confirmed_stops_list}", file=sys.stderr)
+    if selected_stop and selected_stop not in confirmed_stops_list:
         selected_result = _find_nearest_airport_in_db(ctx, selected_stop)
         if not selected_result:
             return {
