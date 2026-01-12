@@ -282,6 +282,8 @@ PAT_VICINITY = re.compile(
     \bwithin\s+\d+\s*(km|nm|mi|miles)\b
     |
     \b\d+\s*(km|nm|mi|miles)\s*(fm|from)\s+(?:the\s+)?(ad|aerodrome|airport|airfield)\b
+    |
+    \bIn\s+[A-Z][a-z]
     """,
     re.IGNORECASE | re.VERBOSE,
 )
