@@ -300,7 +300,7 @@ def run_autorouter(prefixes: list[str]) -> None:
     logger.info(f"Processed: {len(airports)} airports")
 
 
-def update_notifications(prefixes: list[str] = None) -> None:
+def update_notifications(prefixes: list[str] = None, full: bool = False) -> None:
     """Update notification requirements from AIP data.
 
     Extracts structured notification rules (PPR, customs, immigration) from
@@ -309,6 +309,8 @@ def update_notifications(prefixes: list[str] = None) -> None:
     Args:
         prefixes: Optional list of ICAO prefixes to process (e.g., ["LF", "EG"]).
                   If None, processes all airports with AIP data.
+        full: If True, do full rebuild. If False (default), use --changed mode
+              to only process airports where AIP text changed.
     """
     log_section("Updating GA Notification Requirements")
 
@@ -319,18 +321,18 @@ def update_notifications(prefixes: list[str] = None) -> None:
         "python", "tools/build_ga_notifications.py",
         "--airports-db", str(AIRPORTS_DB),
         "--output", str(GA_NOTIFICATIONS_DB),
-        "--incremental",
     ]
+
+    # Use --changed mode by default (smarter than --incremental)
+    # Only use full mode when explicitly requested
+    if not full:
+        args.append("--changed")
 
     # Add prefix filter if specified
     if prefixes:
-        # Process each prefix separately
-        for prefix in prefixes:
-            prefix_args = args + ["--prefix", prefix]
-            run_command(prefix_args)
-    else:
-        run_command(args)
+        args.extend(["--prefixes", ",".join(prefixes)])
 
+    run_command(args)
     logger.info("Notification requirements update complete")
 
 
@@ -347,7 +349,7 @@ def initial_build() -> None:
     update_aip_data()
 
     # Step 2: Build notification requirements (factual extraction)
-    update_notifications()
+    update_notifications(full=True)
 
     # Step 3: Build GA friendliness (subjective scoring)
     update_reviews()
