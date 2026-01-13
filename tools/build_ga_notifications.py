@@ -12,10 +12,23 @@ For subjective scoring (hassle scores), see build_ga_friendliness.py which write
 to ga_persona.db.
 
 Usage:
-    python tools/build_ga_notifications.py --airports-db data/airports.db --output data/ga_notifications.db
-    python tools/build_ga_notifications.py --prefix LF --limit 10  # Test with French airports
-    python tools/build_ga_notifications.py --icaos LFRG,LFPT,EGLL  # Specific airports
-    python tools/build_ga_notifications.py --incremental           # Skip already-processed
+    # Full rebuild (all airports with AIP data)
+    python tools/build_ga_notifications.py
+
+    # Filter by country prefixes
+    python tools/build_ga_notifications.py --prefixes LF,EG,ED
+
+    # Filter by specific airports
+    python tools/build_ga_notifications.py --icaos LFRG,LFPT,EGLL
+
+    # Incremental: skip airports already in output DB
+    python tools/build_ga_notifications.py --incremental
+
+    # Changed-only: only process airports where AIP text changed
+    python tools/build_ga_notifications.py --changed
+
+    # Force rebuild specific airports (even if unchanged)
+    python tools/build_ga_notifications.py --icaos LFRG --force
 
 Configuration:
     Uses configs/ga_notification_agent/default.json for behavior settings.
@@ -70,9 +83,14 @@ def parse_args() -> argparse.Namespace:
     # Filter options
     filter_group = parser.add_argument_group("Filter options")
     filter_group.add_argument(
+        "--prefixes",
+        type=str,
+        help="Comma-separated ICAO prefixes (e.g., LF,EG,ED for France, UK, Germany)",
+    )
+    filter_group.add_argument(
         "--prefix",
         type=str,
-        help="ICAO prefix filter (e.g., LF for France, EG for UK)",
+        help="Single ICAO prefix filter (e.g., LF for France) - deprecated, use --prefixes",
     )
     filter_group.add_argument(
         "--icaos",
@@ -90,7 +108,17 @@ def parse_args() -> argparse.Namespace:
     proc_group.add_argument(
         "--incremental", "-i",
         action="store_true",
-        help="Skip already-processed airports",
+        help="Skip airports already in output DB (fast, but misses AIP updates)",
+    )
+    proc_group.add_argument(
+        "--changed", "-c",
+        action="store_true",
+        help="Only process airports where AIP text changed since last run",
+    )
+    proc_group.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Force reprocessing even if data unchanged (use with --icaos)",
     )
     proc_group.add_argument(
         "--delay",
@@ -150,6 +178,20 @@ def main() -> int:
     if args.icaos:
         icaos = [icao.strip().upper() for icao in args.icaos.split(",")]
 
+    # Parse prefixes (support both --prefixes and deprecated --prefix)
+    prefixes = None
+    if args.prefixes:
+        prefixes = [p.strip().upper() for p in args.prefixes.split(",")]
+    elif args.prefix:
+        prefixes = [args.prefix.strip().upper()]
+
+    # Validate conflicting options
+    if args.incremental and args.changed:
+        logger.error("Cannot use both --incremental and --changed")
+        return 1
+    if args.force and not icaos:
+        logger.warning("--force has no effect without --icaos")
+
     # Load config
     config = get_notification_config(args.config)
 
@@ -159,18 +201,27 @@ def main() -> int:
     if args.llm_model:
         config.llm.model = args.llm_model
 
+    # Determine processing mode
+    if args.force:
+        mode = "force"
+    elif args.changed:
+        mode = "changed"
+    elif args.incremental:
+        mode = "incremental"
+    else:
+        mode = "full"
+
     logger.info(f"Source database: {args.airports_db}")
     logger.info(f"Output database: {args.output}")
     logger.info(f"Config: {args.config}")
     logger.info(f"LLM fallback: {config.parsing.use_llm_fallback}")
-    if args.prefix:
-        logger.info(f"ICAO prefix filter: {args.prefix}")
+    logger.info(f"Mode: {mode}")
+    if prefixes:
+        logger.info(f"ICAO prefixes: {prefixes}")
     if icaos:
         logger.info(f"Specific ICAOs: {icaos}")
     if args.limit:
         logger.info(f"Limit: {args.limit}")
-    if args.incremental:
-        logger.info("Mode: Incremental (skip existing)")
 
     if args.dry_run:
         logger.info("DRY RUN MODE - no database writes")
@@ -186,9 +237,10 @@ def main() -> int:
             placeholders = ",".join("?" for _ in icaos)
             query = f"SELECT COUNT(*) FROM aip_entries WHERE std_field_id = 302 AND value IS NOT NULL AND airport_icao IN ({placeholders})"
             params.extend(icaos)
-        elif args.prefix:
-            query += " AND airport_icao LIKE ?"
-            params.append(f"{args.prefix}%")
+        elif prefixes:
+            prefix_conditions = " OR ".join("airport_icao LIKE ?" for _ in prefixes)
+            query += f" AND ({prefix_conditions})"
+            params.extend(f"{p}%" for p in prefixes)
 
         cursor = conn.execute(query, params)
         count = cursor.fetchone()[0]
@@ -210,11 +262,11 @@ def main() -> int:
     try:
         stats = processor.process_airports(
             airports_db_path=args.airports_db,
-            icao_prefix=args.prefix,
+            icao_prefixes=prefixes,
             icaos=icaos,
             limit=args.limit,
             delay=args.delay,
-            incremental=args.incremental,
+            mode=mode,
         )
 
         # Print summary
@@ -225,6 +277,8 @@ def main() -> int:
         print(f"Successful: {stats['success']}")
         print(f"Failed: {stats['failed']}")
         print(f"Skipped (no rules): {stats['skipped']}")
+        if stats.get('unchanged'):
+            print(f"Unchanged (skipped): {stats['unchanged']}")
         print(f"Output: {args.output}")
 
         return 0 if stats['failed'] == 0 else 1

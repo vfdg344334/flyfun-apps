@@ -82,6 +82,14 @@ class NotificationBatchProcessor:
                 UNIQUE(icao, rule_type)
             )
         ''')
+
+        # Schema migration: add extraction_method if missing (old schema had llm_response)
+        cursor = conn.execute("PRAGMA table_info(ga_notification_requirements)")
+        columns = {row[1] for row in cursor}
+        if "extraction_method" not in columns:
+            conn.execute("ALTER TABLE ga_notification_requirements ADD COLUMN extraction_method TEXT")
+            logger.info("Migrated schema: added extraction_method column")
+
         conn.commit()
         conn.close()
 
@@ -185,30 +193,45 @@ class NotificationBatchProcessor:
         conn.commit()
         conn.close()
 
+    def _get_existing_data(self) -> Dict[str, str]:
+        """Get existing ICAO -> raw_text mapping from output database."""
+        if not self.output_db_path.exists():
+            return {}
+
+        conn = sqlite3.connect(self.output_db_path)
+        cursor = conn.execute("SELECT icao, raw_text FROM ga_notification_requirements")
+        existing = {row[0]: row[1] for row in cursor}
+        conn.close()
+        return existing
+
     def process_airports(
         self,
         airports_db_path: Path,
-        icao_prefix: Optional[str] = None,
+        icao_prefixes: Optional[List[str]] = None,
         icaos: Optional[List[str]] = None,
         limit: Optional[int] = None,
         delay: float = 0.5,
-        incremental: bool = False,
+        mode: str = "full",
     ) -> Dict[str, Any]:
         """
         Process airports from source database.
 
         Args:
             airports_db_path: Path to airports.db
-            icao_prefix: Filter by ICAO prefix (e.g., "LF" for France)
-            icaos: Specific ICAOs to process (overrides prefix)
+            icao_prefixes: Filter by ICAO prefixes (e.g., ["LF", "EG"] for France, UK)
+            icaos: Specific ICAOs to process (overrides prefixes)
             limit: Max airports to process
             delay: Delay between LLM calls (seconds)
-            incremental: Skip already-processed airports
+            mode: Processing mode:
+                - "full": Process all matching airports (default)
+                - "incremental": Skip airports already in output DB
+                - "changed": Only process airports where AIP text changed
+                - "force": Process all, even if unchanged (same as full)
 
         Returns:
             Dict with processing statistics
         """
-        # Get airports to process
+        # Get airports to process from source
         conn = sqlite3.connect(airports_db_path)
         conn.row_factory = sqlite3.Row
 
@@ -219,9 +242,10 @@ class NotificationBatchProcessor:
             placeholders = ",".join("?" for _ in icaos)
             query += f" AND airport_icao IN ({placeholders})"
             params.extend(icaos)
-        elif icao_prefix:
-            query += " AND airport_icao LIKE ?"
-            params.append(f"{icao_prefix}%")
+        elif icao_prefixes:
+            prefix_conditions = " OR ".join("airport_icao LIKE ?" for _ in icao_prefixes)
+            query += f" AND ({prefix_conditions})"
+            params.extend(f"{p}%" for p in icao_prefixes)
 
         query += " ORDER BY airport_icao"
 
@@ -233,15 +257,34 @@ class NotificationBatchProcessor:
         airports = [(row["airport_icao"], row["value"]) for row in cursor]
         conn.close()
 
-        # If incremental, filter out already-processed
-        if incremental:
-            conn = sqlite3.connect(self.output_db_path)
-            cursor = conn.execute("SELECT icao FROM ga_notification_requirements")
-            existing = {row[0] for row in cursor}
-            conn.close()
-            original_count = len(airports)
+        original_count = len(airports)
+        unchanged_count = 0
+
+        # Apply mode filtering
+        if mode == "incremental":
+            # Skip airports that already exist in output DB
+            existing = self._get_existing_data()
             airports = [(icao, text) for icao, text in airports if icao not in existing]
             logger.info(f"Incremental mode: {original_count} → {len(airports)} airports (skipped {original_count - len(airports)} existing)")
+
+        elif mode == "changed":
+            # Only process airports where AIP text changed
+            existing = self._get_existing_data()
+            changed_airports = []
+            for icao, text in airports:
+                if icao not in existing:
+                    # New airport
+                    changed_airports.append((icao, text))
+                elif existing[icao] != text:
+                    # Text changed
+                    changed_airports.append((icao, text))
+                    logger.debug(f"{icao}: AIP text changed, will reprocess")
+                else:
+                    unchanged_count += 1
+            airports = changed_airports
+            logger.info(f"Changed mode: {original_count} → {len(airports)} airports ({unchanged_count} unchanged, skipped)")
+
+        # mode == "full" or "force": process all
 
         logger.info(f"Processing {len(airports)} airports...")
 
@@ -282,4 +325,5 @@ class NotificationBatchProcessor:
             "success": success,
             "failed": failed,
             "skipped": skipped,
+            "unchanged": unchanged_count,
         }
