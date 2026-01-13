@@ -41,6 +41,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 # Database paths
 AIRPORTS_DB = Path(os.environ.get("AIRPORTS_DB", PROJECT_ROOT / "data" / "airports.db"))
 GA_PERSONA_DB = PROJECT_ROOT / "data" / "ga_persona.db"
+GA_NOTIFICATIONS_DB = PROJECT_ROOT / "data" / "ga_notifications.db"
 WORLDAIRPORTS_DB = PROJECT_ROOT / "data" / "world_airports.db"
 
 # Airfield.directory export (for reviews) - intermediate files in tmp/
@@ -299,6 +300,40 @@ def run_autorouter(prefixes: list[str]) -> None:
     logger.info(f"Processed: {len(airports)} airports")
 
 
+def update_notifications(prefixes: list[str] = None) -> None:
+    """Update notification requirements from AIP data.
+
+    Extracts structured notification rules (PPR, customs, immigration) from
+    AIP text and stores in ga_notifications.db.
+
+    Args:
+        prefixes: Optional list of ICAO prefixes to process (e.g., ["LF", "EG"]).
+                  If None, processes all airports with AIP data.
+    """
+    log_section("Updating GA Notification Requirements")
+
+    if not AIRPORTS_DB.exists():
+        raise RuntimeError(f"airports.db not found: {AIRPORTS_DB}")
+
+    args = [
+        "python", "tools/build_ga_notifications.py",
+        "--airports-db", str(AIRPORTS_DB),
+        "--output", str(GA_NOTIFICATIONS_DB),
+        "--incremental",
+    ]
+
+    # Add prefix filter if specified
+    if prefixes:
+        # Process each prefix separately
+        for prefix in prefixes:
+            prefix_args = args + ["--prefix", prefix]
+            run_command(prefix_args)
+    else:
+        run_command(args)
+
+    logger.info("Notification requirements update complete")
+
+
 def initial_build() -> None:
     """Full initial build from scratch."""
     log_section("INITIAL BUILD - Full Setup")
@@ -306,16 +341,21 @@ def initial_build() -> None:
     logger.info("This will build all data from scratch")
     logger.info("  - AIP data from France, UK, Norway web sources")
     logger.info("  - GA friendliness database")
+    logger.info("  - GA notification requirements")
 
     # Step 1: Build AIP data
     update_aip_data()
 
-    # Step 2: Build GA friendliness
+    # Step 2: Build notification requirements (factual extraction)
+    update_notifications()
+
+    # Step 3: Build GA friendliness (subjective scoring)
     update_reviews()
 
     log_section("INITIAL BUILD COMPLETE")
     logger.info(f"Databases created:")
     logger.info(f"  - {AIRPORTS_DB}")
+    logger.info(f"  - {GA_NOTIFICATIONS_DB}")
     logger.info(f"  - {GA_PERSONA_DB}")
 
 
@@ -330,16 +370,19 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Modes:
-  initial      Full build from scratch (first time setup)
-  aip          Update AIP data only (run on AIRAC cycle, ~28 days)
-  reviews      Update GA friendliness/reviews (run weekly/monthly)
-  aip-fields   Fast AIP-only update to ga_persona.db
-  autorouter   Run autorouter on airports with AIP for given country prefixes
+  initial       Full build from scratch (first time setup)
+  aip           Update AIP data only (run on AIRAC cycle, ~28 days)
+  reviews       Update GA friendliness/reviews (run weekly/monthly)
+  notifications Update notification requirements from AIP (run after aip)
+  aip-fields    Fast AIP-only update to ga_persona.db
+  autorouter    Run autorouter on airports with AIP for given country prefixes
 
 Examples:
   python tools/data_update.py initial
   python tools/data_update.py aip
   python tools/data_update.py reviews
+  python tools/data_update.py notifications
+  python tools/data_update.py notifications LF EG  # French and UK airports only
   python tools/data_update.py aip-fields
   python tools/data_update.py autorouter ED
   python tools/data_update.py autorouter ED LO EB LE
@@ -348,13 +391,13 @@ Examples:
 
     parser.add_argument(
         "mode",
-        choices=["initial", "aip", "reviews", "aip-fields", "autorouter"],
+        choices=["initial", "aip", "reviews", "notifications", "aip-fields", "autorouter"],
         help="Update mode to run",
     )
     parser.add_argument(
         "args",
         nargs="*",
-        help="Additional arguments (e.g., ICAO prefixes for autorouter)",
+        help="Additional arguments (e.g., ICAO prefixes for autorouter/notifications)",
     )
 
     args = parser.parse_args()
@@ -368,8 +411,14 @@ Examples:
         # Also sync AIP fields to ga_persona.db
         if GA_PERSONA_DB.exists():
             update_aip_fields_only()
+        # Also update notifications if database exists
+        if GA_NOTIFICATIONS_DB.exists():
+            update_notifications()
     elif args.mode == "reviews":
         update_reviews()
+    elif args.mode == "notifications":
+        # Optional prefixes for filtering (e.g., "LF" for France)
+        update_notifications(args.args if args.args else None)
     elif args.mode == "aip-fields":
         update_aip_fields_only()
     elif args.mode == "autorouter":

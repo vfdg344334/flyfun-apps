@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""
+CLI tool for building GA notification requirements database.
+
+Extracts structured notification rules from AIP customs/immigration text
+and stores them in ga_notifications.db.
+
+This tool produces FACTUAL data extracted from AIP:
+- ga_notifications.db: Detailed, structured notification rules (immutable truth)
+
+For subjective scoring (hassle scores), see build_ga_friendliness.py which writes
+to ga_persona.db.
+
+Usage:
+    python tools/build_ga_notifications.py --airports-db data/airports.db --output data/ga_notifications.db
+    python tools/build_ga_notifications.py --prefix LF --limit 10  # Test with French airports
+    python tools/build_ga_notifications.py --icaos LFRG,LFPT,EGLL  # Specific airports
+    python tools/build_ga_notifications.py --incremental           # Skip already-processed
+
+Configuration:
+    Uses configs/ga_notification_agent/default.json for behavior settings.
+    Set OPENAI_API_KEY environment variable for LLM fallback on complex rules.
+"""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.ga_notification_agent import NotificationParser
+from shared.ga_notification_agent.batch_processor import NotificationBatchProcessor
+from shared.ga_notification_agent.config import get_notification_config
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Build GA notification requirements database from AIP data",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    # Source options
+    source_group = parser.add_argument_group("Source options")
+    source_group.add_argument(
+        "--airports-db",
+        type=Path,
+        default=Path("data/airports.db"),
+        help="Path to airports.db source database (default: data/airports.db)",
+    )
+
+    # Output options
+    output_group = parser.add_argument_group("Output options")
+    output_group.add_argument(
+        "--output", "-o",
+        type=Path,
+        default=Path("data/ga_notifications.db"),
+        help="Output database path (default: data/ga_notifications.db)",
+    )
+
+    # Filter options
+    filter_group = parser.add_argument_group("Filter options")
+    filter_group.add_argument(
+        "--prefix",
+        type=str,
+        help="ICAO prefix filter (e.g., LF for France, EG for UK)",
+    )
+    filter_group.add_argument(
+        "--icaos",
+        type=str,
+        help="Comma-separated list of specific ICAOs to process",
+    )
+    filter_group.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum number of airports to process",
+    )
+
+    # Processing options
+    proc_group = parser.add_argument_group("Processing options")
+    proc_group.add_argument(
+        "--incremental", "-i",
+        action="store_true",
+        help="Skip already-processed airports",
+    )
+    proc_group.add_argument(
+        "--delay",
+        type=float,
+        default=0.5,
+        help="Delay between processing (seconds, default: 0.5)",
+    )
+    proc_group.add_argument(
+        "--config",
+        type=str,
+        default="default",
+        help="Config name to use (default: default)",
+    )
+
+    # LLM options
+    llm_group = parser.add_argument_group("LLM options")
+    llm_group.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Disable LLM fallback (regex-only parsing)",
+    )
+    llm_group.add_argument(
+        "--llm-model",
+        type=str,
+        help="Override LLM model from config",
+    )
+
+    # Output options
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Verbose output",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be processed without writing to database",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Main entry point."""
+    args = parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # Validate source database
+    if not args.airports_db.exists():
+        logger.error(f"Airports database not found: {args.airports_db}")
+        return 1
+
+    # Parse ICAOs if specified
+    icaos = None
+    if args.icaos:
+        icaos = [icao.strip().upper() for icao in args.icaos.split(",")]
+
+    # Load config
+    config = get_notification_config(args.config)
+
+    # Override LLM settings if requested
+    if args.no_llm:
+        config.parsing.use_llm_fallback = False
+    if args.llm_model:
+        config.llm.model = args.llm_model
+
+    logger.info(f"Source database: {args.airports_db}")
+    logger.info(f"Output database: {args.output}")
+    logger.info(f"Config: {args.config}")
+    logger.info(f"LLM fallback: {config.parsing.use_llm_fallback}")
+    if args.prefix:
+        logger.info(f"ICAO prefix filter: {args.prefix}")
+    if icaos:
+        logger.info(f"Specific ICAOs: {icaos}")
+    if args.limit:
+        logger.info(f"Limit: {args.limit}")
+    if args.incremental:
+        logger.info("Mode: Incremental (skip existing)")
+
+    if args.dry_run:
+        logger.info("DRY RUN MODE - no database writes")
+        # For dry run, just count what would be processed
+        import sqlite3
+        conn = sqlite3.connect(args.airports_db)
+        conn.row_factory = sqlite3.Row
+
+        query = "SELECT COUNT(*) FROM aip_entries WHERE std_field_id = 302 AND value IS NOT NULL"
+        params = []
+
+        if icaos:
+            placeholders = ",".join("?" for _ in icaos)
+            query = f"SELECT COUNT(*) FROM aip_entries WHERE std_field_id = 302 AND value IS NOT NULL AND airport_icao IN ({placeholders})"
+            params.extend(icaos)
+        elif args.prefix:
+            query += " AND airport_icao LIKE ?"
+            params.append(f"{args.prefix}%")
+
+        cursor = conn.execute(query, params)
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        logger.info(f"Would process {count} airports")
+        return 0
+
+    # Ensure output directory exists
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create processor
+    processor = NotificationBatchProcessor(
+        output_db_path=args.output,
+        config=config,
+    )
+
+    # Process airports
+    try:
+        stats = processor.process_airports(
+            airports_db_path=args.airports_db,
+            icao_prefix=args.prefix,
+            icaos=icaos,
+            limit=args.limit,
+            delay=args.delay,
+            incremental=args.incremental,
+        )
+
+        # Print summary
+        print("\n" + "=" * 60)
+        print("BUILD SUMMARY")
+        print("=" * 60)
+        print(f"Total airports: {stats['total']}")
+        print(f"Successful: {stats['success']}")
+        print(f"Failed: {stats['failed']}")
+        print(f"Skipped (no rules): {stats['skipped']}")
+        print(f"Output: {args.output}")
+
+        return 0 if stats['failed'] == 0 else 1
+
+    except Exception as e:
+        logger.exception(f"Build failed: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

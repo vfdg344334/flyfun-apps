@@ -1,0 +1,186 @@
+[
+  {
+    "_comment": "=== Simple H24 Cases ==="
+  },
+  {
+    "icao": "LFPG",
+    "text": "H24",
+    "expected": {
+      "notification_type": "h24",
+      "hours_notice": null
+    },
+    "description": "Simple H24 - always available"
+  },
+  {
+    "icao": "EGLL",
+    "text": "Customs H24. Immigration H24.",
+    "expected": {
+      "notification_type": "h24",
+      "hours_notice": null
+    },
+    "description": "H24 with explicit customs/immigration"
+  },
+
+  {
+    "_comment": "=== On Request Cases ==="
+  },
+  {
+    "icao": "LFAT",
+    "text": "O/R",
+    "expected": {
+      "notification_type": "on_request",
+      "hours_notice": null
+    },
+    "description": "Simple O/R - on request"
+  },
+  {
+    "icao": "LFRG",
+    "text": "Sur demande",
+    "expected": {
+      "notification_type": "on_request",
+      "hours_notice": null
+    },
+    "description": "French 'sur demande' = on request"
+  },
+  {
+    "icao": "EGTF",
+    "text": "By prior arrangement",
+    "expected": {
+      "notification_type": "on_request",
+      "hours_notice": null
+    },
+    "description": "By prior arrangement = on request"
+  },
+
+  {
+    "_comment": "=== Simple Hours Notice ==="
+  },
+  {
+    "icao": "LFPT",
+    "text": "PPR 24 HR",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 24
+    },
+    "description": "Simple PPR 24 hours"
+  },
+  {
+    "icao": "LFRK",
+    "text": "PN 48 HR",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 48
+    },
+    "description": "Prior notice 48 hours"
+  },
+  {
+    "icao": "LFMN",
+    "text": "24 hours advance notice required",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 24
+    },
+    "description": "Natural language hours notice"
+  },
+
+  {
+    "_comment": "=== As AD Hours ==="
+  },
+  {
+    "icao": "EGBJ",
+    "text": "As AD hours",
+    "expected": {
+      "notification_type": "as_ad_hours",
+      "hours_notice": null
+    },
+    "description": "Available during aerodrome hours"
+  },
+  {
+    "icao": "EGTK",
+    "text": "AD OPR HR",
+    "expected": {
+      "notification_type": "as_ad_hours",
+      "hours_notice": null
+    },
+    "description": "AD OPR HR = as aerodrome operating hours"
+  },
+
+  {
+    "_comment": "=== Business Day Rules ==="
+  },
+  {
+    "icao": "LFRB",
+    "text": "PN last working day before 1500",
+    "expected": {
+      "notification_type": "business_day",
+      "hours_notice": null,
+      "specific_time": "1500"
+    },
+    "description": "Business day with time cutoff"
+  },
+
+  {
+    "_comment": "=== Weekday-Specific Rules ==="
+  },
+  {
+    "icao": "LFRS",
+    "text": "MON-FRI : PPR 24 HR. SAT-SUN : PPR 48 HR",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 48,
+      "has_weekend_rules": true
+    },
+    "description": "Different rules for weekdays vs weekend"
+  },
+  {
+    "icao": "LFRD",
+    "text": "MON-FRI: 0700-1900 with PN 24 HR. SAT-SUN and HOL: PN 48 HR",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 48,
+      "has_weekend_rules": true
+    },
+    "description": "Weekday/weekend rules with operating hours"
+  },
+
+  {
+    "_comment": "=== Schengen Rules ==="
+  },
+  {
+    "icao": "LFBO",
+    "text": "Non-Schengen flights: PPR 24 HR. Schengen flights: O/R",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 24,
+      "has_schengen_rules": true
+    },
+    "description": "Different rules for Schengen vs non-Schengen",
+    "requires_llm": true
+  },
+  {
+    "icao": "LFSB",
+    "text": "Extra-Schengen: PN 48 HR",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 48,
+      "non_schengen_only": true
+    },
+    "description": "Extra-Schengen = non-Schengen only"
+  },
+
+  {
+    "_comment": "=== Complex Multi-rule Cases (may need LLM) ==="
+  },
+  {
+    "icao": "LFPB",
+    "text": "MON-FRI 0600-2200: PPR 24 HR. SAT 0800-1800: PPR 48 HR. SUN and HOL: PPR 72 HR. Non-Schengen flights require additional customs clearance.",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": 72,
+      "has_weekend_rules": true,
+      "has_schengen_rules": true
+    },
+    "description": "Complex multi-day, multi-condition rules",
+    "requires_llm": true
+  }
+]

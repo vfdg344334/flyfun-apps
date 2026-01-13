@@ -6,12 +6,15 @@ Uses a waterfall approach:
     1. Quick regex patterns for simple cases (free, fast)
     2. Complexity detection
     3. LLM extraction for complex cases (OpenAI API)
+
+Configuration is loaded from configs/ga_notification_agent/default.json.
+See config.py for configuration options.
 """
 
 import re
 import os
 import logging
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
 
 from .models import (
@@ -20,6 +23,9 @@ from .models import (
     NotificationType,
     ParsedNotificationRules,
 )
+
+if TYPE_CHECKING:
+    from .config import NotificationAgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -146,27 +152,52 @@ class NotificationParser:
         'week-end': (5, 6), 'weekend': (5, 6), 'weekends': (5, 6),
     }
     
-    # Complexity threshold - if more than this many indicators, use LLM
+    # Default complexity threshold (can be overridden via config)
     COMPLEXITY_THRESHOLD = 2
-    
+
     def __init__(
         self,
-        use_llm_fallback: bool = False,
-        llm_model: str = "gpt-4o-mini",
+        use_llm_fallback: bool = None,
+        llm_model: str = None,
         llm_api_key: Optional[str] = None,
+        config: Optional["NotificationAgentConfig"] = None,
+        config_name: str = "default",
     ):
         """
         Initialize parser.
-        
+
+        Configuration can be provided in two ways:
+        1. Pass a NotificationAgentConfig directly via `config` parameter
+        2. Let the parser load config by name via `config_name` parameter
+
+        Individual parameters (use_llm_fallback, llm_model) override config values.
+
         Args:
-            use_llm_fallback: Enable LLM for complex cases
-            llm_model: OpenAI model to use
+            use_llm_fallback: Enable LLM for complex cases (overrides config)
+            llm_model: OpenAI model to use (overrides config)
             llm_api_key: API key (defaults to OPENAI_API_KEY env var)
+            config: Pre-loaded NotificationAgentConfig (optional)
+            config_name: Name of config to load if config not provided (default: "default")
         """
-        self.use_llm_fallback = use_llm_fallback
-        self.llm_model = llm_model
+        # Load config if not provided
+        if config is None:
+            from .config import get_notification_config
+            config = get_notification_config(config_name)
+
+        self._config = config
+
+        # Use config values, with parameter overrides
+        self.use_llm_fallback = (
+            use_llm_fallback if use_llm_fallback is not None
+            else config.parsing.use_llm_fallback
+        )
+        self.llm_model = llm_model or config.llm.model
         self.llm_api_key = llm_api_key or os.environ.get("OPENAI_API_KEY")
         self._openai_client = None
+
+        # Store thresholds from config
+        self._complexity_threshold = config.parsing.complexity_threshold
+        self._confidence = config.parsing.confidence
     
     def parse(self, icao: str, text: str, std_field_id: int = 302) -> ParsedNotificationRules:
         """
@@ -189,9 +220,10 @@ class NotificationParser:
         
         # STEP 1: Try quick regex patterns
         parse_result = self._try_quick_patterns(text)
-        
+
         # If high confidence and complete, we're done
-        if parse_result.is_complete and parse_result.confidence >= 0.85:
+        complete_threshold = self._confidence.complete_threshold
+        if parse_result.is_complete and parse_result.confidence >= complete_threshold:
             logger.debug(f"{icao}: Quick pattern matched with confidence {parse_result.confidence}")
             return ParsedNotificationRules(
                 icao=icao,
@@ -199,15 +231,16 @@ class NotificationParser:
                 raw_text=text,
                 source_std_field_id=std_field_id,
             )
-        
+
         # STEP 2: Check complexity
         complexity_indicators = self._detect_complexity(text)
         complexity_score = len(complexity_indicators)
-        
+        complexity_threshold = self._complexity_threshold
+
         logger.debug(f"{icao}: Complexity score {complexity_score}, indicators: {complexity_indicators}")
-        
+
         # If not too complex, return partial regex results
-        if complexity_score <= self.COMPLEXITY_THRESHOLD and parse_result.rules:
+        if complexity_score <= complexity_threshold and parse_result.rules:
             return ParsedNotificationRules(
                 icao=icao,
                 rules=parse_result.rules,
@@ -215,12 +248,12 @@ class NotificationParser:
                 source_std_field_id=std_field_id,
                 parse_warnings=[f"Partial parse (complexity={complexity_score})"],
             )
-        
+
         # STEP 3: Use LLM for complex cases
-        if self.use_llm_fallback and complexity_score > self.COMPLEXITY_THRESHOLD:
+        if self.use_llm_fallback and complexity_score > complexity_threshold:
             logger.info(f"{icao}: Using LLM for complex notification (indicators: {complexity_indicators})")
             llm_rules = self._parse_with_llm(icao, text)
-            
+
             if llm_rules:
                 return ParsedNotificationRules(
                     icao=icao,
@@ -228,12 +261,12 @@ class NotificationParser:
                     raw_text=text,
                     source_std_field_id=std_field_id,
                 )
-        
+
         # Fallback: return whatever we have
         warnings = []
         if not parse_result.rules:
             warnings.append("Could not parse notification rules")
-        if complexity_score > self.COMPLEXITY_THRESHOLD and not self.use_llm_fallback:
+        if complexity_score > complexity_threshold and not self.use_llm_fallback:
             warnings.append(f"Complex text (score={complexity_score}), LLM disabled")
         
         return ParsedNotificationRules(
@@ -261,17 +294,20 @@ class NotificationParser:
         
         text_is_complex = has_multiple_days or has_schengen or has_prohibited or len(text) > 200
         
+        # Get confidence values from config
+        conf = self._confidence
+
         # Check H24 - simplest case (only complete if short text)
         if self.H24_PATTERN.search(text):
             rules.append(NotificationRule(
                 rule_type=RuleType.CUSTOMS,
                 notification_type=NotificationType.H24,
                 raw_text=text,
-                confidence=0.95,
+                confidence=conf.h24,
             ))
             is_complete = is_simple_text and not text_is_complex
-            return ParseResult(rules=rules, confidence=0.95, is_complete=is_complete, complexity_indicators=[])
-        
+            return ParseResult(rules=rules, confidence=conf.h24, is_complete=is_complete, complexity_indicators=[])
+
         # Check simple "on request" (without hours) - only complete if simple text
         if self.ON_REQUEST_PATTERN.search(text) and not self.HOURS_PATTERN.search(text):
             # Don't mark as complete if text is complex
@@ -280,11 +316,11 @@ class NotificationParser:
                     rule_type=RuleType.CUSTOMS,
                     notification_type=NotificationType.ON_REQUEST,
                     raw_text=text,
-                    confidence=0.90,
+                    confidence=conf.on_request,
                 ))
-                return ParseResult(rules=rules, confidence=0.90, is_complete=is_simple_text, complexity_indicators=[])
+                return ParseResult(rules=rules, confidence=conf.on_request, is_complete=is_simple_text, complexity_indicators=[])
             # Text is complex - don't return early, continue to more detailed parsing
-        
+
         # Check "as AD hours" - only complete if simple text
         if self.AS_AD_HOURS_PATTERN.search(text) and not self.HOURS_PATTERN.search(text):
             if not text_is_complex:
@@ -292,9 +328,9 @@ class NotificationParser:
                     rule_type=RuleType.CUSTOMS,
                     notification_type=NotificationType.AS_AD_HOURS,
                     raw_text=text,
-                    confidence=0.90,
+                    confidence=conf.as_ad_hours,
                 ))
-                return ParseResult(rules=rules, confidence=0.90, is_complete=is_simple_text, complexity_indicators=[])
+                return ParseResult(rules=rules, confidence=conf.as_ad_hours, is_complete=is_simple_text, complexity_indicators=[])
         
         # Try weekday-specific rules
         weekday_rules = self._extract_weekday_rules(text)
@@ -412,15 +448,16 @@ class NotificationParser:
     def _extract_weekday_rules(self, text: str) -> List[NotificationRule]:
         """Extract weekday-specific rules."""
         rules = []
-        
+        conf = self._confidence
+
         for match in self.WEEKDAY_HOURS_PATTERN.finditer(text):
             day_start_str = match.group(1)
             day_end_str = match.group(2)
             hours_str = match.group(3)
             matched_text = match.group(0)
-            
+
             start_day, end_day_from_start, includes_hol = self._parse_day(day_start_str)
-            
+
             if day_end_str:
                 end_day, _, hol2 = self._parse_day(day_end_str)
                 includes_hol = includes_hol or hol2
@@ -429,13 +466,13 @@ class NotificationParser:
                     end_day = end_day_from_start
             else:
                 end_day = end_day_from_start
-            
+
             # Also check the full matched text for HOL references
             if not includes_hol and re.search(r'\bHOL(?:IDAYS?)?\b', matched_text, re.IGNORECASE):
                 includes_hol = True
-            
+
             hours = int(hours_str) if hours_str else None
-            
+
             rule = NotificationRule(
                 rule_type=RuleType.PPR,
                 notification_type=NotificationType.HOURS if hours else NotificationType.ON_REQUEST,
@@ -444,42 +481,44 @@ class NotificationParser:
                 weekday_end=end_day,
                 includes_holidays=includes_hol,
                 raw_text=matched_text,
-                confidence=0.80,
+                confidence=conf.weekday_rules,
             )
             rules.append(rule)
-        
+
         return rules
-    
+
     def _extract_hours_rules(self, text: str) -> List[NotificationRule]:
         """Extract simple hours-based rules."""
         rules = []
         seen_hours = set()
-        
+        conf = self._confidence
+
         for match in self.HOURS_PATTERN.finditer(text):
             hours = None
             for group_num in [1, 2, 3]:
                 if match.group(group_num):
                     hours = int(match.group(group_num))
                     break
-            
+
             if hours is None or hours in seen_hours:
                 continue
-            
+
             seen_hours.add(hours)
             rules.append(NotificationRule(
                 rule_type=RuleType.PPR,
                 notification_type=NotificationType.HOURS,
                 hours_notice=hours,
                 raw_text=match.group(0),
-                confidence=0.80,
+                confidence=conf.hours_rules,
             ))
-        
+
         return rules
-    
+
     def _extract_business_day_rules(self, text: str) -> List[NotificationRule]:
         """Extract business day rules."""
         rules = []
-        
+        conf = self._confidence
+
         for match in self.BUSINESS_DAY_PATTERN.finditer(text):
             time_str = match.group(1)
             rules.append(NotificationRule(
@@ -488,9 +527,9 @@ class NotificationParser:
                 business_day_offset=-1,
                 specific_time=time_str,
                 raw_text=match.group(0),
-                confidence=0.75,
+                confidence=conf.business_day,
             ))
-        
+
         return rules
     
     def _parse_with_llm(self, icao: str, text: str) -> List[NotificationRule]:
@@ -560,32 +599,30 @@ class NotificationParser:
         # Initialize client
         if self._openai_client is None:
             self._openai_client = OpenAI(api_key=self.llm_api_key)
-        
-        prompt = f"""Extract notification requirements from this airport customs/immigration text.
 
-Airport: {icao}
-Text: {text}
+        # Load system prompt from config
+        try:
+            system_prompt = self._config.load_prompt("parser")
+        except (ValueError, FileNotFoundError) as e:
+            logger.warning(f"Failed to load parser prompt from config: {e}, using default")
+            system_prompt = (
+                "You are an aviation expert extracting structured notification requirements "
+                "from AIP (Aeronautical Information Publication) text. Be precise and extract ALL rules mentioned."
+            )
 
-Extract ALL notification rules, including:
-- Different rules for different days (weekdays vs weekends)
-- Different rules for Schengen vs non-Schengen flights
-- Specific time cutoffs (e.g., "before 1100")
-- Business day requirements (e.g., "last working day")
-- Prohibited operations
-
-For weekdays: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
-
-If flights are prohibited for certain conditions, include a rule with is_prohibited=True."""
+        # Build user prompt with airport and text
+        user_prompt = f"""Airport: {icao}
+Text: {text}"""
 
         try:
             response = self._openai_client.beta.chat.completions.parse(
                 model=self.llm_model,
                 messages=[
-                    {"role": "system", "content": "You are an aviation expert extracting structured notification requirements from AIP (Aeronautical Information Publication) text. Be precise and extract ALL rules mentioned."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
                 response_format=ExtractedRules,
-                temperature=0,
+                temperature=self._config.llm.temperature,
             )
             
             extracted = response.choices[0].message.parsed
@@ -630,7 +667,7 @@ If flights are prohibited for certain conditions, include a rule with is_prohibi
                     schengen_only=r.schengen_only,
                     non_schengen_only=r.non_schengen_only,
                     raw_text=r.summary,
-                    confidence=0.85,
+                    confidence=self._confidence.llm_extracted,
                     extraction_method="llm",
                 ))
             
