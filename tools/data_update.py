@@ -3,16 +3,18 @@
 FlyFun Data Update Script
 
 Consolidates all data update commands for different update schedules:
-  - initial:  Full build from scratch (run once on new setup)
-  - aip:      Update when AIP data changes (run on AIRAC cycle, ~28 days)
-  - reviews:  Update GA friendliness from reviews (run weekly/monthly)
-  - autorouter: Run autorouter on airports with AIP entries for given countries
+  - initial:    Full build from scratch (run once on new setup)
+  - web:        Fetch AIP from web sources (France, UK, Norway) → syncs derived data
+  - autorouter: Fetch AIP from autorouter for given countries → syncs derived data
+  - aip:        Sync all AIP-derived data (notifications, hospitality fields)
+  - reviews:    Update GA friendliness from reviews (run weekly/monthly)
 
 Usage:
     python tools/data_update.py initial           # Full initial build
-    python tools/data_update.py aip               # Update AIP data only
+    python tools/data_update.py web               # Fetch web sources + sync derived
+    python tools/data_update.py autorouter ED LO  # Fetch autorouter + sync derived
+    python tools/data_update.py aip               # Sync AIP-derived data only
     python tools/data_update.py reviews           # Update reviews/GA friendliness
-    python tools/data_update.py autorouter ED LO  # Run autorouter for countries
 
 Environment:
     Set OPENAI_API_KEY for LLM-based review processing
@@ -155,9 +157,9 @@ def download_reviews() -> bool:
 # =============================================================================
 
 
-def update_aip_data() -> None:
-    """Update AIP data from web sources."""
-    log_section("Updating AIP Data")
+def fetch_web_sources() -> None:
+    """Fetch AIP data from web sources (France, UK, Norway)."""
+    log_section("Fetching AIP from Web Sources")
 
     args = ["python", "tools/aipexport.py"]
 
@@ -184,7 +186,7 @@ def update_aip_data() -> None:
     args.extend(["-c", str(CACHE_DIR)])
 
     run_command(args)
-    logger.info("AIP data update complete")
+    logger.info("Web sources fetch complete")
 
     # Show recent changes
     log_section("Recent AIP Changes")
@@ -233,7 +235,7 @@ def update_reviews() -> None:
 
 def update_aip_fields_only() -> None:
     """Fast update: only AIP-derived fields in ga_persona.db."""
-    log_section("Updating AIP Fields in GA Persona DB (fast)")
+    log_section("Updating AIP Fields in GA Persona DB")
 
     if not AIRPORTS_DB.exists():
         raise RuntimeError(f"airports.db not found: {AIRPORTS_DB}")
@@ -247,6 +249,30 @@ def update_aip_fields_only() -> None:
 
     run_command(args)
     logger.info("AIP fields update complete")
+
+
+def sync_aip_derived(prefixes: list[str] = None, full: bool = False) -> None:
+    """Sync all AIP-derived data: notifications and hospitality fields.
+
+    This should be called after any AIP data update (web or autorouter).
+
+    Args:
+        prefixes: Optional list of ICAO prefixes to limit sync scope.
+        full: If True, do full rebuild (for initial setup). Default uses --changed mode.
+    """
+    log_section("Syncing AIP-Derived Data")
+
+    if not AIRPORTS_DB.exists():
+        raise RuntimeError(f"airports.db not found: {AIRPORTS_DB}")
+
+    # 1. Update notification requirements
+    update_notifications(prefixes=prefixes, full=full)
+
+    # 2. Update AIP-derived fields in ga_persona.db (hospitality, etc.)
+    if GA_PERSONA_DB.exists():
+        update_aip_fields_only()
+
+    logger.info("AIP-derived data sync complete")
 
 
 def run_autorouter(prefixes: list[str]) -> None:
@@ -342,16 +368,16 @@ def initial_build() -> None:
 
     logger.info("This will build all data from scratch")
     logger.info("  - AIP data from France, UK, Norway web sources")
-    logger.info("  - GA friendliness database")
     logger.info("  - GA notification requirements")
+    logger.info("  - GA friendliness database")
 
-    # Step 1: Build AIP data
-    update_aip_data()
+    # Step 1: Fetch AIP data from web sources
+    fetch_web_sources()
 
-    # Step 2: Build notification requirements (factual extraction)
-    update_notifications(full=True)
+    # Step 2: Sync all AIP-derived data (notifications, hospitality fields)
+    sync_aip_derived(full=True)
 
-    # Step 3: Build GA friendliness (subjective scoring)
+    # Step 3: Build GA friendliness (subjective scoring from reviews)
     update_reviews()
 
     log_section("INITIAL BUILD COMPLETE")
@@ -373,33 +399,32 @@ def main() -> None:
         epilog="""
 Modes:
   initial       Full build from scratch (first time setup)
-  aip           Update AIP data only (run on AIRAC cycle, ~28 days)
+  web           Fetch AIP from web sources (FR, UK, NO) → syncs derived data
+  autorouter    Fetch AIP from autorouter for countries → syncs derived data
+  aip           Sync all AIP-derived data (notifications, hospitality fields)
   reviews       Update GA friendliness/reviews (run weekly/monthly)
-  notifications Update notification requirements from AIP (run after aip)
-  aip-fields    Fast AIP-only update to ga_persona.db
-  autorouter    Run autorouter on airports with AIP for given country prefixes
+  notifications Update notification requirements only (subset of 'aip')
 
 Examples:
   python tools/data_update.py initial
-  python tools/data_update.py aip
+  python tools/data_update.py web                  # Fetch web + sync derived
+  python tools/data_update.py autorouter ED LO     # Fetch autorouter + sync derived
+  python tools/data_update.py aip                  # Sync all AIP-derived data
+  python tools/data_update.py aip LF EG            # Sync for specific countries
   python tools/data_update.py reviews
-  python tools/data_update.py notifications
-  python tools/data_update.py notifications LF EG  # French and UK airports only
-  python tools/data_update.py aip-fields
-  python tools/data_update.py autorouter ED
-  python tools/data_update.py autorouter ED LO EB LE
+  python tools/data_update.py notifications LF EG  # Notifications only
         """,
     )
 
     parser.add_argument(
         "mode",
-        choices=["initial", "aip", "reviews", "notifications", "aip-fields", "autorouter"],
+        choices=["initial", "web", "autorouter", "aip", "reviews", "notifications"],
         help="Update mode to run",
     )
     parser.add_argument(
         "args",
         nargs="*",
-        help="Additional arguments (e.g., ICAO prefixes for autorouter/notifications)",
+        help="Additional arguments (e.g., ICAO prefixes for autorouter/aip/notifications)",
     )
 
     args = parser.parse_args()
@@ -408,23 +433,22 @@ Examples:
 
     if args.mode == "initial":
         initial_build()
+    elif args.mode == "web":
+        fetch_web_sources()
+        sync_aip_derived()
+    elif args.mode == "autorouter":
+        run_autorouter(args.args)
+        # Sync derived data for the same prefixes
+        if args.args:
+            sync_aip_derived(prefixes=args.args)
     elif args.mode == "aip":
-        update_aip_data()
-        # Also sync AIP fields to ga_persona.db
-        if GA_PERSONA_DB.exists():
-            update_aip_fields_only()
-        # Also update notifications if database exists
-        if GA_NOTIFICATIONS_DB.exists():
-            update_notifications()
+        # Sync all AIP-derived data (optional prefix filter)
+        sync_aip_derived(prefixes=args.args if args.args else None)
     elif args.mode == "reviews":
         update_reviews()
     elif args.mode == "notifications":
         # Optional prefixes for filtering (e.g., "LF" for France)
         update_notifications(args.args if args.args else None)
-    elif args.mode == "aip-fields":
-        update_aip_fields_only()
-    elif args.mode == "autorouter":
-        run_autorouter(args.args)
 
 
 if __name__ == "__main__":
