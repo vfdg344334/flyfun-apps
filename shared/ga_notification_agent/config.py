@@ -34,6 +34,7 @@ class ConfidenceConfig(BaseModel):
     h24: float = Field(default=0.95, ge=0.0, le=1.0)
     on_request: float = Field(default=0.90, ge=0.0, le=1.0)
     as_ad_hours: float = Field(default=0.90, ge=0.0, le=1.0)
+    operating_hours: float = Field(default=0.90, ge=0.0, le=1.0)  # "0800 - 1800" format
     weekday_rules: float = Field(default=0.80, ge=0.0, le=1.0)
     hours_rules: float = Field(default=0.80, ge=0.0, le=1.0)
     business_day: float = Field(default=0.75, ge=0.0, le=1.0)

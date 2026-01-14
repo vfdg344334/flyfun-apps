@@ -106,6 +106,32 @@
   },
 
   {
+    "_comment": "=== Operating Hours Only (no advance notice) ==="
+  },
+  {
+    "icao": "LFAT",
+    "text": "0800 - 1800 E-mail : douane-aeroportletouquet@douane.finances.gouv.fr TEL : 03 21 06 46 13",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": null,
+      "hours_start": "0800",
+      "hours_end": "1800"
+    },
+    "description": "Operating hours only - customs available 0800-1800, no advance notice needed"
+  },
+  {
+    "icao": "LFXX",
+    "text": "0700-1900",
+    "expected": {
+      "notification_type": "hours",
+      "hours_notice": null,
+      "hours_start": "0700",
+      "hours_end": "1900"
+    },
+    "description": "Simple operating hours format without spaces"
+  },
+
+  {
     "_comment": "=== Business Day Rules ==="
   },
   {

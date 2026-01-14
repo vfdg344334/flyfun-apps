@@ -53,6 +53,13 @@ class NotificationParser:
     
     # Simple patterns (high confidence, complete)
     H24_PATTERN = re.compile(r'\bH24\b', re.IGNORECASE)
+
+    # Operating hours pattern - matches "0800 - 1800" or "0700-1900" format
+    # This indicates service availability during specific hours WITHOUT advance notice
+    OPERATING_HOURS_PATTERN = re.compile(
+        r'^(\d{4})\s*[-–]\s*(\d{4})\b',  # At start of text: 0800 - 1800
+        re.IGNORECASE
+    )
     
     ON_REQUEST_PATTERN = re.compile(
         r'\b(?:O/R|on\s+request|by\s+(?:prior\s+)?arrangement|sur\s+demande)\b',
@@ -331,7 +338,24 @@ class NotificationParser:
                     confidence=conf.as_ad_hours,
                 ))
                 return ParseResult(rules=rules, confidence=conf.as_ad_hours, is_complete=is_simple_text, complexity_indicators=[])
-        
+
+        # Check for operating hours format (e.g., "0800 - 1800") without PPR/PN requirement
+        # This indicates service available during those hours with no advance notice needed
+        operating_hours_match = self.OPERATING_HOURS_PATTERN.match(text)
+        if operating_hours_match and not self.HOURS_PATTERN.search(text):
+            hours_start = operating_hours_match.group(1)
+            hours_end = operating_hours_match.group(2)
+            rules.append(NotificationRule(
+                rule_type=RuleType.CUSTOMS,
+                notification_type=NotificationType.HOURS,
+                hours_notice=None,  # No advance notice required
+                hours_start=hours_start,
+                hours_end=hours_end,
+                raw_text=text,
+                confidence=conf.operating_hours,
+            ))
+            return ParseResult(rules=rules, confidence=conf.operating_hours, is_complete=True, complexity_indicators=[])
+
         # Try weekday-specific rules
         weekday_rules = self._extract_weekday_rules(text)
         if weekday_rules:

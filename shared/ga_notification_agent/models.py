@@ -448,7 +448,27 @@ class HassleScore(BaseModel):
                 score=0.15,
                 summary="As aerodrome hours",
             )
-        
+
+        # Check for "operating hours only" - HOURS type with no hours_notice required
+        # This means service is available during specified hours with no advance notice
+        def is_operating_hours_only(rule: NotificationRule) -> bool:
+            return (
+                rule.notification_type == NotificationType.HOURS
+                and rule.hours_notice is None
+                and (rule.hours_start is not None or rule.hours_end is not None)
+            )
+
+        if all(is_operating_hours_only(r) for r in parsed.rules):
+            # Build summary from operating hours
+            rule = parsed.rules[0]
+            hours_str = f"{rule.hours_start}-{rule.hours_end}" if rule.hours_start and rule.hours_end else "Operating hours"
+            return cls(
+                icao=icao,
+                level=HassleLevel.LOW,
+                score=0.15,
+                summary=f"{hours_str} - No advance notice required",
+            )
+
         # Calculate based on hours notice
         max_hours = parsed.max_hours_notice
         has_weekend = any(r.weekday_start == 5 or r.includes_holidays for r in parsed.rules)
