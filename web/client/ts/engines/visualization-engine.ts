@@ -5,6 +5,14 @@
 
 import type { Airport, LegendMode, Highlight, RouteState, GAFriendlySummary } from '../store/types';
 import { useStore } from '../store/store';
+import { getStyleFromConfig, getColorFromConfig } from '../utils/legend-classifier';
+import {
+  NOTIFICATION_LEGEND_CONFIG,
+  AIRPORT_TYPE_LEGEND_CONFIG,
+  RUNWAY_LENGTH_LEGEND_CONFIG,
+  COUNTRY_LEGEND_CONFIG,
+  PROCEDURE_PRECISION_COLORS,
+} from '../config/legend-configs';
 
 // Leaflet types (will be imported when Leaflet is available)
 declare const L: any;
@@ -166,72 +174,48 @@ export class VisualizationEngine {
    */
   private getMarkerStyle(airport: Airport, legendMode: LegendMode): MarkerStyle {
     let color = '#ffc107'; // Default: yellow
-    let radius = 6;
-    
+    let radius = 7;
+    const baseRadius = 7;
+
     switch (legendMode) {
-      case 'airport-type':
-        if (airport.point_of_entry) {
-          color = '#28a745'; // Green
-          radius = 8;
-        } else if (airport.has_procedures) {
-          color = '#ffc107'; // Yellow
-          radius = 7;
-        } else {
-          color = '#dc3545'; // Red
-          radius = 6;
-        }
+      case 'airport-type': {
+        const style = getStyleFromConfig(airport, AIRPORT_TYPE_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
-      case 'runway-length':
-        if (airport.longest_runway_length_ft) {
-          if (airport.longest_runway_length_ft > 8000) {
-            color = '#28a745'; // Green
-            radius = 10;
-          } else if (airport.longest_runway_length_ft > 4000) {
-            color = '#ffc107'; // Yellow
-            radius = 7;
-          } else {
-            color = '#dc3545'; // Red
-            radius = 5;
-          }
-        } else {
-          color = '#6c757d'; // Gray
-          radius = 4;
-        }
+      }
+
+      case 'runway-length': {
+        const style = getStyleFromConfig(airport, RUNWAY_LENGTH_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
-      case 'country':
-        const icao = airport.ident || '';
-        if (icao.startsWith('LF')) {
-          color = '#007bff'; // Blue
-          radius = 7;
-        } else if (icao.startsWith('EG')) {
-          color = '#dc3545'; // Red
-          radius = 7;
-        } else if (icao.startsWith('ED')) {
-          color = '#28a745'; // Green
-          radius = 7;
-        } else {
-          color = '#ffc107'; // Yellow
-          radius = 6;
-        }
+      }
+
+      case 'country': {
+        const style = getStyleFromConfig(airport, COUNTRY_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
+      }
+
       case 'procedure-precision':
         // Transparent markers, procedure lines shown separately
-        color = 'rgba(128, 128, 128, 0.3)';
+        color = PROCEDURE_PRECISION_COLORS.transparent;
         radius = 6;
         break;
-        
+
       case 'relevance':
         color = this.getRelevanceColor(airport);
         radius = 7;
         break;
 
-      case 'notification':
-        color = this.getNotificationColor(airport);
-        radius = 7;
+      case 'notification': {
+        const style = getStyleFromConfig(airport, NOTIFICATION_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
+      }
     }
 
     const icon = L.divIcon({
@@ -305,61 +289,14 @@ export class VisualizationEngine {
   }
 
   /**
-   * Get notification color based on hours notice required
-   * Green: H24, operating hours only (no advance notice), or ≤12h notice
-   * Blue: On request or 13-24h notice
-   * Yellow/Orange: 25-48h notice or business day
-   * Red: >48h notice or not available
-   * Gray: Unknown/no data
+   * Get notification color based on hours notice required.
+   * Uses shared legend configuration to ensure marker colors match legend display.
+   *
+   * @see config/legend-configs.ts for classification logic
+   * @see designs/LEGEND_DESIGN.md for architecture documentation
    */
   private getNotificationColor(airport: Airport): string {
-    const notification = airport.notification;
-
-    // No notification data
-    if (!notification) {
-      return '#95a5a6'; // Gray
-    }
-
-    // H24 - no notice required
-    if (notification.is_h24) {
-      return '#28a745'; // Green
-    }
-
-    // Not available
-    if (notification.notification_type === 'not_available') {
-      return '#dc3545'; // Red
-    }
-
-    // On request - need to call ahead
-    if (notification.is_on_request) {
-      return '#007bff'; // Blue - moderate hassle
-    }
-
-    // Business day notice
-    if (notification.notification_type === 'business_day') {
-      return '#ffc107'; // Yellow - some hassle
-    }
-
-    const hours = notification.hours_notice;
-
-    // "hours" type with no hours_notice = operating hours only, no advance notice needed
-    if (hours === null || hours === undefined) {
-      if (notification.notification_type === 'hours') {
-        return '#28a745'; // Green - just operating hours constraint
-      }
-      return '#95a5a6'; // Gray - truly unknown
-    }
-
-    // Color based on hours
-    if (hours <= 12) {
-      return '#28a745'; // Green - easy, ≤12h
-    } else if (hours <= 24) {
-      return '#007bff'; // Blue - moderate, 13-24h
-    } else if (hours <= 48) {
-      return '#ffc107'; // Yellow - some hassle, 25-48h
-    } else {
-      return '#dc3545'; // Red - difficult, >48h
-    }
+    return getColorFromConfig(airport, NOTIFICATION_LEGEND_CONFIG);
   }
   
   /**

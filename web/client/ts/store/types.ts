@@ -105,6 +105,95 @@ export interface RelevanceBucketConfig {
   color: string;
 }
 
+// =============================================================================
+// Legend Configuration Types
+// =============================================================================
+
+/**
+ * Generic legend entry with match function.
+ * Used to define how airports are classified into legend buckets.
+ * Order matters - first match wins.
+ */
+export interface LegendEntry<TData = Airport> {
+  id: string;
+  label: string;
+  color: string;
+  /** Optional radius multiplier for marker size (default 1.0) */
+  radiusMultiplier?: number;
+  /** Match function - returns true if this entry applies to the data */
+  match: (data: TData) => boolean;
+}
+
+/**
+ * Legend configuration for a mode.
+ * Contains ordered entries that define classification logic.
+ */
+export interface LegendConfig<TData = Airport> {
+  mode: LegendMode;
+  /** Display type: 'color' for filled circles, 'line' for procedure lines */
+  displayType: 'color' | 'line';
+  /** Ordered entries - first match wins */
+  entries: LegendEntry<TData>[];
+  /** If true, markers are transparent and lines are colored (e.g., procedure-precision) */
+  useTransparentMarkers?: boolean;
+}
+
+/**
+ * Simplified display bucket for legend panel.
+ * Used when the full classification has many entries but the legend
+ * should show fewer, grouped categories.
+ */
+export interface LegendDisplayBucket {
+  id: string;
+  label: string;
+  color: string;
+}
+
+/**
+ * Notification bucket IDs for type-safe classification
+ */
+export type NotificationBucketId =
+  | 'h24'        // H24 operations - no notice required
+  | 'easy'       // Easy: <=12h notice or operating hours only
+  | 'moderate'   // Moderate: 13-24h notice or on-request
+  | 'hassle'     // Hassle: 25-48h notice or business day
+  | 'difficult'  // Difficult: >48h notice or not available
+  | 'unknown';   // No notification data
+
+/**
+ * Airport type bucket IDs
+ */
+export type AirportTypeBucketId =
+  | 'border-crossing'      // Point of entry (border crossing)
+  | 'with-procedures'      // Has instrument procedures
+  | 'without-procedures';  // No instrument procedures
+
+/**
+ * Runway length bucket IDs
+ */
+export type RunwayLengthBucketId =
+  | 'long'     // >8000 ft
+  | 'medium'   // 4000-8000 ft
+  | 'short'    // <4000 ft
+  | 'unknown'; // No runway data
+
+/**
+ * Country bucket IDs
+ */
+export type CountryBucketId =
+  | 'france'   // LF prefix
+  | 'uk'       // EG prefix
+  | 'germany'  // ED prefix
+  | 'other';   // All other countries
+
+/**
+ * Procedure precision bucket IDs (for procedure lines, not markers)
+ */
+export type ProcedurePrecisionBucketId =
+  | 'precision'      // ILS
+  | 'rnp'            // RNP/RNAV
+  | 'non-precision'; // VOR/NDB
+
 /**
  * Persona definition with weights
  */

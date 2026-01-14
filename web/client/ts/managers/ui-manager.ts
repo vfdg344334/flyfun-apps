@@ -7,6 +7,13 @@ import { useStore } from '../store/store';
 import type { AppState, FilterConfig, LegendMode, Airport } from '../store/types';
 import { APIAdapter } from '../adapters/api-adapter';
 import { geocodeCache } from '../utils/geocode-cache';
+import {
+  NOTIFICATION_LEGEND_DISPLAY,
+  AIRPORT_TYPE_LEGEND_DISPLAY,
+  RUNWAY_LENGTH_LEGEND_DISPLAY,
+  COUNTRY_LEGEND_DISPLAY,
+  PROCEDURE_PRECISION_LEGEND_DISPLAY,
+} from '../config/legend-configs';
 
 /**
  * UI Manager class
@@ -864,81 +871,43 @@ export class UIManager {
 
     let html = '';
 
+    // Helper to render color-based legend items
+    const renderColorLegend = (buckets: Array<{label: string; color: string}>) =>
+      buckets.map(bucket => `
+        <div class="legend-item">
+          <div class="legend-color" style="background-color: ${bucket.color};"></div>
+          <span>${bucket.label}</span>
+        </div>
+      `).join('');
+
+    // Helper to render line-based legend items (for procedure-precision)
+    const renderLineLegend = (buckets: Array<{label: string; color: string}>) =>
+      buckets.map(bucket => `
+        <div class="legend-item">
+          <div class="legend-line" style="background-color: ${bucket.color};"></div>
+          <span>${bucket.label}</span>
+        </div>
+      `).join('');
+
     switch (legendMode) {
       case 'airport-type':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Border Crossing</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Airport with Procedures</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>Airport without Procedures</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(AIRPORT_TYPE_LEGEND_DISPLAY);
         break;
 
       case 'procedure-precision':
-        html = `
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #ffff00;"></div>
-            <span>ILS (Precision)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #0000ff;"></div>
-            <span>RNP/RNAV (RNP)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #ffffff;"></div>
-            <span>VOR/NDB (Non-Precision)</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderLineLegend(PROCEDURE_PRECISION_LEGEND_DISPLAY);
         break;
 
       case 'runway-length':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Long Runway (>8000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Medium Runway (4000-8000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>Short Runway (<4000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #6c757d;"></div>
-            <span>Unknown Length</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(RUNWAY_LENGTH_LEGEND_DISPLAY);
         break;
 
       case 'country':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #007bff;"></div>
-            <span>France (LF)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>United Kingdom (EG)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Germany (ED)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Other Countries</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(COUNTRY_LEGEND_DISPLAY);
         break;
 
       case 'relevance': {
@@ -962,28 +931,8 @@ export class UIManager {
       }
 
       case 'notification':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>H24 / ≤24h notice</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>25-48h notice</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>>48h notice</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #6c757d;"></div>
-            <span>On request</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #95a5a6;"></div>
-            <span>Unknown</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(NOTIFICATION_LEGEND_DISPLAY);
         break;
     }
 

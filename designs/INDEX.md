@@ -19,6 +19,11 @@ Zustand-based reactive state management for airport explorer. Unidirectional dat
 Key exports: `store`, `FilterConfig`, `UIManager`, `VisualizationEngine`
 → Full doc: UI_FILTER_STATE_DESIGN.md
 
+### Legend Configuration
+Shared legend configuration ensuring marker colors match legend display. Match-function-based classification with first-match-wins evaluation order.
+Key exports: `LegendConfig`, `LegendEntry`, `NOTIFICATION_LEGEND_CONFIG`, `classifyData`, `getColorFromConfig`
+→ Full doc: LEGEND_DESIGN.md
+
 ## Data & Scoring
 
 ### GA Friendliness System
