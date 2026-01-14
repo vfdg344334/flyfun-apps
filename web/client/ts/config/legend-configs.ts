@@ -88,7 +88,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
   {
     id: 'moderate' as NotificationBucketId,
     label: 'On request',
-    color: NOTIFICATION_COLORS.blue,
+    color: NOTIFICATION_COLORS.yellow,
     radiusMultiplier: 1.0,
     match: (airport) => airport.notification?.is_on_request === true,
   },
@@ -96,7 +96,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
   {
     id: 'hassle' as NotificationBucketId,
     label: 'Business day notice',
-    color: NOTIFICATION_COLORS.yellow,
+    color: NOTIFICATION_COLORS.blue,
     radiusMultiplier: 1.0,
     match: (airport) => airport.notification?.notification_type === 'business_day',
   },
@@ -135,7 +135,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
   {
     id: 'moderate' as NotificationBucketId,
     label: '13-24h notice',
-    color: NOTIFICATION_COLORS.blue,
+    color: NOTIFICATION_COLORS.yellow,
     radiusMultiplier: 1.0,
     match: (airport) => (airport.notification?.hours_notice ?? Infinity) <= 24,
   },
@@ -143,7 +143,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
   {
     id: 'hassle' as NotificationBucketId,
     label: '25-48h notice',
-    color: NOTIFICATION_COLORS.yellow,
+    color: NOTIFICATION_COLORS.blue,
     radiusMultiplier: 1.0,
     match: (airport) => (airport.notification?.hours_notice ?? Infinity) <= 48,
   },
@@ -165,8 +165,8 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
  */
 export const NOTIFICATION_LEGEND_DISPLAY: LegendDisplayBucket[] = [
   { id: 'easy', label: 'H24 / <=12h notice', color: NOTIFICATION_COLORS.green },
-  { id: 'moderate', label: '13-24h / On request', color: NOTIFICATION_COLORS.blue },
-  { id: 'hassle', label: '25-48h / Business day', color: NOTIFICATION_COLORS.yellow },
+  { id: 'moderate', label: '13-24h / On request', color: NOTIFICATION_COLORS.yellow },
+  { id: 'hassle', label: '25-48h / Business day', color: NOTIFICATION_COLORS.blue },
   { id: 'difficult', label: '>48h / Not available', color: NOTIFICATION_COLORS.red },
   { id: 'unknown', label: 'Unknown', color: NOTIFICATION_COLORS.gray },
 ];

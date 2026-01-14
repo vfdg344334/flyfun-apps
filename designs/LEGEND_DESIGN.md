@@ -73,21 +73,23 @@ interface LegendEntry<TData = Airport> {
 | 1 | No notification data | Gray (#95a5a6) | unknown |
 | 2 | is_h24 === true | Green (#28a745) | h24 |
 | 3 | type='not_available' | Red (#dc3545) | difficult |
-| 4 | is_on_request === true | Blue (#007bff) | moderate |
-| 5 | type='business_day' | Yellow (#ffc107) | hassle |
+| 4 | is_on_request === true | Yellow (#ffc107) | moderate |
+| 5 | type='business_day' | Blue (#007bff) | hassle |
 | 6 | hours null + type='hours' | Green (#28a745) | easy |
 | 7 | hours null/undefined | Gray (#95a5a6) | unknown |
 | 8 | hours ≤ 12 | Green (#28a745) | easy |
-| 9 | hours 13-24 | Blue (#007bff) | moderate |
-| 10 | hours 25-48 | Yellow (#ffc107) | hassle |
+| 9 | hours 13-24 | Yellow (#ffc107) | moderate |
+| 10 | hours 25-48 | Blue (#007bff) | hassle |
 | 11 | hours > 48 | Red (#dc3545) | difficult |
 
 **Display buckets** (simplified for legend panel):
 - Green: "H24 / ≤12h notice"
-- Blue: "13-24h / On request"
-- Yellow: "25-48h / Business day"
+- Yellow: "13-24h / On request"
+- Blue: "25-48h / Business day"
 - Red: ">48h / Not available"
 - Gray: "Unknown"
+
+**Color progression**: Green → Yellow → Blue → Red (easy to hard)
 
 ### Airport Type Legend
 
