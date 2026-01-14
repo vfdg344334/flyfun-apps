@@ -271,10 +271,10 @@ class ReviewExtractor(ReviewExtractorInterface):
                 
                 # Validate against ontology
                 if not self.ontology.validate_aspect(aspect):
-                    logger.warning(f"Unknown aspect '{aspect}' in extraction")
+                    logger.warning(f"Unknown aspect '{aspect}' in extraction (review_id={review_id})")
                     continue
                 if not self.ontology.validate_label(aspect, label):
-                    logger.warning(f"Invalid label '{label}' for aspect '{aspect}'")
+                    logger.warning(f"Invalid label '{label}' for aspect '{aspect}' (review_id={review_id})")
                     continue
                 
                 aspects.append(AspectLabel(

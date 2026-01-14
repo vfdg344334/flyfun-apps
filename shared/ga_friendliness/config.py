@@ -268,19 +268,25 @@ def get_settings(**overrides: Any) -> GAFriendlinessSettings:
 # --- Default ontology and personas (inline fallbacks) ---
 
 DEFAULT_ONTOLOGY: Dict[str, Any] = {
-    "version": "1.0",
+    "version": "1.2",
     "aspects": {
         "cost": ["cheap", "reasonable", "expensive", "unclear"],
         "staff": ["very_positive", "positive", "neutral", "negative", "very_negative"],
         "bureaucracy": ["simple", "moderate", "complex"],
-        "fuel": ["excellent", "ok", "poor", "unavailable"],
-        "runway": ["excellent", "ok", "poor"],
-        "transport": ["excellent", "good", "ok", "poor", "none"],
+        # fuel: quality/availability + cost perception
+        "fuel": ["excellent", "good", "ok", "poor", "available", "unavailable", "reasonable", "expensive"],
+        # runway: condition/quality
+        "runway": ["excellent", "good", "ok", "poor"],
+        # transport: quality + location-based + availability
+        "transport": ["excellent", "good", "ok", "poor", "available", "limited", "on_site", "walking", "nearby", "none"],
         "food": ["excellent", "good", "ok", "poor", "none"],
-        "restaurant": ["on_site", "walking", "nearby", "available", "none"],
-        "accommodation": ["on_site", "walking", "nearby", "available", "none"],
+        # restaurant: location-based + quality
+        "restaurant": ["excellent", "good", "on_site", "walking", "nearby", "available", "limited", "none"],
+        # accommodation: location-based + quality
+        "accommodation": ["excellent", "good", "on_site", "walking", "nearby", "available", "limited", "unavailable", "none"],
         "noise_neighbours": ["not_an_issue", "minor_concern", "significant_issue"],
-        "training_traffic": ["busy", "moderate", "quiet", "none"],
+        # training_traffic: activity level
+        "training_traffic": ["busy", "active", "moderate", "quiet", "light", "none"],
         "overall_experience": [
             "very_positive",
             "positive",
@@ -288,11 +294,16 @@ DEFAULT_ONTOLOGY: Dict[str, Any] = {
             "negative",
             "very_negative",
         ],
-        # IFR/VFR operations aspects (for ops_ifr_score and ops_vfr_score)
+        # IFR/VFR operations aspects
         "ifr": ["excellent", "good", "ok", "poor", "unavailable"],
-        "procedure": ["well_documented", "standard", "complex", "unclear"],
+        # procedure: complexity/clarity
+        "procedure": ["simple", "well_documented", "standard", "complex", "unclear", "unavailable"],
         "approach": ["excellent", "good", "ok", "poor"],
         "vfr": ["excellent", "good", "ok", "poor", "restricted"],
+        # infrastructure: general airport facilities/condition
+        "infrastructure": ["excellent", "good", "ok", "poor", "limited", "basic"],
+        # customs: border/customs handling
+        "customs": ["excellent", "good", "ok", "poor", "available", "unavailable", "none"],
     },
 }
 
