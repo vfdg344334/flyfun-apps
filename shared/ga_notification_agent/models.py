@@ -118,29 +118,66 @@ class ParsedNotificationRules(BaseModel):
         """Generate a human-readable summary of the rules."""
         if not self.has_rules:
             return "No notification rules parsed"
-        
+
         if self.is_h24:
             return "H24 - No prior notice required"
-        
-        if self.is_on_request:
-            return "On request / by arrangement"
-        
-        # Collect unique descriptions
+
+        # Simple on_request with single rule and no complexity
+        if self.is_on_request and len(self.rules) == 1:
+            rule = self.rules[0]
+            if rule.weekday_start is None and rule.specific_time is None and rule.hours_notice is None:
+                return "On request / by arrangement"
+
+        # Build detailed summaries for each rule
         summaries = []
         for rule in self.rules:
-            if rule.notification_type == NotificationType.HOURS and rule.hours_notice:
-                weekday_desc = rule.get_weekday_description()
-                if weekday_desc == "all days":
-                    summaries.append(f"PPR {rule.hours_notice}h")
-                else:
-                    summaries.append(f"{weekday_desc}: PPR {rule.hours_notice}h")
-            elif rule.notification_type == NotificationType.BUSINESS_DAY:
-                time_str = f" before {rule.specific_time}" if rule.specific_time else ""
-                summaries.append(f"Last business day{time_str}")
-            elif rule.notification_type == NotificationType.ON_REQUEST:
-                summaries.append("O/R")
-        
+            summary = self._get_rule_summary(rule)
+            if summary and summary not in summaries:
+                summaries.append(summary)
+
         return "; ".join(summaries) if summaries else "See detailed rules"
+
+    def _get_rule_summary(self, rule: "NotificationRule") -> str:
+        """Generate summary for a single rule."""
+        parts = []
+
+        # Prefix with notification type
+        if rule.notification_type == NotificationType.ON_REQUEST:
+            parts.append("O/R")
+        elif rule.notification_type == NotificationType.HOURS:
+            # Check if this is "operating hours only" (no advance notice required)
+            if rule.hours_notice is None and (rule.hours_start or rule.hours_end):
+                hours_str = f"{rule.hours_start}-{rule.hours_end}" if rule.hours_start and rule.hours_end else "Operating hours"
+                return f"{hours_str} (no notice)"
+            parts.append("PPR")
+        elif rule.notification_type == NotificationType.BUSINESS_DAY:
+            parts.append("Business day")
+        elif rule.notification_type == NotificationType.AS_AD_HOURS:
+            return "As AD hours"
+        elif rule.notification_type == NotificationType.H24:
+            return "H24"
+
+        # Add hours notice if present
+        if rule.hours_notice:
+            parts.append(f"{rule.hours_notice}h")
+
+        # Add specific time cutoff
+        if rule.specific_time:
+            parts.append(f"before {rule.specific_time}")
+
+        # Add weekday info if not all days
+        weekday_desc = rule.get_weekday_description()
+        if weekday_desc != "all days":
+            parts.append(f"({weekday_desc})")
+
+        # Add business day offset
+        if rule.business_day_offset:
+            if rule.business_day_offset == -1:
+                parts.append("(last business day)")
+            else:
+                parts.append(f"({abs(rule.business_day_offset)} business days before)")
+
+        return " ".join(parts) if parts else ""
 
 
 class NotificationInfo:
