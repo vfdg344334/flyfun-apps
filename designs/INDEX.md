@@ -51,10 +51,30 @@ Configuration system for aviation agent prompts, personas, and tools. YAML-based
 Container deployment setup for web server and services.
 → Full doc: DOCKER_DEPLOYMENT.md
 
-## Mobile
+## Mobile (iOS/macOS)
 
-### iOS App
-Native iOS application for aviation data. SwiftUI interface, offline-capable, integrates with euro_aip data.
+### iOS App Architecture
+Core architecture patterns: RZFlight model reuse, composed AppState, domain structure, environment injection. **Read first** before any iOS work.
+→ Full doc: IOS_APP_ARCHITECTURE.md
+
+### iOS App Data Layer
+Repository pattern, LocalAirportDataSource (KnownAirports), FilterConfig, region-based loading for map performance.
+→ Full doc: IOS_APP_DATA.md
+
+### iOS App Map
+Map views (online SwiftUI Map, offline MKMapView), legend modes, AirportMarkerView, visualization from chat.
+→ Full doc: IOS_APP_MAP.md
+
+### iOS App Chat System
+ChatDomain, OnlineChatbotService (SSE), OfflineChatbotService (MediaPipe), LocalToolDispatcher, suggested queries.
+→ Full doc: IOS_APP_CHAT.md
+
+### iOS App Offline Mode
+Tile caching (CachedTileOverlay, OfflineTileManager), bundled data (airports.db, rules.json), on-device AI (Gemma 2B via MediaPipe).
+→ Full doc: IOS_APP_OFFLINE.md
+
+### iOS App (Legacy - Full Reference)
+Original comprehensive design doc. Use the split docs above for focused work; this remains as complete reference.
 → Full doc: IOS_APP_DESIGN.md
 
 ## Reference
