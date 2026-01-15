@@ -38,19 +38,40 @@ Key exports: `FilterEngine`, `FilterConfig`, filter implementations
 
 ## LLM Agent (Backend)
 
-### Aviation Agent Design
-Planner-based aviation agent using LangGraph. LLM planner selects tools, tool runner executes, formatter produces UI payloads. Supports airport queries, route planning, and rules lookup.
-Key exports: `AviationPlan`, `build_ui_payload`, airport tools, rules tools
-→ Full doc: LLM_AGENT_DESIGN.md
+### Agent Architecture
+Core architecture patterns: planner-based tool selection, LangGraph state, graph structure, error handling. **Read first** before any agent work.
+Key exports: `AgentState`, `AviationPlan`, `build_agent()`, `build_ui_payload()`
+→ Full doc: AGENT_ARCHITECTURE.md
 
-### Rules RAG System
-RAG-powered rules retrieval with smart router. Classifies queries as rules vs database, uses embeddings for semantic search, supports multi-country comparisons.
-Key exports: `QueryRouter`, `RulesRAG`, `compare_rules_between_countries`
-→ Full doc: RULES_RAG_AGENT_DESIGN.md
+### Agent Planner
+Planner node: AviationPlan schema, tool selection logic, filter extraction from natural language.
+Key exports: `AviationPlan`, `build_planner_runnable()`, `planner_node()`
+→ Full doc: AGENT_PLANNER.md
 
-### Aviation Agent Configuration
-Configuration system for aviation agent prompts, personas, and tools. YAML-based configs, prompt templates with placeholders.
-→ Full doc: AVIATION_AGENT_CONFIGURATION_DESIGN.md
+### Agent Formatter
+Formatter chains: strategy-based formatting, UI payload structure, missing_info handling.
+Key exports: `formatter_node()`, `build_ui_payload()`, formatter chains
+→ Full doc: AGENT_FORMATTER.md
+
+### Agent RAG System
+Rules RAG: query router, country extraction, vector retrieval, comparison system.
+Key exports: `QueryRouter`, `RulesRAG`, `RulesComparisonService`, `AnswerComparer`
+→ Full doc: AGENT_RAG.md
+
+### Agent Tools
+Tool catalog: airport tools, rules tools, missing_info pattern, aircraft speed lookup.
+Key exports: `get_shared_tool_specs()`, `AIRCRAFT_CRUISE_SPEEDS`, tool implementations
+→ Full doc: AGENT_TOOLS.md
+
+### Agent Configuration
+JSON-based behavior configuration, environment variables, prompt management.
+Key exports: `get_settings()`, `get_behavior_config()`, `AgentBehaviorConfig`
+→ Full doc: AGENT_CONFIG.md
+
+### Agent Streaming
+SSE streaming: FastAPI endpoint, event types, token tracking, session management.
+Key exports: `aviation_agent_chat_stream()`, `stream_agent_response()`
+→ Full doc: AGENT_STREAMING.md
 
 ---
 
@@ -103,10 +124,3 @@ Tile caching (CachedTileOverlay, OfflineTileManager), bundled data (airports.db,
 Container deployment setup for web server and services.
 → Full doc: DOCKER_DEPLOYMENT.md
 
----
-
-## Reference
-
-### Architecture Diagrams
-Visual diagrams for Rules RAG system flow and component interactions.
-→ Full doc: RULES_RAG_ARCHITECTURE_DIAGRAM.md
