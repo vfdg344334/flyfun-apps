@@ -160,11 +160,26 @@ class NotificationBatchProcessor:
         dominant_rule_type = max(set(rule_types), key=rule_types.count)
 
         # Determine notification type from rules
-        notification_types = [r.notification_type.value for r in parsed.rules]
-        dominant_notif_type = max(set(notification_types), key=notification_types.count)
+        # Priority: actionable types > not_available (unless ALL are not_available)
+        # Filter out NOT_AVAILABLE rules that only apply to specific flight types
+        actionable_rules = [
+            r for r in parsed.rules
+            if r.notification_type.value != "not_available"
+        ]
 
-        # Max hours notice across all rules
-        hours_notices = [r.hours_notice for r in parsed.rules if r.hours_notice]
+        if actionable_rules:
+            # Use actionable rules to determine dominant type
+            notification_types = [r.notification_type.value for r in actionable_rules]
+            dominant_notif_type = max(set(notification_types), key=notification_types.count)
+            # Get max hours from actionable rules
+            hours_notices = [r.hours_notice for r in actionable_rules if r.hours_notice]
+        else:
+            # All rules are not_available
+            notification_types = [r.notification_type.value for r in parsed.rules]
+            dominant_notif_type = "not_available"
+            hours_notices = []
+
+        # Max hours notice across relevant rules
         max_hours = max(hours_notices) if hours_notices else None
 
         # Build weekday rules dict
