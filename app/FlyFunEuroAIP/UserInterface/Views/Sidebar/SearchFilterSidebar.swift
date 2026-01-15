@@ -12,9 +12,52 @@ import RZFlight
 struct SearchFilterSidebar: View {
     @Environment(\.appState) private var state
     @State private var showAllFilters = false
+    @State private var searchText = ""
 
     var body: some View {
         List {
+            // Search Section - always visible at top
+            Section {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Airport, route, or location...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.characters)
+                        .onSubmit {
+                            performSearch()
+                        }
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                            state?.airports.searchResults = []
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Search")
+            } footer: {
+                Text("Enter ICAO code, city name, or route (e.g., EGLL-LFPG)")
+                    .font(.caption2)
+            }
+
+            // Search Results (when searching) - show right after search
+            if let results = state?.airports.searchResults, !results.isEmpty {
+                Section("Results (\(results.count))") {
+                    ForEach(results, id: \.icao) { airport in
+                        AirportSearchRow(airport: airport) {
+                            state?.airports.select(airport)
+                        }
+                    }
+                }
+            }
+
             // Quick Filters Section
             Section("Quick Filters") {
                 Toggle("Border Crossing", isOn: pointOfEntryBinding)
@@ -91,30 +134,36 @@ struct SearchFilterSidebar: View {
                     }
                 }
             }
-
-            // Search Results (when searching)
-            if let results = state?.airports.searchResults, !results.isEmpty {
-                Section("Results (\(results.count))") {
-                    ForEach(results, id: \.icao) { airport in
-                        AirportSearchRow(airport: airport) {
-                            state?.airports.select(airport)
-                        }
-                    }
-                }
-            }
-
-            // Chat Navigation
-            Section {
-                NavigationLink {
-                    ChatView()
-                        .navigationTitle("Chat")
-                } label: {
-                    Label("Chat Assistant", systemImage: "bubble.left.and.bubble.right")
-                }
-            }
         }
         .listStyle(.sidebar)
         .navigationTitle("Explore")
+        .onChange(of: searchText) { _, newValue in
+            // Debounced search as user types
+            if !newValue.isEmpty {
+                performDebouncedSearch()
+            } else {
+                state?.airports.searchResults = []
+            }
+        }
+    }
+
+    // MARK: - Search
+
+    @State private var searchTask: Task<Void, Never>?
+
+    private func performSearch() {
+        Task {
+            try? await state?.airports.search(query: searchText)
+        }
+    }
+
+    private func performDebouncedSearch() {
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            try? await state?.airports.search(query: searchText)
+        }
     }
 
     // MARK: - Available Countries

@@ -15,7 +15,6 @@ import RZFlight
 struct ContentView: View {
     @Environment(\.appState) private var state
     @State private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
-    @State private var searchText = ""
     @State private var showingInspector = false
     @State private var showingChat = false
 
@@ -23,27 +22,19 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             // SIDEBAR: Search + Filters (or Chat)
             if showingChat {
-                ChatView()
-                    .navigationTitle("Chat")
+                ChatView(onShowMap: {
+                    withAnimation {
+                        showingChat = false
+                        columnVisibility = .detailOnly
+                    }
+                })
+                .navigationTitle("Chat")
             } else {
                 SearchFilterSidebar()
             }
         } detail: {
             // DETAIL: Map with Inspector
             MapDetailView(showingInspector: $showingInspector)
-        }
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Search airports...")
-        .onSubmit(of: .search) {
-            performSearch()
-        }
-        .onChange(of: searchText) { _, newValue in
-            // Debounced search as user types
-            if !newValue.isEmpty {
-                performDebouncedSearch()
-            } else {
-                // Clear search results when search is cleared
-                state?.airports.searchResults = []
-            }
         }
         .onChange(of: state?.airports.selectedAirport) { _, newValue in
             // Show inspector when airport is selected
@@ -122,25 +113,6 @@ struct ContentView: View {
             get: { state?.airports.legendMode ?? .airportType },
             set: { state?.airports.legendMode = $0 }
         )
-    }
-
-    // MARK: - Search
-
-    private func performSearch() {
-        Task {
-            try? await state?.airports.search(query: searchText)
-        }
-    }
-
-    @State private var searchTask: Task<Void, Never>?
-
-    private func performDebouncedSearch() {
-        searchTask?.cancel()
-        searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            try? await state?.airports.search(query: searchText)
-        }
     }
 }
 

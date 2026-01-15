@@ -10,7 +10,10 @@ import SwiftUI
 struct ChatView: View {
     @Environment(\.appState) private var state
     @FocusState private var isInputFocused: Bool
-    
+
+    /// Callback to show the map (close sidebar/chat)
+    var onShowMap: (() -> Void)?
+
     var body: some View {
         VStack(spacing: 0) {
             // Messages list
@@ -97,9 +100,22 @@ struct ChatView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                // Offline mode toggle
-                Button {
-                    state?.chat.setOfflineMode(!(state?.chat.isOfflineMode ?? false))
+                // Offline mode toggle with menu for offline maps
+                Menu {
+                    Button {
+                        state?.chat.setOfflineMode(!(state?.chat.isOfflineMode ?? false))
+                    } label: {
+                        Label(
+                            state?.chat.isOfflineMode == true ? "Switch to Online" : "Switch to Offline",
+                            systemImage: state?.chat.isOfflineMode == true ? "cloud.fill" : "airplane.circle.fill"
+                        )
+                    }
+
+                    NavigationLink {
+                        OfflineMapsView()
+                    } label: {
+                        Label("Manage Offline Maps", systemImage: "square.and.arrow.down")
+                    }
                 } label: {
                     Label(
                         state?.chat.isOfflineMode == true ? "Offline" : "Online",
@@ -108,15 +124,16 @@ struct ChatView: View {
                     .foregroundStyle(state?.chat.isOfflineMode == true ? .orange : .blue)
                 }
             }
-            
+
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    OfflineMapsView()
+                // Show map button - returns to map view
+                Button {
+                    onShowMap?()
                 } label: {
                     Image(systemName: "map")
                 }
             }
-            
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     state?.chat.clear()
