@@ -89,52 +89,8 @@ class NotificationBatchProcessor:
             conn.execute("ALTER TABLE ga_notification_requirements ADD COLUMN extraction_method TEXT")
             logger.info("Migrated schema: added extraction_method column")
 
-        # Schema migration: fix UNIQUE constraint from (icao, rule_type) to just (icao)
-        # The old constraint allowed duplicates because NULL != NULL in SQLite UNIQUE checks
-        self._migrate_unique_constraint(conn)
-
         conn.commit()
         conn.close()
-
-    def _migrate_unique_constraint(self, conn: sqlite3.Connection) -> None:
-        """
-        Migrate from UNIQUE(icao, rule_type) to UNIQUE(icao).
-
-        The old schema had UNIQUE(icao, rule_type) which allowed duplicates
-        when rule_type was NULL (SQLite treats NULL as distinct in UNIQUE).
-        """
-        # Check if we need migration by looking for duplicates
-        cursor = conn.execute("""
-            SELECT icao, COUNT(*) as cnt
-            FROM ga_notification_requirements
-            GROUP BY icao
-            HAVING cnt > 1
-        """)
-        duplicates = cursor.fetchall()
-
-        if not duplicates:
-            return  # No duplicates, no migration needed
-
-        logger.info(f"Found {len(duplicates)} airports with duplicate records, cleaning up...")
-
-        # For each duplicate, keep the record with highest confidence
-        for icao, count in duplicates:
-            # Get all records for this ICAO, ordered by confidence desc
-            cursor = conn.execute("""
-                SELECT id, confidence FROM ga_notification_requirements
-                WHERE icao = ?
-                ORDER BY confidence DESC, id DESC
-            """, (icao,))
-            records = cursor.fetchall()
-
-            # Keep the first (highest confidence), delete the rest
-            ids_to_delete = [r[0] for r in records[1:]]
-            if ids_to_delete:
-                placeholders = ",".join("?" for _ in ids_to_delete)
-                conn.execute(f"DELETE FROM ga_notification_requirements WHERE id IN ({placeholders})", ids_to_delete)
-                logger.debug(f"  {icao}: removed {len(ids_to_delete)} duplicate(s)")
-
-        logger.info("Schema migration: cleaned up duplicate records")
 
     def _parsed_to_db_record(
         self, icao: str, parsed: ParsedNotificationRules

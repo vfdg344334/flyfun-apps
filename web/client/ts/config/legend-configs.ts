@@ -50,14 +50,15 @@ export const NOTIFICATION_COLORS = {
  * 1. No notification data -> gray (unknown)
  * 2. H24 operations -> green (no notice)
  * 3. Not available -> red (difficult)
- * 4. On request -> blue (moderate - must call)
- * 5. Business day notice -> yellow (hassle)
- * 6. Hours type with no hours_notice -> green (operating hours only)
- * 7. Hours null/undefined -> gray (unknown)
- * 8. Hours <= 12 -> green (easy)
- * 9. Hours 13-24 -> blue (moderate)
- * 10. Hours 25-48 -> yellow (hassle)
- * 11. Hours > 48 -> red (difficult)
+ * 4. On request -> yellow (moderate - must call)
+ * 5. Business day notice -> blue (hassle)
+ * 6. AS_AD_HOURS -> green (available during AD operating hours)
+ * 7. Hours type with no hours_notice -> green (operating hours only)
+ * 8. Hours null/undefined -> gray (unknown)
+ * 9. Hours <= 12 -> green (easy)
+ * 10. Hours 13-24 -> yellow (moderate)
+ * 11. Hours 25-48 -> blue (hassle)
+ * 12. Hours > 48 -> red (difficult)
  */
 export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
   // 1. No notification data
@@ -100,7 +101,15 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
     radiusMultiplier: 1.0,
     match: (airport) => airport.notification?.notification_type === 'business_day',
   },
-  // 6. Hours type with no hours_notice = operating hours only
+  // 6. AS_AD_HOURS = as aerodrome hours (available during airport operating hours)
+  {
+    id: 'easy' as NotificationBucketId,
+    label: 'AD operating hours',
+    color: NOTIFICATION_COLORS.green,
+    radiusMultiplier: 1.0,
+    match: (airport) => airport.notification?.notification_type === 'as_ad_hours',
+  },
+  // 7. Hours type with no hours_notice = operating hours only
   {
     id: 'easy' as NotificationBucketId,
     label: 'Operating hours only',
@@ -112,7 +121,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
              (n.hours_notice === null || n.hours_notice === undefined);
     },
   },
-  // 7. Hours null/undefined with other types = unknown
+  // 8. Hours null/undefined with other types = unknown
   {
     id: 'unknown' as NotificationBucketId,
     label: 'Unknown hours',
@@ -123,7 +132,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
       return n?.hours_notice === null || n?.hours_notice === undefined;
     },
   },
-  // 8. Hours <= 12 = easy
+  // 9. Hours <= 12 = easy
   {
     id: 'easy' as NotificationBucketId,
     label: '<=12h notice',
@@ -131,7 +140,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
     radiusMultiplier: 1.0,
     match: (airport) => (airport.notification?.hours_notice ?? Infinity) <= 12,
   },
-  // 9. Hours 13-24 = moderate
+  // 10. Hours 13-24 = moderate
   {
     id: 'moderate' as NotificationBucketId,
     label: '13-24h notice',
@@ -139,7 +148,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
     radiusMultiplier: 1.0,
     match: (airport) => (airport.notification?.hours_notice ?? Infinity) <= 24,
   },
-  // 10. Hours 25-48 = hassle
+  // 11. Hours 25-48 = hassle
   {
     id: 'hassle' as NotificationBucketId,
     label: '25-48h notice',
@@ -147,7 +156,7 @@ export const NOTIFICATION_LEGEND_ENTRIES: LegendEntry<Airport>[] = [
     radiusMultiplier: 1.0,
     match: (airport) => (airport.notification?.hours_notice ?? Infinity) <= 48,
   },
-  // 11. Hours > 48 = difficult (default fallback)
+  // 12. Hours > 48 = difficult (default fallback)
   {
     id: 'difficult' as NotificationBucketId,
     label: '>48h notice',
