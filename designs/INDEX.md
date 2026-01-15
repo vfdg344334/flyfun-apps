@@ -73,10 +73,6 @@ ChatDomain, OnlineChatbotService (SSE), OfflineChatbotService (MediaPipe), Local
 Tile caching (CachedTileOverlay, OfflineTileManager), bundled data (airports.db, rules.json), on-device AI (Gemma 2B via MediaPipe).
 → Full doc: IOS_APP_OFFLINE.md
 
-### iOS App (Legacy - Full Reference)
-Original comprehensive design doc. Use the split docs above for focused work; this remains as complete reference.
-→ Full doc: IOS_APP_DESIGN.md
-
 ## Reference
 
 ### Chatbot Web UI
