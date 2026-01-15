@@ -2,9 +2,43 @@
 
 > Aviation planning web app with LLM agent, European AIP data, and GA friendliness scoring
 
-## Core Architecture
+## Web App (Frontend)
 
-### LLM Agent Design
+### Web App Architecture
+Core architecture patterns: Zustand store as single source of truth, unidirectional data flow, component communication via store and events. **Read first** before any web UI work.
+Key exports: `store`, `AppState`, `VisualizationEngine`, `UIManager`, `ChatbotManager`
+→ Full doc: WEB_APP_ARCHITECTURE.md
+
+### Web App State
+Zustand store design: state structure, actions, filtering logic, subscriptions, data flow patterns.
+Key exports: `store`, `FilterConfig`, `GAState`, `RulesState`
+→ Full doc: WEB_APP_STATE.md
+
+### Web App Map
+Map visualization: VisualizationEngine, Leaflet integration, markers, routes, highlights, layers, view management.
+Key exports: `VisualizationEngine`, marker styles, route rendering
+→ Full doc: WEB_APP_MAP.md
+
+### Web App Legends
+Legend system: shared configuration, match-function classification, legend modes (notification, airport-type, runway-length, relevance), LLM legend switching.
+Key exports: `LegendConfig`, `LegendEntry`, `NOTIFICATION_LEGEND_CONFIG`, `classifyData`, `getColorFromConfig`
+→ Full doc: WEB_APP_LEGENDS.md
+
+### Web App Chat Integration
+Chatbot integration: ChatbotManager, SSE streaming, UI payload handling, visualization types (markers, route_with_markers, point_with_markers, marker_with_details).
+Key exports: `ChatbotManager`, `LLMIntegration`, visualization handlers
+→ Full doc: WEB_APP_CHAT.md
+
+### Web App Filters
+Filter system: FilterEngine (backend single source), filter types, AIP filtering, adding new filters, filter profile application.
+Key exports: `FilterEngine`, `FilterConfig`, filter implementations
+→ Full doc: WEB_APP_FILTERS.md
+
+---
+
+## LLM Agent (Backend)
+
+### Aviation Agent Design
 Planner-based aviation agent using LangGraph. LLM planner selects tools, tool runner executes, formatter produces UI payloads. Supports airport queries, route planning, and rules lookup.
 Key exports: `AviationPlan`, `build_ui_payload`, airport tools, rules tools
 → Full doc: LLM_AGENT_DESIGN.md
@@ -14,15 +48,11 @@ RAG-powered rules retrieval with smart router. Classifies queries as rules vs da
 Key exports: `QueryRouter`, `RulesRAG`, `compare_rules_between_countries`
 → Full doc: RULES_RAG_AGENT_DESIGN.md
 
-### UI Filter State Management
-Zustand-based reactive state management for airport explorer. Unidirectional data flow, store subscriptions, event-driven component communication.
-Key exports: `store`, `FilterConfig`, `UIManager`, `VisualizationEngine`
-→ Full doc: UI_FILTER_STATE_DESIGN.md
+### Aviation Agent Configuration
+Configuration system for aviation agent prompts, personas, and tools. YAML-based configs, prompt templates with placeholders.
+→ Full doc: AVIATION_AGENT_CONFIGURATION_DESIGN.md
 
-### Legend Configuration
-Shared legend configuration ensuring marker colors match legend display. Match-function-based classification with first-match-wins evaluation order.
-Key exports: `LegendConfig`, `LegendEntry`, `NOTIFICATION_LEGEND_CONFIG`, `classifyData`, `getColorFromConfig`
-→ Full doc: LEGEND_DESIGN.md
+---
 
 ## Data & Scoring
 
@@ -41,15 +71,7 @@ Waterfall parser for PPR/customs notification requirements. Regex patterns handl
 Key exports: `NotificationParser`, `NotificationScorer`, `NotificationBatchProcessor`, `get_notification_config`
 → Full doc: NOTIFICATION_PARSING_DESIGN.md
 
-## Deployment & Configuration
-
-### Aviation Agent Configuration
-Configuration system for aviation agent prompts, personas, and tools. YAML-based configs, prompt templates with placeholders.
-→ Full doc: AVIATION_AGENT_CONFIGURATION_DESIGN.md
-
-### Docker Deployment
-Container deployment setup for web server and services.
-→ Full doc: DOCKER_DEPLOYMENT.md
+---
 
 ## Mobile (iOS/macOS)
 
@@ -73,13 +95,18 @@ ChatDomain, OnlineChatbotService (SSE), OfflineChatbotService (MediaPipe), Local
 Tile caching (CachedTileOverlay, OfflineTileManager), bundled data (airports.db, rules.json), on-device AI (Gemma 2B via MediaPipe).
 → Full doc: IOS_APP_OFFLINE.md
 
-## Reference
+---
 
-### Chatbot Web UI
-Web-based chat interface with map visualization, filter panels, and airport cards.
-→ Full doc: CHATBOT_WEBUI_DESIGN.md
+## Deployment
+
+### Docker Deployment
+Container deployment setup for web server and services.
+→ Full doc: DOCKER_DEPLOYMENT.md
+
+---
+
+## Reference
 
 ### Architecture Diagrams
 Visual diagrams for Rules RAG system flow and component interactions.
 → Full doc: RULES_RAG_ARCHITECTURE_DIAGRAM.md
-
