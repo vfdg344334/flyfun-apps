@@ -48,8 +48,8 @@ struct AirportMapView: View {
         .onChange(of: selectedAirportID) { _, newValue in
             if let icao = newValue,
                let airport = airports.first(where: { $0.icao == icao }) {
+                // Selection triggers inspector via ContentView's onChange
                 state?.airports.select(airport)
-                state?.navigation.showAirportDetail()
             }
         }
         .onChange(of: currentLegendMode) { oldValue, newValue in
@@ -110,8 +110,8 @@ struct AirportMapView: View {
             airports: airports,
             selectedAirport: state?.airports.selectedAirport,
             onAirportSelected: { airport in
+                // Selection triggers inspector via ContentView's onChange
                 state?.airports.select(airport)
-                state?.navigation.showAirportDetail()
             },
             onRegionChange: { region in
                 // Load airports for new region (like online map's onMapCameraChange)
@@ -270,11 +270,8 @@ struct AirportMapView: View {
     }
     
     private var bottomPadding: CGFloat {
-        // If bottom tab bar is showing, add space for it (300px content + ~60px tab bar)
-        if state?.navigation.showingBottomTabBar == true {
-            return 360
-        }
-        // Otherwise just safe area padding
+        // Inspector now shows on trailing edge (iPad) or as sheet (iPhone)
+        // Just need small padding for safe area
         return 20
     }
     
@@ -390,17 +387,17 @@ struct AirportMarkerView: View {
         }
     }
 
-    /// Notification mode: Size by easiness (easier = larger)
+    /// Notification mode: Size by bucket (easier = larger)
     private var notificationSize: CGFloat {
         guard let info = notificationInfo else {
             return 8 // No data
         }
-        let score = info.easinessScore
-        switch score {
-        case 80...100: return 16  // Easy
-        case 60..<80: return 14   // Moderate
-        case 40..<60: return 12   // Some hassle
-        default: return 10        // High hassle
+        switch info.bucket {
+        case .h24, .easy: return 16      // Easy access
+        case .moderate: return 14         // Moderate notice
+        case .hassle: return 12           // More hassle
+        case .difficult: return 10        // Difficult access
+        case .unknown: return 8           // No data
         }
     }
     
@@ -502,15 +499,17 @@ struct AirportMarkerView: View {
 
     /// Notification mode - based on easiness score:
     /// - Green = H24 or easy (score >= 80)
-    /// - Blue = Moderate ease (score 60-79)
-    /// - Orange = Some hassle (score 40-59)
-    /// - Red = High hassle (score < 40)
-    /// - Gray = No notification data
+    /// Notification legend colors match web cascade (12-condition)
+    /// - Green = H24 or ≤12h notice (#28a745)
+    /// - Yellow = On-request or 13-24h notice (#ffc107)
+    /// - Blue = Business day or 25-48h notice (#007bff)
+    /// - Red = Not available or >48h notice (#dc3545)
+    /// - Gray = No notification data (#95a5a6)
     private var notificationColor: Color {
         guard let info = notificationInfo else {
-            return .gray
+            return NotificationInfo.NotificationBucket.unknown.color
         }
-        return info.legendColor
+        return info.bucket.color
     }
 
     // MARK: - Helpers
@@ -561,12 +560,13 @@ extension LegendMode {
                 LegendItem(color: .blue, size: 14, label: "Colored by country"),
             ]
         case .notification:
+            // Use bucket colors to match web exactly
             return [
-                LegendItem(color: .green, size: 16, label: "H24 / Easy"),
-                LegendItem(color: .blue, size: 14, label: "Moderate"),
-                LegendItem(color: .orange, size: 12, label: "Some hassle"),
-                LegendItem(color: .red, size: 10, label: "High hassle"),
-                LegendItem(color: .gray, size: 8, label: "No data"),
+                LegendItem(color: NotificationInfo.NotificationBucket.h24.color, size: 16, label: "H24 / ≤12h"),
+                LegendItem(color: NotificationInfo.NotificationBucket.moderate.color, size: 14, label: "13-24h / On request"),
+                LegendItem(color: NotificationInfo.NotificationBucket.hassle.color, size: 12, label: "25-48h / Business day"),
+                LegendItem(color: NotificationInfo.NotificationBucket.difficult.color, size: 10, label: ">48h / Unavailable"),
+                LegendItem(color: NotificationInfo.NotificationBucket.unknown.color, size: 8, label: "No data"),
             ]
         }
     }

@@ -39,7 +39,7 @@ enum PreviewFactory {
         let state = makeAppState()
         if let airport = TestFixtures.sampleAirports.first {
             state.airports.selectedAirport = airport
-            state.navigation.showBottomTabBar()
+            // Inspector is automatically shown via ContentView's onChange
         }
         return state
     }

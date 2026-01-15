@@ -38,6 +38,13 @@ struct FilterConfig: Codable, Equatable, Sendable {
     // MARK: - Fee Filters
     var maxLandingFee: Double?
 
+    // MARK: - Hospitality Filters (values: "vicinity" or "atAirport")
+    var hotel: String?
+    var restaurant: String?
+
+    // MARK: - Size Filters
+    var excludeLargeAirports: Bool?
+
     // MARK: - Default
     static let `default` = FilterConfig()
     
@@ -58,7 +65,10 @@ struct FilterConfig: Codable, Equatable, Sendable {
         aipField != nil ||
         hasAvgas == true ||
         hasJetA == true ||
-        maxLandingFee != nil
+        maxLandingFee != nil ||
+        hotel != nil ||
+        restaurant != nil ||
+        excludeLargeAirports == true
     }
     
     /// Count of active filters
@@ -78,6 +88,9 @@ struct FilterConfig: Codable, Equatable, Sendable {
         if hasAvgas == true { count += 1 }
         if hasJetA == true { count += 1 }
         if maxLandingFee != nil { count += 1 }
+        if hotel != nil { count += 1 }
+        if restaurant != nil { count += 1 }
+        if excludeLargeAirports == true { count += 1 }
         return count
     }
     
@@ -98,6 +111,9 @@ struct FilterConfig: Codable, Equatable, Sendable {
         if hasAvgas == true { parts.append("Has AVGAS") }
         if hasJetA == true { parts.append("Has Jet-A") }
         if let fee = maxLandingFee { parts.append("Landing fee ≤ €\(Int(fee))") }
+        if let h = hotel { parts.append("Hotel: \(h)") }
+        if let r = restaurant { parts.append("Restaurant: \(r)") }
+        if excludeLargeAirports == true { parts.append("Exclude large") }
         return parts.isEmpty ? "No filters" : parts.joined(separator: ", ")
     }
     

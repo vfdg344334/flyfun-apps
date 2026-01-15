@@ -19,7 +19,6 @@ import RZUtilsSwift
 /// ```swift
 /// @Environment(\.appState) private var state
 /// state.airports.select(airport)
-/// state.navigation.showChat()
 /// ```
 @Observable
 @MainActor
@@ -44,6 +43,9 @@ final class AppState {
     /// Notification service for customs/immigration requirements
     let notificationService: NotificationService?
 
+    /// GA friendliness service for hotel/restaurant/fee data
+    let gaFriendlinessService: GAFriendlinessService?
+
     // MARK: - Dependencies (kept for reference)
     private let repository: AirportRepositoryProtocol
     
@@ -65,8 +67,14 @@ final class AppState {
         // Initialize notification service from bundled DB
         self.notificationService = NotificationService.createFromBundle()
 
+        // Initialize GA friendliness service from bundled DB
+        self.gaFriendlinessService = GAFriendlinessService.createFromBundle()
+
         // Wire up cross-domain communication
         setupCrossDomainWiring()
+
+        // Inject GA service into AirportDomain for filtering
+        airports.gaFriendlinessService = gaFriendlinessService
     }
     
     // MARK: - Cross-Domain Wiring
@@ -129,9 +137,11 @@ final class AppState {
         // Preload notification data (fast, ~100ms for ~600 entries)
         await notificationService?.preloadAll()
 
+        // Preload GA friendliness data
+        await gaFriendlinessService?.preloadAll()
+
         // Restore session state if enabled
         if settings.restoreSessionOnLaunch {
-            navigation.selectedTab = settings.lastTab
             airports.mapPosition = .region(settings.lastMapRegion)
             airports.filters = settings.defaultFilters
             airports.legendMode = settings.defaultLegendMode
@@ -158,13 +168,12 @@ final class AppState {
     /// Called when app disappears - save state
     func onDisappear() {
         Logger.app.info("AppState.onDisappear - saving session")
-        
+
         settings.saveSessionState(
             mapRegion: airports.visibleRegion,
-            selectedAirportICAO: airports.selectedAirport?.icao,
-            selectedTab: navigation.selectedTab
+            selectedAirportICAO: airports.selectedAirport?.icao
         )
-        
+
         system.stopMonitoring()
     }
 }

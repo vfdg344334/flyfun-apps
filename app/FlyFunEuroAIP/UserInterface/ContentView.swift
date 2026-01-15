@@ -2,7 +2,10 @@
 //  ContentView.swift
 //  FlyFunEuroAIP
 //
-//  Created by Brice Rosenzweig on 26/10/2025.
+//  Modern SwiftUI root view using NavigationSplitView (iOS 17+)
+//  - Single view for all device sizes (iPad/Mac/iPhone)
+//  - .searchable() for native search
+//  - .inspector() for airport details (automatic adaptation)
 //
 
 import SwiftUI
@@ -11,639 +14,66 @@ import RZFlight
 
 struct ContentView: View {
     @Environment(\.appState) private var state
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    
+    @State private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
+    @State private var searchText = ""
+    @State private var showingInspector = false
+
     var body: some View {
-        Group {
-            if isRegularWidth {
-                RegularLayout()
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            // SIDEBAR: Search + Filters
+            SearchFilterSidebar()
+        } detail: {
+            // DETAIL: Map with Inspector
+            MapDetailView(showingInspector: $showingInspector)
+        }
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Search airports...")
+        .onSubmit(of: .search) {
+            performSearch()
+        }
+        .onChange(of: searchText) { _, newValue in
+            // Debounced search as user types
+            if !newValue.isEmpty {
+                performDebouncedSearch()
             } else {
-                CompactLayout()
+                // Clear search results when search is cleared
+                state?.airports.searchResults = []
             }
-        }
-        // Filter sheet (only for iPhone - compact size class)
-        .sheet(isPresented: filterSheetBinding) {
-            FilterPanelView()
-                .presentationDetents([.medium, .large])
-        }
-        // Search and Chat sheets (iPhone only - compact size class)
-        .sheet(isPresented: searchSheetBinding) {
-            NavigationStack {
-                SearchView()
-                    .navigationTitle("Search Airports")
-                    .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                state?.navigation.hideSearchSheet()
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-            }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
         }
         .onChange(of: state?.airports.selectedAirport) { _, newValue in
-            // Auto-close search sheet on iPhone when airport is selected
-            if !isRegularWidth && newValue != nil {
-                state?.navigation.hideSearchSheet()
-            }
+            // Show inspector when airport is selected
+            showingInspector = (newValue != nil)
         }
-        .sheet(isPresented: chatSheetBinding) {
-            NavigationStack {
-                ChatView()
-            }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .overlay {
-            // Error banner
-            if let error = state?.system.error {
-                VStack {
-                    ErrorBanner(error: error) {
-                        state?.system.clearError()
-                    }
-                    Spacer()
-                }
-            }
-            
-            // Offline banner
-            if state?.system.connectivityMode == .offline && state?.settings.showOfflineBanner == true {
-                VStack {
-                    OfflineBanner()
-                    Spacer()
-                }
-                .padding(.top, 50)  // Below error banner if both showing
-            }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    // MARK: - Search
+
+    private func performSearch() {
+        Task {
+            try? await state?.airports.search(query: searchText)
         }
     }
-    
-    // MARK: - Computed Properties
-    
-    private var isRegularWidth: Bool {
-        sizeClass == .regular
-    }
-    
-    private var filterSheetBinding: Binding<Bool> {
-        Binding(
-            get: { 
-                // Only show filter sheet on compact size class (iPhone)
-                !isRegularWidth && (state?.navigation.showingFilters ?? false)
-            },
-            set: { 
-                if !isRegularWidth {
-                    state?.navigation.showingFilters = $0
-                } else {
-                    // On regular size class, show filters in left overlay instead
-                    if $0 {
-                        state?.navigation.showFiltersInLeftOverlay()
-                    }
-                }
-            }
-        )
-    }
-    
-    // Search sheet binding (only used on compact/iPhone)
-    private var searchSheetBinding: Binding<Bool> {
-        Binding(
-            get: { 
-                // Only show search sheet on compact size class
-                !isRegularWidth && (state?.navigation.showingSearchSheet ?? false)
-            },
-            set: { 
-                if !isRegularWidth {
-                    if $0 {
-                        state?.navigation.showSearchSheet()
-                    } else {
-                        state?.navigation.hideSearchSheet()
-                    }
-                }
-            }
-        )
-    }
-    
-    // Chat sheet binding (only used on compact/iPhone)
-    private var chatSheetBinding: Binding<Bool> {
-        Binding(
-            get: { 
-                // Only show chat sheet on compact size class
-                !isRegularWidth && (state?.navigation.showingChat ?? false)
-            },
-            set: { 
-                if !isRegularWidth {
-                    if $0 {
-                        state?.navigation.showChat()
-                    } else {
-                        state?.navigation.hideChat()
-                    }
-                }
-            }
-        )
-    }
-    
-}
 
-// MARK: - Regular Layout (iPad/Mac)
+    @State private var searchTask: Task<Void, Never>?
 
-struct RegularLayout: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        ZStack {
-            // Full screen map
-            AirportMapView()
-                .ignoresSafeArea()
-            
-            // Semi-transparent backdrop when overlay is visible (tap to dismiss)
-            if state?.navigation.showingLeftOverlay == true {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        state?.navigation.hideLeftOverlay()
-                    }
-                    .transition(.opacity)
-            }
-            
-            // Left Overlay (slides in from left when visible)
-            HStack(spacing: 0) {
-                if state?.navigation.showingLeftOverlay == true {
-                    LeftOverlayContainer()
-                        .padding(.leading, 8)
-                        .padding(.vertical, 8)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                        .zIndex(1) // Ensure overlay is above backdrop
-                }
-                Spacer()
-            }
-            
-            // Bottom Tab Bar (overlay)
-            VStack {
-                Spacer()
-                BottomTabBar()
-            }
-            
-            // Floating Action Buttons (top-right corner)
-            VStack {
-                HStack {
-                    Spacer()
-                    RegularFloatingActionButtons()
-                        .padding(.trailing, 16)
-                        .padding(.top, 8)
-                }
-                .padding(.top, 8) // Safe area padding
-                Spacer()
-            }
+    private func performDebouncedSearch() {
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            try? await state?.airports.search(query: searchText)
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state?.navigation.showingLeftOverlay)
-    }
-}
-
-// MARK: - Compact Layout (iPhone)
-
-struct CompactLayout: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        ZStack {
-            // Map as background
-            AirportMapView()
-                .ignoresSafeArea()
-            
-            // Bottom Tab Bar (overlay)
-            VStack {
-                Spacer()
-                BottomTabBar()
-            }
-            
-            // Floating Action Buttons (top-right corner)
-            VStack {
-                HStack {
-                    Spacer()
-                    FloatingActionButtons()
-                        .padding(.trailing, 16)
-                        .padding(.top, 8)
-                }
-                .padding(.top, 8) // Safe area padding
-                Spacer()
-            }
-        }
-    }
-}
-
-// MARK: - Floating Action Buttons (iPhone)
-
-struct FloatingActionButtons: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            // Search button - toggles visibility
-            FloatingActionButton(
-                icon: "magnifyingglass",
-                label: "Search",
-                color: (state?.navigation.showingSearchSheet ?? false) ? .blue.opacity(0.7) : .blue
-            ) {
-                state?.navigation.toggleSearchSheet()
-            }
-            
-            // Chat button - toggles visibility
-            FloatingActionButton(
-                icon: "bubble.left.and.bubble.right",
-                label: "Chat",
-                color: (state?.navigation.showingChat ?? false) ? .green.opacity(0.7) : .green
-            ) {
-                state?.navigation.toggleChat()
-            }
-            
-            // Filters button - toggles visibility
-            FloatingActionButton(
-                icon: state?.airports.filters.hasActiveFilters == true 
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle",
-                label: "Filters",
-                color: (state?.navigation.showingFilters ?? false)
-                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
-                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
-            ) {
-                state?.navigation.toggleFilters()
-            }
-        }
-        .padding(.top, 8)
-    }
-}
-
-// MARK: - Floating Action Buttons (iPad/Mac)
-
-struct RegularFloatingActionButtons: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            // Search button - toggles visibility
-            FloatingActionButton(
-                icon: "magnifyingglass",
-                label: "Search",
-                color: isSearchVisible ? .blue.opacity(0.7) : .blue
-            ) {
-                if isSearchVisible {
-                    state?.navigation.hideLeftOverlay()
-                } else {
-                    state?.navigation.showSearchInLeftOverlay()
-                }
-            }
-            
-            // Chat button - toggles visibility
-            FloatingActionButton(
-                icon: "bubble.left.and.bubble.right",
-                label: "Chat",
-                color: isChatVisible ? .green.opacity(0.7) : .green
-            ) {
-                if isChatVisible {
-                    state?.navigation.hideLeftOverlay()
-                } else {
-                    state?.navigation.showChatInLeftOverlay()
-                }
-            }
-            
-            // Filters button - toggles visibility
-            FloatingActionButton(
-                icon: state?.airports.filters.hasActiveFilters == true 
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle",
-                label: "Filters",
-                color: isFiltersVisible 
-                    ? (state?.airports.filters.hasActiveFilters == true ? .orange.opacity(0.7) : .gray.opacity(0.7))
-                    : (state?.airports.filters.hasActiveFilters == true ? .orange : .gray)
-            ) {
-                if isFiltersVisible {
-                    state?.navigation.hideLeftOverlay()
-                } else {
-                    state?.navigation.showFiltersInLeftOverlay()
-                }
-            }
-        }
-        .padding(.top, 8)
-    }
-    
-    private var isSearchVisible: Bool {
-        state?.navigation.showingLeftOverlay == true && 
-        state?.navigation.leftOverlayMode == .search
-    }
-    
-    private var isChatVisible: Bool {
-        state?.navigation.showingLeftOverlay == true && 
-        state?.navigation.leftOverlayMode == .chat
-    }
-    
-    private var isFiltersVisible: Bool {
-        state?.navigation.showingLeftOverlay == true && 
-        state?.navigation.leftOverlayMode == .filters
-    }
-}
-
-// MARK: - Floating Action Button
-
-struct FloatingActionButton: View {
-    let icon: String
-    let label: String
-    let color: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(.white)
-                .frame(width: 50, height: 50)
-                .background(color, in: Circle())
-                .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Sidebar View
-
-struct SidebarView: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        SearchView()
-            .navigationTitle("Airports")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        state?.navigation.toggleChat()
-                    } label: {
-                        Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                    }
-                }
-                
-                #if os(iOS)
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        state?.navigation.toggleFilters()
-                    } label: {
-                        Label("Filters", systemImage: filterIcon)
-                    }
-                }
-                #endif
-            }
-    }
-    
-    private var filterIcon: String {
-        state?.airports.filters.hasActiveFilters == true
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
-    }
-}
-
-// MARK: - Floating Search Bar (Compact)
-
-struct FloatingSearchBar: View {
-    @Environment(\.appState) private var state
-    @State private var searchText = ""
-    @State private var isExpanded = false
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Search field
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                
-                TextField("Search airports...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .onSubmit {
-                        Task {
-                            try? await state?.airports.search(query: searchText)
-                            isExpanded = true
-                        }
-                    }
-                
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        state?.airports.searchResults = []
-                        isExpanded = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                
-                Button {
-                    state?.navigation.toggleFilters()
-                } label: {
-                    Image(systemName: filterIcon)
-                        .foregroundStyle(state?.airports.filters.hasActiveFilters == true ? .blue : .secondary)
-                }
-            }
-            .padding()
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            
-            // Expanded results
-            if isExpanded && !searchResults.isEmpty {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(searchResults.prefix(10), id: \.icao) { airport in
-                            Button {
-                                state?.airports.select(airport)
-                                isExpanded = false
-                            } label: {
-                                CompactSearchRow(airport: airport)
-                            }
-                            .foregroundStyle(.primary)
-                            
-                            Divider()
-                        }
-                    }
-                }
-                .frame(maxHeight: 300)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .padding(.top, 4)
-            }
-        }
-    }
-    
-    private var filterIcon: String {
-        state?.airports.filters.hasActiveFilters == true
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
-    }
-    
-    private var searchResults: [RZFlight.Airport] {
-        state?.airports.searchResults ?? []
-    }
-}
-
-struct CompactSearchRow: View {
-    let airport: RZFlight.Airport
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                        Text(airport.icao)
-                    .font(.headline.monospaced())
-                Text(airport.name)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .foregroundStyle(.tertiary)
-        }
-        .padding()
-    }
-}
-
-// MARK: - Compact Toolbar
-
-struct CompactToolbar: View {
-    @Environment(\.appState) private var state
-    
-    var body: some View {
-        HStack(spacing: 20) {
-            // Legend mode
-            Menu {
-                Picker("Legend", selection: legendModeBinding) {
-                    ForEach(LegendMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "paintpalette")
-                    Text("Legend")
-                        .font(.caption2)
-                }
-            }
-            
-            // Filters
-            Button {
-                state?.navigation.toggleFilters()
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: filterIcon)
-                    Text("Filters")
-                        .font(.caption2)
-                }
-            }
-            
-            // Chat / Assistant
-            Button {
-                state?.navigation.toggleChat()
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                    Text("Chat")
-                        .font(.caption2)
-                }
-            }
-            
-            // Clear route (if active)
-            if state?.airports.activeRoute != nil {
-                Button {
-                    state?.airports.clearRoute()
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "xmark.circle")
-                        Text("Clear")
-                            .font(.caption2)
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .padding()
-    }
-    
-    private var filterIcon: String {
-        state?.airports.filters.hasActiveFilters == true
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
-    }
-    
-    private var legendModeBinding: Binding<LegendMode> {
-        Binding(
-            get: { state?.airports.legendMode ?? .airportType },
-            set: { state?.airports.legendMode = $0 }
-        )
-    }
-    }
-    
-// MARK: - Error & Offline Banners
-
-struct ErrorBanner: View {
-    let error: AppError
-    let onDismiss: () -> Void
-    
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text(error.localizedDescription)
-                .font(.caption)
-            Spacer()
-            Button(action: onDismiss) {
-                Image(systemName: "xmark.circle.fill")
-            }
-        }
-        .padding()
-        .background(.red.opacity(0.9))
-        .foregroundStyle(.white)
-    }
-}
-
-struct OfflineBanner: View {
-    var body: some View {
-        HStack {
-            Image(systemName: "wifi.slash")
-            Text("Offline Mode - Using cached data")
-                .font(.caption)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.orange.opacity(0.9))
-        .foregroundStyle(.white)
-        .clipShape(Capsule())
-    }
-}
-
-// MARK: - HSplitView Helper
-
-struct HSplitViewOrHStack<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-    
-    var body: some View {
-        #if os(macOS)
-        HSplitView {
-            content()
-        }
-        #else
-        HStack(spacing: 0) {
-            content()
-        }
-        #endif
     }
 }
 
 // MARK: - Preview
 
-#Preview("Regular") {
+#Preview("iPad") {
     ContentView()
         .environment(\.horizontalSizeClass, .regular)
 }
 
-#Preview("Compact") {
+#Preview("iPhone") {
     ContentView()
         .environment(\.horizontalSizeClass, .compact)
 }

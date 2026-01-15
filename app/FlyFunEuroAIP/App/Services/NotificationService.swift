@@ -147,8 +147,8 @@ final class NotificationService: @unchecked Sendable {
                 }
             }
 
-            // Sort by easiness (easier first)
-            results.sort { $0.easinessScore > $1.easinessScore }
+            // Sort by bucket (easier first - lower sortOrder = easier)
+            results.sort { $0.bucket.sortOrder < $1.bucket.sortOrder }
 
             return Array(results.prefix(limit))
         }

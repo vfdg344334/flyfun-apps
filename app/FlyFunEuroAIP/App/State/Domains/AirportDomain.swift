@@ -20,7 +20,9 @@ final class AirportDomain {
     // MARK: - Dependencies
     /// Exposed for views that need to call repository methods directly (e.g., CountryPicker)
     let repository: AirportRepositoryProtocol
-    
+    /// Optional GA service for hospitality/fee filtering (injected from AppState)
+    var gaFriendlinessService: GAFriendlinessService?
+
     // MARK: - Airport Data (already filtered by repository)
     var airports: [RZFlight.Airport] = []
     var selectedAirport: RZFlight.Airport?
@@ -86,14 +88,19 @@ final class AirportDomain {
     private func loadAirportsInRegion(_ region: MKCoordinateRegion) async throws {
         // Calculate bounding box with some padding for smooth panning
         let paddedRegion = region.paddedBy(factor: 1.3)
-        
-        airports = try await repository.airportsInRegion(
+
+        var loadedAirports = try await repository.airportsInRegion(
             boundingBox: paddedRegion.boundingBox,
             filters: filters,
             limit: 500  // Cap markers for performance
         )
-        Logger.app.info("Loaded \(self.airports.count) airports in region")
-        
+
+        // Apply GA-specific filters (hotel, restaurant, fees, size)
+        loadedAirports = applyGAFilters(loadedAirports)
+
+        airports = loadedAirports
+        Logger.app.info("Loaded \(self.airports.count) airports in region (after GA filters)")
+
         // Load procedure lines if in procedure legend mode
         if legendMode == .procedures {
             await loadProcedureLines()
@@ -494,8 +501,63 @@ final class AirportDomain {
         }
     }
     
+    // MARK: - GA Filtering (Hotel/Restaurant/Fees)
+
+    /// Apply GA-specific filters that require GAFriendlinessService
+    /// Called after repository returns airports to filter by hospitality/fees
+    private func applyGAFilters(_ airports: [RZFlight.Airport]) -> [RZFlight.Airport] {
+        var result = airports
+
+        guard let service = gaFriendlinessService else {
+            // No GA service - skip GA filters
+            return result
+        }
+
+        // Hotel filter
+        if let hotelFilter = filters.hotel {
+            let filter = hotelFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
+            let validICAOs = service.airportsWithHotel(filter)
+            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        }
+
+        // Restaurant filter
+        if let restaurantFilter = filters.restaurant {
+            let filter = restaurantFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
+            let validICAOs = service.airportsWithRestaurant(filter)
+            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        }
+
+        // Landing fee filter
+        if let maxFee = filters.maxLandingFee {
+            let validICAOs = service.airportsWithMaxLandingFee(maxFee)
+            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        }
+
+        // Exclude large airports filter
+        if filters.excludeLargeAirports == true {
+            // Large airports typically have runways > 8000ft
+            result = result.filter { airport in
+                guard let maxRunway = airport.runways.map({ $0.length_ft }).max() else {
+                    return true // Keep airports with no runway data
+                }
+                return maxRunway < 8000
+            }
+        }
+
+        // Fuel filters (use RZFlight extensions)
+        if filters.hasAvgas == true {
+            result = result.withAvgas()
+        }
+
+        if filters.hasJetA == true {
+            result = result.withJetA()
+        }
+
+        return result
+    }
+
     // MARK: - Filter Actions
-    
+
     func applyFilters() async throws {
         // Clear search state when filters are applied - filters take precedence
         isSearchActive = false

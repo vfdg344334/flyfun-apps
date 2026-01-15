@@ -32,7 +32,7 @@ struct NotificationSummaryView: View {
                 Spacer()
 
                 // Easiness badge
-                EasinessBadge(score: notification.easinessScore)
+                EasinessBadge(bucket: notification.bucket)
             }
 
             Divider()
@@ -95,6 +95,7 @@ struct NotificationSummaryView: View {
         case .hours: return .blue
         case .onRequest: return .orange
         case .businessDay: return .purple
+        case .asAdHours: return .green
         case .notAvailable: return .red
         case .unknown: return .gray
         }
@@ -104,34 +105,16 @@ struct NotificationSummaryView: View {
 // MARK: - Easiness Badge
 
 struct EasinessBadge: View {
-    let score: Double
+    let bucket: NotificationInfo.NotificationBucket
 
     var body: some View {
-        Text(label)
+        Text(bucket.displayName)
             .font(.caption.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(color.opacity(0.2))
-            .foregroundColor(color)
+            .background(bucket.color.opacity(0.2))
+            .foregroundColor(bucket.color)
             .cornerRadius(8)
-    }
-
-    private var label: String {
-        switch score {
-        case 80...100: return "Easy"
-        case 60..<80: return "Moderate"
-        case 40..<60: return "Some hassle"
-        default: return "High hassle"
-        }
-    }
-
-    private var color: Color {
-        switch score {
-        case 80...100: return .green
-        case 60..<80: return .blue
-        case 40..<60: return .orange
-        default: return .red
-        }
     }
 }
 
@@ -158,7 +141,7 @@ struct NotificationCompactView: View {
 
             Spacer()
 
-            EasinessBadge(score: notification.easinessScore)
+            EasinessBadge(bucket: notification.bucket)
         }
         .padding(.vertical, 8)
     }
@@ -169,6 +152,7 @@ struct NotificationCompactView: View {
         case .hours: return .blue
         case .onRequest: return .orange
         case .businessDay: return .purple
+        case .asAdHours: return .green
         case .notAvailable: return .red
         case .unknown: return .gray
         }

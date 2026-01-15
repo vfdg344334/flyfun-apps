@@ -94,10 +94,7 @@ final class SettingsDomain {
     
     @ObservationIgnored
     @AppStorage("session.lastSelectedAirport") private var _lastSelectedAirport: String = ""
-    
-    @ObservationIgnored
-    @AppStorage("session.lastTab") private var _lastTab: String = "map"
-    
+
     var lastMapRegion: MKCoordinateRegion {
         get {
             MKCoordinateRegion(
@@ -116,12 +113,7 @@ final class SettingsDomain {
         get { _lastSelectedAirport.isEmpty ? nil : _lastSelectedAirport }
         set { _lastSelectedAirport = newValue ?? "" }
     }
-    
-    var lastTab: NavigationDomain.Tab {
-        get { NavigationDomain.Tab(rawValue: _lastTab) ?? .map }
-        set { _lastTab = newValue.rawValue }
-    }
-    
+
     // MARK: - Behavior Preferences
     
     @ObservationIgnored
@@ -150,14 +142,12 @@ final class SettingsDomain {
     /// Save current session state for restoration
     func saveSessionState(
         mapRegion: MKCoordinateRegion?,
-        selectedAirportICAO: String?,
-        selectedTab: NavigationDomain.Tab
+        selectedAirportICAO: String?
     ) {
         if let region = mapRegion {
             lastMapRegion = region
         }
         lastSelectedAirportICAO = selectedAirportICAO
-        lastTab = selectedTab
     }
     
     // MARK: - Unit Types

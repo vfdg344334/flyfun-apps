@@ -50,11 +50,7 @@ struct FlyFunEuroAIPApp: App {
             // View menu
             CommandMenu("View") {
                 if let state = appState {
-                    Button("Toggle Filters") { state.navigation.toggleFilters() }
-                        .keyboardShortcut("l")
-                    Button("Toggle Chat") { state.navigation.toggleChat() }
-                        .keyboardShortcut("k")
-                    Divider()
+                    // Legend mode picker
                     Picker("Legend Mode", selection: Binding(
                         get: { state.airports.legendMode },
                         set: { state.airports.legendMode = $0 }
