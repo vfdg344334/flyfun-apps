@@ -20,11 +20,6 @@ struct MapDetailView: View {
                 AirportInspectorView()
                     .inspectorColumnWidth(min: 300, ideal: 350, max: 400)
             }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    legendMenu
-                }
-            }
             .overlay(alignment: .topTrailing) {
                 // Error banner
                 if let error = state?.system.error {
@@ -43,27 +38,6 @@ struct MapDetailView: View {
             }
     }
 
-    // MARK: - Legend Menu
-
-    private var legendMenu: some View {
-        Menu {
-            Picker("Legend", selection: legendModeBinding) {
-                ForEach(LegendMode.allCases) { mode in
-                    Label(mode.rawValue, systemImage: mode.systemImage)
-                        .tag(mode)
-                }
-            }
-        } label: {
-            Label("Legend", systemImage: "paintpalette")
-        }
-    }
-
-    private var legendModeBinding: Binding<LegendMode> {
-        Binding(
-            get: { state?.airports.legendMode ?? .airportType },
-            set: { state?.airports.legendMode = $0 }
-        )
-    }
 }
 
 // MARK: - Error Banner View

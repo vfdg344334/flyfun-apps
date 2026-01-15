@@ -70,18 +70,15 @@ struct AirportMapView: View {
                 offlineRegion = region
             }
         }
-        // Legend overlays - always at bottom: selector on left, key on right
-        .overlay(alignment: .bottomTrailing) {
-            legendKeyOverlay
-        }
+        // Legend key overlay - shows what colors/sizes mean
         .overlay(alignment: .bottomLeading) {
-            legendOverlay
+            legendKeyOverlay
         }
         .overlay(alignment: .bottom) {
             // Route info bar - position above legend
             if state?.airports.activeRoute != nil {
                 routeInfoBar
-                    .padding(.bottom, bottomPadding + 80) // Space for legend
+                    .padding(.bottom, 100) // Space for legend
             }
         }
         // Offline indicator
@@ -246,42 +243,6 @@ struct AirportMapView: View {
         }
     }
     
-    // MARK: - Legend Mode Picker
-    
-    private var legendOverlay: some View {
-        Menu {
-            Picker("Legend", selection: legendModeBinding) {
-                ForEach(LegendMode.allCases) { mode in
-                    Label(mode.rawValue, systemImage: mode.icon)
-                        .tag(mode)
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: legendMode.icon)
-                Text(legendMode.rawValue)
-                    .font(.caption)
-            }
-            .padding(8)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        }
-        .padding()
-        .padding(.bottom, bottomPadding) // Space for bottom tab bar
-    }
-    
-    private var bottomPadding: CGFloat {
-        // Inspector now shows on trailing edge (iPad) or as sheet (iPhone)
-        // Just need small padding for safe area
-        return 20
-    }
-    
-    private var legendModeBinding: Binding<LegendMode> {
-        Binding(
-            get: { state?.airports.legendMode ?? .airportType },
-            set: { state?.airports.legendMode = $0 }
-        )
-    }
-    
     // MARK: - Legend Key (Color/Size explanation)
     
     private var legendKeyOverlay: some View {
@@ -300,7 +261,7 @@ struct AirportMapView: View {
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding()
-        .padding(.bottom, bottomPadding) // Space for bottom tab bar
+        .padding(.bottom, 20) // Small safe area padding
     }
     
     // MARK: - Route Info Bar
