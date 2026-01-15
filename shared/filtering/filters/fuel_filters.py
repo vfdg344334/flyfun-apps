@@ -7,7 +7,7 @@ from euro_aip.models.airport import Airport
 from .base import Filter
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class HasAvgasFilter(Filter):
@@ -42,3 +42,37 @@ class HasJetAFilter(Filter):
             return True
         has_jet_a = bool(getattr(airport, "jet_a", False))
         return has_jet_a == bool(value)
+
+
+class FuelTypeFilter(Filter):
+    """
+    Filter airports by fuel type availability.
+
+    Filter values:
+        - "avgas": Airport has AVGAS (100LL)
+        - "jet_a": Airport has Jet-A fuel
+        - None: No filter applied
+
+    This is the preferred filter for UI dropdowns, providing a cleaner
+    single-selection interface. The individual HasAvgasFilter and HasJetAFilter
+    are kept for backwards compatibility with existing API/chatbot usage.
+    """
+
+    name = "fuel_type"
+    description = "Filter by fuel type availability (avgas|jet_a)"
+
+    def apply(
+        self,
+        airport: Airport,
+        value: Any,
+        context: Optional["ToolContext"] = None,
+    ) -> bool:
+        if value is None:
+            return True  # No filter applied
+
+        if value == "avgas":
+            return bool(getattr(airport, "avgas", False))
+        elif value == "jet_a":
+            return bool(getattr(airport, "jet_a", False))
+        else:
+            return True  # Unknown filter value - don't filter

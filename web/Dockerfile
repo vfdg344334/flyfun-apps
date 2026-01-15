@@ -24,11 +24,24 @@ RUN groupadd -r -g 2000 flyfun && \
 # Copy application-specific code
 COPY web/server/ /app/web/server/
 
+# Copy shared application code
+COPY shared/ /app/shared/
+
+# Copy agent behavior configs (prompts, tools, examples)
+COPY configs/ /app/configs/
+
 # Copy built client dist from builder stage
 COPY --from=client-builder /build/dist /app/web/client/dist
-# Also copy other client files needed at runtime (CSS, HTML)
+# Also copy other client files needed at runtime (CSS, HTML, assets)
 COPY web/client/css/ /app/web/client/css/
+COPY web/client/assets/ /app/web/client/assets/
 COPY web/client/index.html /app/web/client/index.html
+
+# Copy ga_persona.db into container (optional - will be in writable location)
+# This allows SQLite to work properly even if /app/data is mounted read-only
+# Create directory first, then copy if file exists
+RUN mkdir -p /app/data_builtin
+COPY data/ga_persona.db /app/data_builtin/ga_persona.db
 
 # Set correct ownership
 RUN chown -R flyfun:flyfun /app

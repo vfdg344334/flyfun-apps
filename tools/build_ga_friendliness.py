@@ -3,11 +3,11 @@
 CLI tool for building GA friendliness database.
 
 Usage:
-    python tools/build_ga_friendliness.py --export path/to/export.json --output ga_meta.sqlite
+    python tools/build_ga_friendliness.py --export path/to/export.json --output data/ga_persona.db
     
 Options:
     --export, -e          Path to airfield.directory export JSON
-    --output, -o          Output database path (default: ga_meta.sqlite)
+    --output, -o          Output database path (default: data/ga_persona.db)
     --incremental, -i     Only process changed airports
     --since               Only process reviews after this date (ISO format)
     --icaos               Comma-separated list of specific ICAOs
@@ -36,6 +36,7 @@ from shared.ga_friendliness import (
     get_settings,
     BuildResult,
     AirfieldDirectorySource,
+    AirfieldDirectoryAPISource,
     AirportJsonDirectorySource,
     CSVReviewSource,
     CompositeReviewSource,
@@ -76,6 +77,17 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing per-airport JSON files (e.g., EGTF.json)",
     )
     source_group.add_argument(
+        "--download-api",
+        action="store_true",
+        help="Download from airfield.directory API instead of using local file",
+    )
+    source_group.add_argument(
+        "--api-base-url",
+        type=str,
+        default="https://airfield.directory/airfield",
+        help="Base URL for airfield.directory API (default: https://airfield.directory/airfield)",
+    )
+    source_group.add_argument(
         "--airports-db",
         type=Path,
         help="Path to airports.db for IFR/hotel/restaurant metadata",
@@ -86,8 +98,8 @@ def parse_args() -> argparse.Namespace:
     output_group.add_argument(
         "--output", "-o",
         type=Path,
-        default=Path("ga_meta.sqlite"),
-        help="Output database path (default: ga_meta.sqlite)",
+        default=Path("data/ga_persona.db"),
+        help="Output database path (default: data/ga_persona.db)",
     )
     output_group.add_argument(
         "--cache-dir",
@@ -132,6 +144,11 @@ def parse_args() -> argparse.Namespace:
         "--use-llm-notifications",
         action="store_true",
         help="Use LLM (OpenAI) for complex notification rules",
+    )
+    proc_group.add_argument(
+        "--aip-only",
+        action="store_true",
+        help="Update only AIP-derived fields (IFR, night, hotel, restaurant) without processing reviews. Much faster than full rebuild. Requires --airports-db.",
     )
     
     # LLM options
@@ -184,6 +201,24 @@ def parse_args() -> argparse.Namespace:
 def create_source(args: argparse.Namespace) -> "ReviewSource":
     """Create review source from arguments."""
     sources = []
+    
+    # API download mode (requires --icaos)
+    if args.download_api:
+        if not args.icaos:
+            logger.error("--download-api requires --icaos to specify which airports to download")
+            sys.exit(1)
+        
+        icaos = [icao.strip().upper() for icao in args.icaos.split(",")]
+        source = AirfieldDirectoryAPISource(
+            cache_dir=args.cache_dir,
+            icaos=icaos,
+            filter_ai_generated=True,
+            max_cache_age_days=7,
+            base_url=args.api_base_url,
+        )
+        if args.force_refresh:
+            source.set_force_refresh(True)
+        return source  # API source is standalone, don't combine with others
     
     if args.export:
         if not args.export.exists():
@@ -261,10 +296,18 @@ def main() -> int:
     
     # Check if we're in notification-only mode
     notification_only = source is None and args.parse_notifications and args.airports_db
-    
-    if source is None and not notification_only:
+
+    # Check if we're in AIP-only mode
+    aip_only = getattr(args, 'aip_only', False)
+
+    if source is None and not notification_only and not aip_only:
         logger.error("No source specified. Use --export, --csv, or --json-dir")
         logger.error("Or use --parse-notifications with --airports-db for notification-only mode")
+        logger.error("Or use --aip-only with --airports-db for AIP-only update")
+        return 1
+
+    if aip_only and not args.airports_db:
+        logger.error("--aip-only requires --airports-db")
         return 1
     
     if source:
@@ -275,14 +318,27 @@ def main() -> int:
     
     if args.dry_run and source:
         # Just show what would be done
+        # Note: This may load/parse source data but will NOT call LLM
+        # For API sources, this may download data (uses cache if available)
+        logger.info("DRY RUN MODE: No LLM calls will be made")
+        
         icaos_to_process = source.get_icaos()
         if icaos:
             icaos_to_process = icaos_to_process.intersection(set(icaos))
         
         logger.info(f"Would process {len(icaos_to_process)} airports")
         
+        # Count reviews (may load data, but no LLM processing)
         total_reviews = sum(len(source.get_reviews_for_icao(i)) for i in icaos_to_process)
         logger.info(f"Total reviews: {total_reviews}")
+        
+        # Show breakdown by airport (first 10)
+        logger.info("\nBreakdown (first 10 airports):")
+        for i, icao in enumerate(sorted(icaos_to_process)[:10]):
+            count = len(source.get_reviews_for_icao(icao))
+            logger.info(f"  {icao}: {count} reviews")
+        if len(icaos_to_process) > 10:
+            logger.info(f"  ... and {len(icaos_to_process) - 10} more airports")
         
         return 0
     
@@ -295,6 +351,52 @@ def main() -> int:
         airports_db_source = AirportsDatabaseSource(args.airports_db)
         logger.info(f"Using airports database: {args.airports_db}")
     
+    # Handle AIP-only mode
+    if aip_only:
+        logger.info("Running in AIP-only mode (no review processing)")
+
+        # Ensure database and schema exist
+        from shared.ga_friendliness.database import get_connection, ensure_schema_version
+        conn = get_connection(args.output)
+        ensure_schema_version(conn)
+        conn.close()
+
+        # Create builder and run AIP-only update
+        builder = GAFriendlinessBuilder(settings=settings)
+
+        try:
+            result = builder.update_aip_only(
+                airports_db=airports_db_source,
+                icaos=icaos,
+            )
+
+            # Print summary
+            print("\n" + "=" * 60)
+            print("AIP-ONLY UPDATE SUMMARY")
+            print("=" * 60)
+            print(f"Success: {result.success}")
+            print(f"Total airports: {result.metrics.total_airports}")
+            print(f"Successful: {result.metrics.successful_airports}")
+            print(f"Failed: {result.metrics.failed_airports}")
+            print(f"Skipped: {result.metrics.skipped_airports}")
+            if result.metrics.duration_seconds:
+                print(f"Duration: {result.metrics.duration_seconds:.1f} seconds")
+
+            if result.metrics.errors:
+                print(f"\nErrors ({len(result.metrics.errors)}):")
+                for error in result.metrics.errors[:10]:
+                    print(f"  - {error}")
+                if len(result.metrics.errors) > 10:
+                    print(f"  ... and {len(result.metrics.errors) - 10} more")
+
+            return 0 if result.success else 1
+
+        except Exception as e:
+            logger.exception(f"AIP-only update failed: {e}")
+            return 1
+        finally:
+            builder.close()
+
     # Handle notification-only mode
     if notification_only:
         logger.info("Running in notification-only mode (no review processing)")
@@ -414,7 +516,7 @@ def main() -> int:
                     return_parsed=True,
                 )
                 
-                # Write to ga_meta.sqlite (including detailed rules)
+                # Write to GA persona database (including detailed rules)
                 updated = notification_scorer.write_to_ga_meta(
                     args.output,
                     scores,

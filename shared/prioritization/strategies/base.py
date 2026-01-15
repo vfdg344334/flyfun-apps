@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from euro_aip.models.airport import Airport
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 @dataclass
@@ -18,6 +18,7 @@ class ScoredAirport:
     priority_level: int  # 1 = highest priority, 3 = lowest
     score: float  # Within priority level, lower score = better (e.g., lower cost, shorter distance)
     metadata: Dict[str, Any]  # Additional info (landing_fee, distance, etc.)
+    distance_nm: float = 9999.0  # Distance for tiebreaking within same priority+score
 
 
 class PriorityStrategy(ABC):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,8 @@ class LLMConfig(BaseModel):
     model: Optional[str] = None
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     streaming: bool = False
+    max_retries: int = Field(default=3, ge=0, le=10)
+    request_timeout: int = Field(default=60, ge=5, le=300)  # seconds
 
 
 class LLMsConfig(BaseModel):
@@ -24,7 +26,14 @@ class LLMsConfig(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    enabled: bool = True
+    """
+    Legacy routing configuration.
+
+    NOTE: Routing is deprecated. The planner now handles all tool selection directly,
+    including rules tools (answer_rules_question, browse_rules, compare_rules_between_countries).
+    This config is kept for backwards compatibility but has no effect.
+    """
+    enabled: bool = False  # Deprecated - routing is no longer used
 
 
 class QueryReformulationConfig(BaseModel):
@@ -57,23 +66,139 @@ class RerankingConfig(BaseModel):
     openai: Optional[OpenAIRerankingConfig] = OpenAIRerankingConfig()
 
 
+class FilterSuggestionTemplate(BaseModel):
+    """Template for filter-based suggestion."""
+    filter: str
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class EntitySuggestionTemplate(BaseModel):
+    """Template for entity-based suggestion."""
+    entity_type: str  # "icao_codes", "countries", "locations"
+    query_template: str
+    tool_name: str
+    category: str
+    priority: int
+
+
+class RuleCategoryTemplate(BaseModel):
+    """Template for rule category suggestions."""
+    name: str
+    priority: int
+    max_questions: int = 1
+
+
+class ToolSuggestionTemplates(BaseModel):
+    """Templates for suggestions for a specific tool."""
+    filters: List[FilterSuggestionTemplate] = []
+    entities: List[EntitySuggestionTemplate] = []
+    rule_categories: List[RuleCategoryTemplate] = []
+    fallback_queries: List[str] = []
+
+
 class NextQueryPredictionConfig(BaseModel):
     enabled: bool = True
     max_suggestions: int = Field(default=4, gt=0, le=20)
+    templates_path: Optional[str] = Field(
+        default="next_query_predictor/default.json",
+        description="Path to templates JSON file, relative to configs/ directory."
+    )
+
+
+class ComparisonConfig(BaseModel):
+    """
+    Configuration for cross-country rule comparison feature.
+
+    This feature uses answer embeddings to identify semantic differences
+    between countries' rules, then uses LLM synthesis to explain differences.
+    """
+    enabled: bool = True
+
+    # Embedding-based filtering parameters
+    max_questions: int = Field(
+        default=15,
+        gt=0,
+        le=100,
+        description="Maximum questions to send to LLM for synthesis. "
+                    "Set high (e.g., 100) to send all, low (e.g., 5) for aggressive filtering."
+    )
+    min_difference: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine difference threshold. "
+                    "0.0 = include identical answers, 1.0 = only opposite answers."
+    )
+    send_all_threshold: int = Field(
+        default=10,
+        gt=0,
+        description="If total questions <= this, send all regardless of difference score."
+    )
+
+    # LLM synthesis settings
+    synthesis_model: Optional[str] = Field(
+        default=None,
+        description="Model for synthesis. None = use formatter model."
+    )
+    synthesis_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0
+    )
 
 
 class PromptsConfig(BaseModel):
     planner: str  # Path to prompt file, e.g., "prompts/planner_v1.md"
     formatter: str
-    rules_agent: str
-    router: str
+    comparison_synthesis: Optional[str] = None  # Optional: for cross-country comparison
+    # Deprecated (kept for backwards compatibility with existing config files)
+    rules_agent: Optional[str] = None  # DEPRECATED: rules_agent was removed
+    router: Optional[str] = None  # DEPRECATED: routing was removed
 
 
 class ExamplesConfig(BaseModel):
     planner: str  # Path to planner examples file, e.g., "examples/planner_examples_v1.json"
 
 
+class ToolsConfig(BaseModel):
+    """Configuration for tool description file paths."""
+    search_airports: Optional[str] = None
+    find_airports_near_location: Optional[str] = None
+    find_airports_near_route: Optional[str] = None
+    get_airport_details: Optional[str] = None
+    get_notification_for_airport: Optional[str] = None
+    answer_rules_question: Optional[str] = None
+    browse_rules: Optional[str] = None
+    compare_rules_between_countries: Optional[str] = None
+
+
 class AgentBehaviorConfig(BaseModel):
+    """
+    Agent behavior configuration - controls HOW the agent thinks and acts.
+
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │ CONFIGURATION GUIDELINES                                                 │
+    │                                                                          │
+    │ This file (behavior_config.py) is for BEHAVIOR settings:                 │
+    │   ✓ LLM models, temperatures, prompts                                    │
+    │   ✓ Feature flags that change agent logic (routing, RAG, reranking)     │
+    │   ✓ Algorithm parameters (top_k, similarity thresholds)                  │
+    │   ✓ Anything that affects "how the agent thinks"                         │
+    │                                                                          │
+    │ Environment variables (config.py / .env) are for DEPLOYMENT settings:    │
+    │   ✓ Database paths and connection strings                                │
+    │   ✓ API keys and secrets                                                 │
+    │   ✓ Feature flags for enabling/disabling entire services                 │
+    │   ✓ Storage locations (checkpointer, logs, vector DB)                    │
+    │   ✓ Anything that varies between dev/staging/prod                        │
+    │                                                                          │
+    │ The key question: "Does this change how the agent thinks, or where       │
+    │ data goes?" Behavior → JSON config. Infrastructure → .env                │
+    └─────────────────────────────────────────────────────────────────────────┘
+    """
     version: str = "1.0"
     name: Optional[str] = None
     description: Optional[str] = None
@@ -84,8 +209,10 @@ class AgentBehaviorConfig(BaseModel):
     rag: RAGConfig
     reranking: RerankingConfig
     next_query_prediction: NextQueryPredictionConfig
+    comparison: ComparisonConfig = ComparisonConfig()  # Cross-country comparison
     prompts: PromptsConfig
     examples: ExamplesConfig
+    tools: Optional[ToolsConfig] = None  # Optional: tool description file paths
 
     _config_dir: Optional[Path] = None  # Internal: set by from_file()
 
@@ -104,6 +231,33 @@ class AgentBehaviorConfig(BaseModel):
             raise FileNotFoundError(f"Prompt file not found: {full_path}")
 
         return full_path.read_text(encoding="utf-8")
+
+    def load_tool_description(self, tool_name: str) -> Optional[str]:
+        """Load tool description from file if configured.
+        
+        Args:
+            tool_name: Name of the tool (e.g., "search_airports")
+            
+        Returns:
+            Tool description text from file, or None if not configured.
+        """
+        if not self.tools:
+            return None
+            
+        tool_path = getattr(self.tools, tool_name, None)
+        if not tool_path:
+            return None
+            
+        # Resolve relative to config directory
+        if not hasattr(self, "_config_dir") or self._config_dir is None:
+            return None
+            
+        full_path = self._config_dir / tool_path
+        if not full_path.exists():
+            logger.warning(f"Tool description file not found: {full_path}")
+            return None
+            
+        return full_path.read_text(encoding="utf-8").strip()
 
     def load_examples(self, component: str = "planner") -> list[dict[str, str]]:
         """
@@ -164,7 +318,7 @@ class AgentBehaviorConfig(BaseModel):
                 router=LLMConfig(model="gpt-4o-mini", temperature=0.0, streaming=False),
                 rules=None,  # Uses formatter
             ),
-            routing=RoutingConfig(enabled=True),
+            routing=RoutingConfig(enabled=False),  # Deprecated - routing is no longer used
             query_reformulation=QueryReformulationConfig(enabled=True),
             rag=RAGConfig(
                 embedding_model="text-embedding-3-small",
@@ -177,11 +331,15 @@ class AgentBehaviorConfig(BaseModel):
                 openai=OpenAIRerankingConfig(model="text-embedding-3-large"),
             ),
             next_query_prediction=NextQueryPredictionConfig(enabled=True, max_suggestions=4),
+            comparison=ComparisonConfig(
+                enabled=True,
+                max_questions=15,
+                min_difference=0.1,
+                send_all_threshold=10,
+            ),
             prompts=PromptsConfig(
                 planner="prompts/planner_v1.md",
                 formatter="prompts/formatter_v1.md",
-                rules_agent="prompts/rules_agent_v1.md",
-                router="prompts/router_v1.md",
             ),
             examples=ExamplesConfig(
                 planner="examples/planner_examples_v1.json",

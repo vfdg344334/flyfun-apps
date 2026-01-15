@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 """
-Shared airport tool logic used by both the MCP server and internal chatbot client.
+Shared Airport & Aviation Rules Tools
+======================================
+
+This module provides the core tool functions used by both the MCP server and
+the internal aviation chatbot agent. Tools are organized into two main categories:
+
+AIRPORT TOOLS (Section 5):
+    - search_airports: Search by ICAO, name, city, or country
+    - find_airports_near_location: Find airports near a geographic point
+    - find_airports_near_route: Find airports along a flight route
+    - get_airport_details: Get comprehensive airport information
+    - get_notification_for_airport: Customs notification requirements
+    - calculate_flight_distance: Calculate distance and flight time between airports
+
+RULES TOOLS (Section 6):
+    - answer_rules_question: Answer specific questions about rules for a country (RAG-based)
+    - browse_rules: Browse/list rules by category and tags with pagination
+    - compare_rules_between_countries: Compare rules between two or more countries
+
+TOOL REGISTRY (Section 7):
+    - get_shared_tool_specs(): Returns the tool manifest for registration
+
+Usage:
+    from shared.airport_tools import get_shared_tool_specs
+    specs = get_shared_tool_specs()
 """
 from __future__ import annotations
 
@@ -12,23 +36,33 @@ import urllib.parse
 import json
 import urllib.request
 
-from euro_aip.models.euro_aip_model import EuroAipModel
 from euro_aip.models.airport import Airport
 from euro_aip.models.navpoint import NavPoint
-from euro_aip.storage.database_storage import DatabaseStorage
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
-from .rules_manager import RulesManager
+from .aircraft_speeds import resolve_cruise_speed, get_aircraft_info, format_time
 from .filtering import FilterEngine
 from .prioritization import PriorityEngine
+from .tool_context import ToolContext
 
+
+# =============================================================================
+# SECTION 2: TYPE DEFINITIONS
+# =============================================================================
 
 ToolCallable = Callable[..., Dict[str, Any]]
 
 
 class ToolSpec(TypedDict):
-    """Metadata describing a shared tool."""
+    """Metadata describing a shared tool.
 
+    Attributes:
+        name: Tool identifier used for registration and invocation
+        handler: The callable function that implements the tool
+        description: Human-readable description (from config or docstring)
+        parameters: JSON Schema defining the tool's parameters
+        expose_to_llm: If True, tool is available to the aviation agent;
+                       if False, tool is internal or MCP-only
+    """
     name: str
     handler: ToolCallable
     description: str
@@ -36,886 +70,35 @@ class ToolSpec(TypedDict):
     expose_to_llm: bool
 
 
-@dataclass
-class ToolContext:
-    """Context providing access to shared resources for tool execution."""
-
-    model: EuroAipModel
-    enrichment_storage: Optional[EnrichmentStorage] = None
-    rules_manager: Optional[RulesManager] = None
-
-    @classmethod
-    def create(
-        cls,
-        db_path: str,
-        rules_path: Optional[str] = None,
-        load_rules: bool = True,
-    ) -> "ToolContext":
-        storage = DatabaseStorage(db_path)
-        model = storage.load_model()
-        enrichment = EnrichmentStorage(db_path)
-
-        rules_manager = None
-        if rules_path or load_rules:
-            rules_manager = RulesManager(rules_path)
-            if load_rules:
-                rules_manager.load_rules()
-
-        return cls(model=model, enrichment_storage=enrichment, rules_manager=rules_manager)
-
-    def ensure_rules_manager(self) -> RulesManager:
-        if not self.rules_manager:
-            self.rules_manager = RulesManager()
-            self.rules_manager.load_rules()
-        elif not self.rules_manager.loaded:
-            self.rules_manager.load_rules()
-        return self.rules_manager
-
-
-def _airport_summary(a: Airport) -> Dict[str, Any]:
-    return {
-        "ident": a.ident,
-        "name": a.name,
-        "municipality": a.municipality,
-        "country": a.iso_country,
-        "iso_country": a.iso_country,  # Include both for compatibility
-        "latitude_deg": getattr(a, "latitude_deg", None),
-        "longitude_deg": getattr(a, "longitude_deg", None),
-        "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
-        "point_of_entry": bool(getattr(a, "point_of_entry", False)),
-        "has_aip_data": bool(a.aip_entries) if hasattr(a, "aip_entries") else False,
-        "has_procedures": bool(a.procedures),
-        "has_hard_runway": bool(getattr(a, "has_hard_runway", False)),
-    }
-
-
-def search_airports(
-    ctx: ToolContext,
-    query: str,
-    max_results: int = 50,
-    filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
-) -> Dict[str, Any]:
-    """
-    Search for airports by ICAO code, IATA code, airport name, or city name with optional filters (country, procedures, runway, fuel, fees).
-
-    **USE THIS TOOL for direct name/code searches**, not for proximity searches.
-
-    Examples:
-    - "LFPG" → use this tool (ICAO code search)
-    - "Charles de Gaulle" → use this tool (airport name search)
-    - "Paris airports" → use this tool (searches airports with "Paris" in name/city)
-    - "CDG" → use this tool (IATA code search)
-
-    **DO NOT use this tool for "near" queries** - use find_airports_near_location instead for proximity searches.
-
-    Returns matching airports sorted by priority.
-    """
-    q = query.upper().strip()
-    matches: List[Airport] = []
-
-    # Country name to ISO-2 code mapping for common country searches
-    country_name_map = {
-        "GERMANY": "DE", "FRANCE": "FR", "UNITED KINGDOM": "GB", "UK": "GB",
-        "SPAIN": "ES", "ITALY": "IT", "NETHERLANDS": "NL", "BELGIUM": "BE",
-        "SWITZERLAND": "CH", "AUSTRIA": "AT", "POLAND": "PL", "PORTUGAL": "PT",
-        "GREECE": "GR", "IRELAND": "IE", "SWEDEN": "SE", "NORWAY": "NO",
-        "DENMARK": "DK", "FINLAND": "FI", "CZECH REPUBLIC": "CZ", "CZECHIA": "CZ",
-        "HUNGARY": "HU", "CROATIA": "HR", "SLOVENIA": "SI", "SLOVAKIA": "SK",
-        "ROMANIA": "RO", "BULGARIA": "BG", "TURKEY": "TR", "MALTA": "MT",
-        "LUXEMBOURG": "LU", "ICELAND": "IS", "ESTONIA": "EE", "LATVIA": "LV",
-        "LITHUANIA": "LT", "CYPRUS": "CY", "SERBIA": "RS", "ALBANIA": "AL",
-        "MONTENEGRO": "ME", "NORTH MACEDONIA": "MK", "BOSNIA": "BA",
-        "GUERNSEY": "GG", "JERSEY": "JE",
-    }
-    
-    # Check if query is a country name
-    country_code = country_name_map.get(q)
-    
-    if country_code:
-        # Search by country code
-        for a in ctx.model.airports.values():
-            if (a.iso_country or "").upper() == country_code:
-                matches.append(a)
-                if len(matches) >= 200:
-                    break
-    else:
-        # Standard search: ICAO, name, IATA, municipality, or ISO country
-        for a in ctx.model.airports.values():
-            if (
-                (q in a.ident)
-                or (a.name and q in a.name.upper())
-                or (getattr(a, "iata_code", None) and q in a.iata_code)
-                or (a.municipality and q in a.municipality.upper())
-                or ((a.iso_country or "").upper() == q)  # Also check ISO country code
-            ):
-                matches.append(a)
-                if len(matches) >= 200:  # Get more candidates before filtering
-                    break
-
-    # If no matches found, try geocoding the query as a location name
-    if not matches:
-        geocode = _geoapify_geocode(query)
-        if geocode:
-            # Find airports near the geocoded location (within 50nm by default)
-            center_point = NavPoint(latitude=geocode["lat"], longitude=geocode["lon"], name=geocode["formatted"])
-            for airport in ctx.model.airports.values():
-                if not getattr(airport, "navpoint", None):
-                    continue
-                try:
-                    _, distance_nm = airport.navpoint.haversine_distance(center_point)
-                except Exception:
-                    continue
-                if distance_nm <= 50.0:  # Default search radius
-                    matches.append(airport)
-                    if len(matches) >= 200:
-                        break
-    
-    # Apply filters using FilterEngine
-    if filters:
-        filter_engine = FilterEngine(context=ctx)
-        matches = filter_engine.apply(matches, filters)
-
-    # Apply priority sorting using PriorityEngine
-    priority_engine = PriorityEngine(context=ctx)
-    sorted_airports = priority_engine.apply(
-        matches,
-        strategy=priority_strategy,
-        context={},
-        max_results=max_results
-    )
-
-    # Convert to summaries
-    airport_summaries = [_airport_summary(a) for a in sorted_airports]
-
-    pretty = "No airports found." if not airport_summaries else (
-        f"Found {len(airport_summaries)} airports matching '{query}':\n\n" +
-        "\n\n".join(
-            f"**{m['ident']} - {m['name']}**\nLocation: {m['municipality'] or 'Unknown'}, {m['country'] or 'Unknown'}"
-            for m in airport_summaries[:20]  # Only show first 20 in text
-        )
-    )
-
-    # Generate filter profile for UI synchronization
-    filter_profile = {"search_query": query}
-    if filters:
-        if filters.get("country"):
-            filter_profile["country"] = filters["country"]
-        if filters.get("has_procedures"):
-            filter_profile["has_procedures"] = True
-        if filters.get("has_aip_data"):
-            filter_profile["has_aip_data"] = True
-        if filters.get("has_hard_runway"):
-            filter_profile["has_hard_runway"] = True
-        if filters.get("point_of_entry"):
-            filter_profile["point_of_entry"] = True
-        if filters.get("max_runway_length_ft"):
-            filter_profile["max_runway_length_ft"] = filters["max_runway_length_ft"]
-        if filters.get("min_runway_length_ft"):
-            filter_profile["min_runway_length_ft"] = filters["min_runway_length_ft"]
-        if filters.get("has_avgas"):
-            filter_profile["has_avgas"] = True
-        if filters.get("has_jet_a"):
-            filter_profile["has_jet_a"] = True
-        if filters.get("max_landing_fee"):
-            filter_profile["max_landing_fee"] = filters["max_landing_fee"]
-
-    # Limit for LLM to save tokens
-    total_count = len(airport_summaries)
-    airports_for_llm = airport_summaries[:20] if len(airport_summaries) > 20 else airport_summaries
-
-    return {
-        "count": total_count,
-        "airports": airports_for_llm,  # Limited for LLM
-        "pretty": pretty,
-        "filter_profile": filter_profile,  # Filter settings for UI sync
-        "visualization": {
-            "type": "markers",
-            "data": airport_summaries  # Show ALL matching airports on map
-        }
-    }
-
-
-def find_airports_near_route(
-    ctx: ToolContext,
-    from_location: str,
-    to_location: str,
-    max_distance_nm: float = 50.0,
-    filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
-) -> Dict[str, Any]:
-    """
-    List airports within a specified distance from a direct route between two locations, with optional airport filters.
-
-    **USE THIS TOOL when user asks about airports "between" two locations.**
-
-    **IMPORTANT - Pass location names exactly as user provides them, INCLUDING country/region context:**
-    - Pass ICAO codes as-is (e.g., "LFPO", "EGKB", "EDDM")
-    - Pass location names WITH COUNTRY if user mentions it - DO NOT strip country context
-    - The tool will automatically geocode location names and find the nearest airport
-    - Examples:
-      - "between LFPO and Bromley" → from_location="LFPO", to_location="Bromley"
-      - "between Paris and Vik in Iceland" → from_location="Paris", to_location="Vik, Iceland"
-      - "Vik, Iceland" or "Vik in Iceland" → to_location="Vik, Iceland" (INCLUDE COUNTRY!)
-      - "between LFPO and EDDM" → from_location="LFPO", to_location="EDDM"
-
-    **Filters:**
-    When user mentions fuel (e.g., AVGAS, Jet-A), customs/border crossing, runway type (paved/hard), IFR procedures, or country, you MUST include the corresponding filter:
-    - has_avgas=True for AVGAS
-    - has_jet_a=True for Jet-A
-    - point_of_entry=True for customs
-    - has_hard_runway=True for paved runways
-    - has_procedures=True for IFR
-    - country='XX' for specific country
-
-    Useful for finding fuel stops, alternates, or customs stops along a route.
-    """
-    # Try to resolve both locations (with fallback to nearest airport via geocoding)
-    from_result = _find_nearest_airport_in_db(ctx, from_location)
-    to_result = _find_nearest_airport_in_db(ctx, to_location)
-
-    if not from_result:
-        return {
-            "found": False,
-            "error": f"Could not find or geocode departure location '{from_location}'. Please verify the ICAO code or location name.",
-            "pretty": f"Could not find airport or location '{from_location}'."
-        }
-
-    if not to_result:
-        return {
-            "found": False,
-            "error": f"Could not find or geocode destination location '{to_location}'. Please verify the ICAO code or location name.",
-            "pretty": f"Could not find airport or location '{to_location}'."
-        }
-
-    from_airport = from_result["airport"]
-    to_airport = to_result["airport"]
-
-    # Build substitution notes if geocoding was used
-    substitution_notes = []
-    if from_result["was_geocoded"]:
-        substitution_notes.append(
-            f"Note: '{from_result['original_query']}' was geocoded to {from_result['geocoded_location']}. "
-            f"Using nearest airport {from_airport.ident} ({from_airport.name}), {from_result['distance_nm']}nm away."
-        )
-    if to_result["was_geocoded"]:
-        substitution_notes.append(
-            f"Note: '{to_result['original_query']}' was geocoded to {to_result['geocoded_location']}. "
-            f"Using nearest airport {to_airport.ident} ({to_airport.name}), {to_result['distance_nm']}nm away."
-        )
-
-    results = ctx.model.find_airports_near_route(
-        [from_airport.ident, to_airport.ident],
-        max_distance_nm
-    )
-
-    # Extract airports and build distance map for context
-    airport_objects = [item["airport"] for item in results]
-    segment_distances = {
-        item["airport"].ident: float(item.get("segment_distance_nm") or 0.0) for item in results
-    }
-    enroute_distances = {
-        item["airport"].ident: item.get("enroute_distance_nm")
-        for item in results
-        if item.get("enroute_distance_nm") is not None
-    }
-
-    # Apply filters using FilterEngine
-    if filters:
-        filter_engine = FilterEngine(context=ctx)
-        airport_objects = filter_engine.apply(airport_objects, filters)
-
-    # Apply priority sorting using PriorityEngine
-    priority_engine = PriorityEngine(context=ctx)
-    sorted_airports = priority_engine.apply(
-        airport_objects,
-        strategy=priority_strategy,
-        context={"segment_distances": segment_distances, "enroute_distances": enroute_distances},
-        max_results=100  # Get more for full list, will limit to 20 for LLM later
-    )
-
-    # Convert to summaries with distance_nm
-    airports: List[Dict[str, Any]] = []
-    for airport in sorted_airports:
-        summary = _airport_summary(airport)
-        summary["segment_distance_nm"] = segment_distances.get(airport.ident, 0.0)
-        if airport.ident in enroute_distances:
-            summary["enroute_distance_nm"] = enroute_distances[airport.ident]
-        airports.append(summary)
-
-    pretty = (
-        f"Found {len(airports)} airports within {max_distance_nm}nm of route {from_airport.ident} to {to_airport.ident}."
-        if airports else
-        f"No airports within {max_distance_nm}nm of {from_airport.ident}->{to_airport.ident}."
-    )
-
-    # Add substitution notes if any airports were geocoded
-    if substitution_notes:
-        pretty = "\n".join(substitution_notes) + "\n\n" + pretty
-
-    # Limit airports sent to LLM to save tokens (keep all for visualization)
-    # For route planning, top 20 airports sorted by priority is sufficient
-    total_count = len(airports)
-    airports_for_llm = airports[:20] if len(airports) > 20 else airports
-
-    # Generate filter profile for UI synchronization
-    filter_profile = {"route_distance": max_distance_nm}
-    if filters:
-        # Legacy filters
-        if filters.get("country"):
-            filter_profile["country"] = filters["country"]
-        if filters.get("has_procedures"):
-            filter_profile["has_procedures"] = True
-        if filters.get("has_aip_data"):
-            filter_profile["has_aip_data"] = True
-        if filters.get("has_hard_runway"):
-            filter_profile["has_hard_runway"] = True
-        if filters.get("point_of_entry"):
-            filter_profile["point_of_entry"] = True
-        # New filters
-        if filters.get("max_runway_length_ft"):
-            filter_profile["max_runway_length_ft"] = filters["max_runway_length_ft"]
-        if filters.get("min_runway_length_ft"):
-            filter_profile["min_runway_length_ft"] = filters["min_runway_length_ft"]
-        if filters.get("has_avgas"):
-            filter_profile["has_avgas"] = True
-        if filters.get("has_jet_a"):
-            filter_profile["has_jet_a"] = True
-        if filters.get("max_landing_fee"):
-            filter_profile["max_landing_fee"] = filters["max_landing_fee"]
-
-    return {
-        "count": total_count,
-        "airports": airports_for_llm,  # Limited for LLM
-        "pretty": pretty,
-        "filter_profile": filter_profile,  # Filter settings for UI sync
-        "substitutions": {
-            "from": {
-                "original": from_location,
-                "resolved": from_airport.ident,
-                "was_geocoded": from_result["was_geocoded"],
-                "geocoded_location": from_result.get("geocoded_location"),
-                "distance_nm": from_result.get("distance_nm", 0.0)
-            } if from_result["was_geocoded"] else None,
-            "to": {
-                "original": to_location,
-                "resolved": to_airport.ident,
-                "was_geocoded": to_result["was_geocoded"],
-                "geocoded_location": to_result.get("geocoded_location"),
-                "distance_nm": to_result.get("distance_nm", 0.0)
-            } if to_result["was_geocoded"] else None,
-        },
-        "visualization": {
-            "type": "route_with_markers",
-            "route": {
-                "from": {
-                    "icao": from_airport.ident,
-                    "lat": getattr(from_airport, "latitude_deg", None),
-                    "lon": getattr(from_airport, "longitude_deg", None),
-                },
-                "to": {
-                    "icao": to_airport.ident,
-                    "lat": getattr(to_airport, "latitude_deg", None),
-                    "lon": getattr(to_airport, "longitude_deg", None),
-                }
-            },
-            "markers": airports  # Include ALL airports for map visualization (not just LLM-limited subset)
-        }
-    }
-
-
-def get_airport_details(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
-    """Get comprehensive details about a specific airport including runways, procedures, facilities, and AIP information."""
-    icao = icao_code.strip().upper()
-    a = ctx.model.get_airport(icao)
-
-    if not a:
-        return {"found": False, "pretty": f"Airport {icao} not found."}
-
-    standardized = []
-    for e in (a.get_standardized_entries() or []):
-        if getattr(e, "std_field", None) and getattr(e, "value", None):
-            standardized.append({
-                "field": e.std_field,
-                "value": e.value
-            })
-
-    runways = []
-    for r in a.runways:
-        runways.append({
-            "le_ident": r.le_ident,
-            "he_ident": r.he_ident,
-            "length_ft": r.length_ft,
-            "width_ft": r.width_ft,
-            "surface": r.surface,
-            "lighted": bool(getattr(r, "lighted", False)),
-        })
-
-    pretty_lines = [
-        f"**{a.ident} - {a.name}**",
-        f"City: {a.municipality or 'Unknown'}",
-        f"Country: {a.iso_country or 'Unknown'}",
-    ]
-    if getattr(a, "latitude_deg", None) is not None and getattr(a, "longitude_deg", None) is not None:
-        pretty_lines.append(f"Coordinates: {a.latitude_deg:.4f}, {a.longitude_deg:.4f}")
-    if getattr(a, "elevation_ft", None) is not None:
-        pretty_lines.append(f"Elevation: {a.elevation_ft}ft")
-    pretty_lines += [
-        "",
-        f"Runways: {len(a.runways)} (longest {getattr(a, 'longest_runway_length_ft', 'Unknown')}ft)",
-        f"Hard surface: {'Yes' if getattr(a,'has_hard_runway', False) else 'No'}",
-        "",
-        f"Procedures: {len(a.procedures)}",
-        "",
-        f"Border crossing point: {'Yes' if getattr(a,'point_of_entry', False) else 'No'}",
-    ]
-
-    return {
-        "found": True,
-        "airport": _airport_summary(a),
-        "runways": runways,
-        "runway_summary": {
-            "count": len(a.runways),
-            "longest_ft": getattr(a, "longest_runway_length_ft", None),
-            "has_hard_surface": bool(getattr(a, "has_hard_runway", False)),
-        },
-        "procedures": {"count": len(a.procedures)},
-        "aip_data": standardized,
-        "pretty": "\n".join(pretty_lines),
-        "visualization": {
-            "type": "marker_with_details",
-            "marker": {
-                "ident": a.ident,
-                "lat": getattr(a, "latitude_deg", None),
-                "lon": getattr(a, "longitude_deg", None),
-                "zoom": 12
-            }
-        }
-    }
-
-
-def get_border_crossing_airports(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
-    """List all airports that are official border crossing points (with customs). Optionally filter by country."""
-    airports_list = ctx.model.get_border_crossing_airports()
-
-    if country:
-        c = country.upper()
-        airports_list = [a for a in airports_list if (a.iso_country or "").upper() == c]
-
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    all_airports: List[Dict[str, Any]] = []
-    for a in airports_list:
-        data = _airport_summary(a)
-        country_code = data["country"] or "Unknown"
-        grouped.setdefault(country_code, []).append(data)
-        all_airports.append(data)
-
-    pretty_lines = [
-        f"**Border Crossing Airports{' in ' + country.upper() if country else ''}:**\n"
-    ]
-    for cc, arr in grouped.items():
-        pretty_lines.append(f"**{cc}:**")
-        for item in arr:
-            label = item["ident"] + " - " + (item["name"] or "")
-            city = item.get("municipality")
-            pretty_lines.append(f"- {label}" + (f" ({city})" if city else ""))
-        pretty_lines.append("")
-
-    # Limit data sent to LLM: max 10 airports per country, max 5 countries (top 50 total)
-    # Keep full data for visualization on map
-    grouped_for_llm = {}
-    airports_for_llm = []
-    for cc, arr in list(grouped.items())[:5]:  # Max 5 countries
-        limited_arr = arr[:10]  # Max 10 per country
-        grouped_for_llm[cc] = limited_arr
-        airports_for_llm.extend(limited_arr)
-
-    # Generate filter profile for UI synchronization
-    filter_profile = {"point_of_entry": True}  # Border crossing filter
-    if country:
-        filter_profile["country"] = country.upper()
-
-    return {
-        "count": len(all_airports),
-        "by_country": grouped_for_llm,  # Limited for LLM
-        "airports": airports_for_llm,  # Limited for LLM
-        "pretty": "\n".join(pretty_lines),
-        "filter_profile": filter_profile,  # Filter settings for UI sync
-        "visualization": {
-            "type": "markers",
-            "data": all_airports,  # Show ALL border crossing airports on map
-            "markers": airports_for_llm,  # Highlight only airports mentioned by LLM
-            "style": "customs"
-        }
-    }
-
-
-def get_airport_statistics(ctx: ToolContext, country: Optional[str] = None) -> Dict[str, Any]:
-    """Get statistical information about airports, such as counts with customs, fuel types, or procedures. Optionally filter by country."""
-    airports = ctx.model.get_airports_by_country(country.upper()) if country else list(ctx.model.airports.values())
-    total = len(airports)
-
-    stats = {
-        "total_airports": total,
-        "with_customs": sum(1 for a in airports if getattr(a, "point_of_entry", False)),
-        "with_avgas": sum(1 for a in airports if getattr(a, "avgas", False)),
-        "with_jet_a": sum(1 for a in airports if getattr(a, "jet_a", False)),
-        "with_procedures": sum(1 for a in airports if a.procedures),
-    }
-
-    pct = lambda n: round((n / total * 100), 1) if total else 0.0
-    stats.update({
-        "with_customs_pct": pct(stats["with_customs"]),
-        "with_avgas_pct": pct(stats["with_avgas"]),
-        "with_jet_a_pct": pct(stats["with_jet_a"]),
-        "with_procedures_pct": pct(stats["with_procedures"]),
-    })
-
-    pretty = [
-        f"**Airport Statistics{' for ' + country.upper() if country else ''}:**",
-        f"Total airports: {stats['total_airports']}",
-        f"With customs: {stats['with_customs']} ({stats['with_customs_pct']}%)",
-        f"With AVGAS: {stats['with_avgas']} ({stats['with_avgas_pct']}%)",
-        f"With Jet A: {stats['with_jet_a']} ({stats['with_jet_a_pct']}%)",
-        f"With procedures: {stats['with_procedures']} ({stats['with_procedures_pct']}%)",
-    ]
-
-    return {"stats": stats, "pretty": "\n".join(pretty)}
-
-
-def get_airport_pricing(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
-    """Get pricing data (landing fees and fuel prices) from airfield.directory, including common aircraft types and currency information."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-    pricing = ctx.enrichment_storage.get_pricing_data(icao)
-
-    if not pricing:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "pretty": f"No pricing data available for {icao}. Data may not be in airfield.directory or not yet synced."
-        }
-
-    pretty = [
-        f"**Pricing for {icao}**",
-        f"Source: {pricing.get('source', 'airfield.directory')}",
-        f"Currency: {pricing.get('currency', 'N/A')}",
-        ""
-    ]
-
-    if any([pricing.get('landing_fee_c172'), pricing.get('landing_fee_da42'),
-            pricing.get('landing_fee_pc12'), pricing.get('landing_fee_sr22')]):
-        pretty.append("**Landing Fees:**")
-        if pricing.get('landing_fee_c172'):
-            pretty.append(f"  C172: {pricing['landing_fee_c172']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_da42'):
-            pretty.append(f"  DA42: {pricing['landing_fee_da42']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_sr22'):
-            pretty.append(f"  SR22: {pricing['landing_fee_sr22']} {pricing.get('currency', '')}")
-        if pricing.get('landing_fee_pc12'):
-            pretty.append(f"  PC12: {pricing['landing_fee_pc12']} {pricing.get('currency', '')}")
-        pretty.append("")
-
-    if any([pricing.get('avgas_price'), pricing.get('jeta1_price'), pricing.get('superplus_price')]):
-        pretty.append("**Fuel Prices:**")
-        if pricing.get('avgas_price'):
-            pretty.append(f"  AVGAS: {pricing['avgas_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('jeta1_price'):
-            pretty.append(f"  Jet A1: {pricing['jeta1_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('superplus_price'):
-            pretty.append(f"  SuperPlus: {pricing['superplus_price']} {pricing.get('currency', '')}/L")
-        if pricing.get('fuel_provider'):
-            pretty.append(f"  Provider: {pricing['fuel_provider']}")
-        pretty.append("")
-
-    if pricing.get('payment_available'):
-        pretty.append("Payment: Available")
-    if pricing.get('ppr_available'):
-        pretty.append("PPR: Available")
-    if pricing.get('last_updated'):
-        pretty.append(f"\nLast updated: {pricing['last_updated']}")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "pricing": pricing,
-        "pretty": "\n".join(pretty)
-    }
-
-
-def get_pilot_reviews(ctx: ToolContext, icao_code: str, limit: int = 10) -> Dict[str, Any]:
-    """Get community pilot reviews (PIREPs) from airfield.directory, including ratings, comments, and review metadata."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-    reviews = ctx.enrichment_storage.get_pilot_reviews(icao, limit)
-
-    if not reviews:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "count": 0,
-            "pretty": f"No pilot reviews available for {icao}."
-        }
-
-    ratings = [r['rating'] for r in reviews if r.get('rating')]
-    avg_rating = sum(ratings) / len(ratings) if ratings else None
-
-    pretty = [
-        f"**Pilot Reviews for {icao}**",
-        f"Total reviews: {len(reviews)}",
-        f"Average rating: {avg_rating:.1f}/5.0 ⭐" if avg_rating else "Average rating: N/A",
-        ""
-    ]
-
-    for i, review in enumerate(reviews, 1):
-        rating_stars = "⭐" * review.get('rating', 0)
-        author = review.get('author_name') or "Anonymous"
-        pretty.append(f"**Review {i}** - {rating_stars} ({review.get('rating')}/5) by {author}")
-
-        comment = (review.get('comment_en') or
-                   review.get('comment_de') or
-                   review.get('comment_fr') or
-                   review.get('comment_it') or
-                   review.get('comment_es') or
-                   review.get('comment_nl'))
-
-        if comment:
-            comment_display = comment[:200] + "..." if len(comment) > 200 else comment
-            pretty.append(f'  "{comment_display}"')
-
-        if review.get('created_at'):
-            pretty.append(f"  Date: {review['created_at'][:10]}")
-
-        pretty.append("")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "count": len(reviews),
-        "average_rating": avg_rating,
-        "reviews": reviews,
-        "pretty": "\n".join(pretty)
-    }
-
-
-def get_fuel_prices(ctx: ToolContext, icao_code: str) -> Dict[str, Any]:
-    """Get fuel availability and prices from airfield.directory, showing which fuel types are available and any known prices."""
-    if not ctx.enrichment_storage:
-        raise RuntimeError("Enrichment storage not available in tool context.")
-
-    icao = icao_code.strip().upper()
-
-    fuels = ctx.enrichment_storage.get_fuel_availability(icao)
-    pricing = ctx.enrichment_storage.get_pricing_data(icao)
-
-    if not fuels and not pricing:
-        return {
-            "found": False,
-            "icao_code": icao,
-            "pretty": f"No fuel data available for {icao}."
-        }
-
-    fuel_list = []
-    for fuel in fuels or []:
-        fuel_type = fuel.get('fuel_type', 'Unknown')
-        price = None
-        currency = None
-        if pricing:
-            currency = pricing.get('currency', 'EUR')
-            if 'avgas' in fuel_type.lower():
-                price = pricing.get('avgas_price')
-            elif 'jeta1' in fuel_type.lower() or 'jet a1' in fuel_type.lower():
-                price = pricing.get('jeta1_price')
-            elif 'super' in fuel_type.lower():
-                price = pricing.get('superplus_price')
-
-        fuel_list.append({
-            "fuel_type": fuel_type,
-            "available": bool(fuel.get('available')),
-            "price": price,
-            "currency": currency,
-            "provider": fuel.get('provider')
-        })
-
-    pretty = [f"**Fuel Information for {icao}**", ""]
-    for item in fuel_list:
-        line = f"  ✓ {item['fuel_type']}"
-        if item["price"]:
-            line += f" - {item['price']} {item.get('currency', '')}/L"
-        if item["provider"]:
-            line += f" (Provider: {item['provider']})"
-        pretty.append(line)
-    pretty.append("")
-
-    if pricing:
-        if pricing.get('fuel_provider'):
-            pretty.append(f"**Fuel Provider:** {pricing['fuel_provider']}")
-        if pricing.get('payment_available'):
-            pretty.append("**Payment:** Available")
-        if pricing.get('ppr_available'):
-            pretty.append("**PPR:** Required")
-        if pricing.get('last_updated'):
-            pretty.append(f"\n**Last Updated:** {pricing['last_updated']}")
-
-    return {
-        "found": True,
-        "icao_code": icao,
-        "fuels": fuel_list,
-        "pricing": pricing,
-        "pretty": "\n".join(pretty)
-    }
-
-
-def list_rules_for_country(
-    ctx: ToolContext,
-    country_code: str,
-    category: Optional[str] = None,
-    tags: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """List aviation rules and regulations for a specific country (iso-2 code eg FR,GB), including customs, flight plans, and operational requirements. Can be filtered by category like IFR/VFR, airspace, etc."""
-    rules_manager = ctx.ensure_rules_manager()
-    rules = rules_manager.get_rules_for_country(
-        country_code=country_code,
-        category=category,
-        tags=tags
-    )
-
-    if not rules:
-        available = ", ".join(rules_manager.get_available_countries())
-        return {
-            "found": False,
-            "country_code": country_code.upper(),
-            "count": 0,
-            "message": f"No rules found for {country_code.upper()}. Available countries: {available}"
-        }
-
-    formatted_text = rules_manager.format_rules_for_display(rules, group_by_category=True)
-    categories = list({r.get('category', 'General') for r in rules})
-
-    return {
-        "found": True,
-        "country_code": country_code.upper(),
-        "count": len(rules),
-        "rules": rules[:50],
-        "formatted_text": formatted_text,
-        "categories": categories
-    }
-
-
-def compare_rules_between_countries(
-    ctx: ToolContext,
-    country1: str,
-    country2: str,
-    category: Optional[str] = None
-) -> Dict[str, Any]:
-    """Compare aviation rules and regulations between two countries (iso-2 code eg FR,GB) and highlight differences in answers. Can be filtered by category like IFR/VFR, airspace, etc."""
-    rules_manager = ctx.ensure_rules_manager()
-    comparison = rules_manager.compare_rules_between_countries(
-        country1=country1,
-        country2=country2,
-        category=category
-    )
-
-    diff_count = len(comparison.get('differences', []))
-
-    return {
-        "found": True,
-        "comparison": comparison,
-        "formatted_summary": comparison.get('summary', ''),
-        "total_differences": diff_count,
-        "message": f"Comparison between {country1.upper()} and {country2.upper()} complete."
-    }
-
-
-def get_answers_for_questions(ctx: ToolContext, question_ids: List[str]) -> Dict[str, Any]:
-    """Get rule answers for specific question IDs, including per-country responses, categories, and tags."""
-    rules_manager = ctx.ensure_rules_manager()
-    items: List[Dict[str, Any]] = []
-    for qid in question_ids or []:
-        question = rules_manager.question_map.get(qid)
-        if not question:
-            continue
-        items.append({
-            "question_id": qid,
-            "question_text": question.get("question_text"),
-            "category": question.get("category"),
-            "tags": question.get("tags") or [],
-            "answers_by_country": question.get("answers_by_country", {})
-        })
-
-    pretty_lines: List[str] = []
-    for item in items:
-        pretty_lines.append(f"**{item['question_text']}**")
-        answers = item.get("answers_by_country") or {}
-        for cc, ans in sorted(answers.items()):
-            pretty_lines.append(f"- {cc}: {ans.get('answer_html') or '(no answer)'}")
-        pretty_lines.append("")
-
-    return {
-        "count": len(items),
-        "items": items,
-        "pretty": "\n".join(pretty_lines)
-    }
-
-
-def list_rule_categories_and_tags(ctx: ToolContext) -> Dict[str, Any]:
-    """List available aviation rule categories and tags from the rules store."""
-    rules_manager = ctx.ensure_rules_manager()
-    categories = sorted(rules_manager.rules_index.get("categories", {}).keys())
-    tags = sorted(rules_manager.rules_index.get("tags", {}).keys())
-    by_category = rules_manager.rules_index.get("categories", {})
-    by_tag = rules_manager.rules_index.get("tags", {})
-
-    pretty = ["**Categories:**"]
-    for c in categories:
-        pretty.append(f"- {c} ({len(by_category.get(c, []))})")
-    pretty.append("")
-    pretty.append("**Tags:**")
-    for t in tags:
-        pretty.append(f"- {t} ({len(by_tag.get(t, []))})")
-
-    return {
-        "categories": categories,
-        "tags": tags,
-        "counts": {
-            "by_category": {c: len(by_category.get(c, [])) for c in categories},
-            "by_tag": {t: len(by_tag.get(t, [])) for t in tags},
-        },
-        "pretty": "\n".join(pretty),
-    }
-
-
-def list_rule_countries(ctx: ToolContext) -> Dict[str, Any]:
-    """List available countries (ISO-2 codes) present in the aviation rules store."""
-    rules_manager = ctx.ensure_rules_manager()
-    countries = rules_manager.get_available_countries()
-    pretty = "**Rule Countries (ISO-2):**\n" + ("\n".join(f"- {c}" for c in countries) if countries else "(none)")
-    return {"count": len(countries), "items": countries, "pretty": pretty}
-
-
-def _compare_rules_between_countries_tool(
-    ctx: ToolContext,
-    country1: str,
-    country2: str,
-    category: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Wrapper that adds a human readable summary field expected by UI clients.
-    """
-    result = compare_rules_between_countries(ctx, country1, country2, category=category)
-    if result.get("formatted_summary") and "pretty" not in result:
-        result["pretty"] = result["formatted_summary"]
-    return result
+# =============================================================================
+# SECTION 4: INTERNAL HELPERS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Geocoding & Location Helpers
+# -----------------------------------------------------------------------------
+
+# European country codes for geocoding preference
+EUROPEAN_COUNTRY_CODES = {
+    "DE", "FR", "GB", "ES", "IT", "NL", "BE", "CH", "AT", "PL", "PT",
+    "GR", "IE", "SE", "NO", "DK", "FI", "CZ", "HU", "HR", "SI", "SK",
+    "RO", "BG", "TR", "MT", "LU", "IS", "EE", "LV", "LT", "CY", "RS",
+    "AL", "ME", "MK", "BA", "GG", "JE", "IM", "FO", "MC", "AD", "LI",
+}
 
 
 def _geoapify_geocode(query: str) -> Optional[Dict[str, Any]]:
     """
     Forward-geocode a free-text location using Geoapify.
-    Returns a dict with latitude, longitude, formatted address; None on failure.
+
+    Prefers European locations for ambiguous queries (e.g., "Bromley" returns UK, not USA).
+
+    Args:
+        query: Free-text location name (e.g., "Paris", "Lake Geneva")
+
+    Returns:
+        Dict with 'lat', 'lon', 'formatted', 'country_code' on success;
+        None on failure or if GEOAPIFY_API_KEY is not set.
     """
     api_key = os.environ.get("GEOAPIFY_API_KEY")
     if not api_key:
@@ -923,7 +106,7 @@ def _geoapify_geocode(query: str) -> Optional[Dict[str, Any]]:
     base_url = "https://api.geoapify.com/v1/geocode/search"
     params = {
         "text": query,
-        "limit": 1,
+        "limit": 5,  # Get multiple results to find European match
         "format": "json",
         "apiKey": api_key,
     }
@@ -935,16 +118,28 @@ def _geoapify_geocode(query: str) -> Optional[Dict[str, Any]]:
             results = data.get("results") or []
             if not results:
                 return None
-            top = results[0]
-            lat = top.get("lat")
-            lon = top.get("lon")
+
+            # Prefer European results for ambiguous queries like "Bromley"
+            selected = None
+            for result in results:
+                country_code = (result.get("country_code") or "").upper()
+                if country_code in EUROPEAN_COUNTRY_CODES:
+                    selected = result
+                    break
+
+            # Fall back to first result if no European match
+            if not selected:
+                selected = results[0]
+
+            lat = selected.get("lat")
+            lon = selected.get("lon")
             if lat is None or lon is None:
                 return None
             return {
                 "lat": float(lat),
                 "lon": float(lon),
-                "formatted": top.get("formatted") or query,
-                "country_code": top.get("country_code"),  # ISO-2 country code (e.g., "IS", "GB")
+                "formatted": selected.get("formatted") or query,
+                "country_code": selected.get("country_code"),
             }
     except Exception:
         return None
@@ -956,21 +151,28 @@ def _find_nearest_airport_in_db(
     max_search_radius_nm: float = 100.0
 ) -> Optional[Dict[str, Any]]:
     """
-    Try to find the nearest airport in the database for a given ICAO code or location name.
+    Find the nearest airport in the database for a given ICAO code or location name.
 
-    1. First checks if the ICAO code exists in the database
+    Resolution process:
+    1. First checks if the input is an ICAO code in the database
     2. If not found, tries to geocode it as a location name
-    3. Finds the nearest airport in the database to those coordinates
+    3. Finds the nearest airport to those coordinates
        - Prefers airports in the same country as the geocoded location
        - Falls back to nearest airport if none in same country
 
-    Returns dict with 'airport' object, 'original_query', 'was_geocoded', 'distance_nm', 'geocoded_location'
-    or None if nothing found.
+    Args:
+        ctx: Tool context with airport model
+        icao_or_location: ICAO code or free-text location name
+        max_search_radius_nm: Maximum search radius in nautical miles
+
+    Returns:
+        Dict with 'airport', 'original_query', 'was_geocoded', 'distance_nm',
+        'geocoded_location'; or None if nothing found.
     """
     icao = icao_or_location.strip().upper()
 
     # First try direct ICAO lookup
-    airport = ctx.model.get_airport(icao)
+    airport = ctx.model.airports.get(icao)
     if airport:
         return {
             "airport": airport,
@@ -995,7 +197,7 @@ def _find_nearest_airport_in_db(
     nearest_any = None
     nearest_any_distance = float('inf')
 
-    for apt in ctx.model.airports.values():
+    for apt in ctx.model.airports:
         if not getattr(apt, "navpoint", None):
             continue
         try:
@@ -1040,44 +242,434 @@ def _find_nearest_airport_in_db(
     return None
 
 
+# -----------------------------------------------------------------------------
+# Airport Data Helpers
+# -----------------------------------------------------------------------------
+
+def _airport_summary(a: Airport) -> Dict[str, Any]:
+    """Convert an Airport object to a summary dict for API responses."""
+    return {
+        "ident": a.ident,
+        "name": a.name,
+        "municipality": a.municipality,
+        "iso_country": a.iso_country,
+        "latitude_deg": getattr(a, "latitude_deg", None),
+        "longitude_deg": getattr(a, "longitude_deg", None),
+        "longest_runway_length_ft": getattr(a, "longest_runway_length_ft", None),
+        "point_of_entry": bool(getattr(a, "point_of_entry", False)),
+        "has_aip_data": bool(a.aip_entries) if hasattr(a, "aip_entries") else False,
+        "has_procedures": bool(a.procedures),
+        "has_hard_runway": bool(getattr(a, "has_hard_runway", False)),
+    }
+
+
+def _build_priority_context(
+    base_context: Optional[Dict[str, Any]] = None,
+    persona_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Build context dict for PriorityEngine.apply().
+
+    Merges base_context (e.g., segment_distances) with persona_id if provided.
+    """
+    context = dict(base_context) if base_context else {}
+    if persona_id:
+        context["persona_id"] = persona_id
+    return context
+
+
+# -----------------------------------------------------------------------------
+# Airport Filter & Sort Pipeline
+# -----------------------------------------------------------------------------
+
+@dataclass
+class AirportFilterResult:
+    """Result of filtering and sorting airports.
+
+    Attributes:
+        airports: Filtered and sorted list of Airport objects
+        notification_infos: Dict mapping ICAO codes to NotificationInfo objects
+    """
+    airports: List[Airport]
+    notification_infos: Dict[str, Any]
+
+
+def _filter_and_sort_airports(
+    ctx: ToolContext,
+    airports: List[Airport],
+    filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    priority_context_extra: Optional[Dict[str, Any]] = None,
+    max_hours_notice: Optional[int] = None,
+    max_results: int = 100,
+    persona_id: Optional[str] = None,
+) -> AirportFilterResult:
+    """
+    Common pipeline for airport tools: filter → notification filter → priority sort.
+
+    This helper consolidates the repeated filtering and sorting logic used by
+    all airport search tools.
+
+    Args:
+        ctx: Tool context with model and services
+        airports: List of candidate airports to filter/sort
+        filters: Optional dict of filter criteria (has_avgas, point_of_entry, etc.)
+        include_large_airports: If False, excludes large commercial airports
+        priority_strategy: Sorting strategy for PriorityEngine
+        priority_context_extra: Additional context for priority sorting (e.g., distances)
+        max_hours_notice: If set, filter to airports with <= this notification requirement
+        max_results: Maximum number of airports to return
+        persona_id: Optional persona ID for personalized sorting
+
+    Returns:
+        AirportFilterResult with sorted airports and notification info dict
+    """
+    # 1. Build effective filters (always exclude large airports unless explicitly included)
+    effective_filters: Dict[str, Any] = {}
+    if not include_large_airports:
+        effective_filters["exclude_large_airports"] = True
+    if filters:
+        effective_filters.update(filters)
+
+    # 2. Apply filters using FilterEngine
+    if effective_filters:
+        filter_engine = FilterEngine(context=ctx)
+        airports = filter_engine.apply(airports, effective_filters)
+
+    # 3. Fetch notification info for all candidate airports
+    notification_infos: Dict[str, Any] = {}
+    if ctx.notification_service and airports:
+        candidate_icaos = [a.ident for a in airports]
+        notification_infos = ctx.notification_service.get_notification_info_batch(candidate_icaos)
+
+        # Filter by notification requirements if max_hours_notice is specified
+        if max_hours_notice is not None and notification_infos:
+            filtered_by_notification = []
+            for airport in airports:
+                info = notification_infos.get(airport.ident)
+                if info and info.matches_criteria(max_hours_notice=max_hours_notice):
+                    filtered_by_notification.append(airport)
+                elif info is None:
+                    # No notification data - include by default (unknown requirements)
+                    filtered_by_notification.append(airport)
+            airports = filtered_by_notification
+
+    # 4. Apply priority sorting using PriorityEngine
+    priority_engine = PriorityEngine(context=ctx)
+    priority_context = _build_priority_context(
+        base_context=priority_context_extra,
+        persona_id=persona_id
+    )
+    sorted_airports = priority_engine.apply(
+        airports,
+        strategy=priority_strategy,
+        context=priority_context,
+        max_results=max_results
+    )
+
+    return AirportFilterResult(
+        airports=sorted_airports,
+        notification_infos=notification_infos
+    )
+
+
+def _build_filter_profile(
+    base: Dict[str, Any],
+    filters: Optional[Dict[str, Any]] = None,
+    max_hours_notice: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Build filter profile dict for UI synchronization.
+
+    Args:
+        base: Base profile dict (e.g., {"search_query": "Paris"})
+        filters: Optional filters dict from tool call
+        max_hours_notice: Optional notification filter
+
+    Returns:
+        Complete filter profile for UI sync
+    """
+    profile = dict(base)
+
+    if max_hours_notice is not None:
+        profile["max_hours_notice"] = max_hours_notice
+
+    if not filters:
+        return profile
+
+    # Direct copy keys (values matter - strings or numbers, not booleans)
+    for key in ["country", "max_runway_length_ft", "min_runway_length_ft", "max_landing_fee",
+                "hotel", "restaurant"]:
+        if filters.get(key):
+            profile[key] = filters[key]
+
+    # Boolean keys (just need to be truthy)
+    for key in ["has_procedures", "has_aip_data", "has_hard_runway",
+                "point_of_entry", "has_avgas", "has_jet_a"]:
+        if filters.get(key):
+            profile[key] = True
+
+    return profile
+
+
+# -----------------------------------------------------------------------------
+# Tool Description Helpers
+# -----------------------------------------------------------------------------
+
+def _tool_description(func: Callable) -> str:
+    """Get tool description from docstring (legacy function, kept for compatibility)."""
+    return (func.__doc__ or "").strip()
+
+
+def _get_tool_description(func: Callable, tool_name: str) -> str:
+    """Get tool description from config file, falling back to docstring.
+
+    Args:
+        func: The tool function (for docstring fallback)
+        tool_name: Name of the tool for config lookup
+
+    Returns:
+        Tool description text from config file, or docstring if not configured.
+    """
+    # Lazy import to avoid circular dependency (config imports airport_tools)
+    try:
+        from shared.aviation_agent.config import get_behavior_config, get_settings
+        settings = get_settings()
+        config = get_behavior_config(settings.agent_config_name or "default")
+
+        # Try to load from config
+        if config:
+            description = config.load_tool_description(tool_name)
+            if description:
+                return description
+    except Exception:
+        # If config loading fails, fall back to docstring
+        pass
+
+    # Fallback to docstring
+    return (func.__doc__ or "").strip()
+
+
+# =============================================================================
+# SECTION 5: AIRPORT TOOLS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Search & Discovery
+# -----------------------------------------------------------------------------
+
+def search_airports(
+    ctx: ToolContext,
+    query: str,
+    max_results: int = 5,
+    filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
+) -> Dict[str, Any]:
+    """
+    Search for airports by ICAO code, IATA code, airport name, or city name with optional filters (country, procedures, runway, fuel, fees).
+
+    **USE THIS TOOL for direct name/code searches**, not for proximity searches.
+
+    Examples:
+    - "LFPG" → use this tool (ICAO code search)
+    - "Charles de Gaulle" → use this tool (airport name search)
+    - "Paris airports" → use this tool (searches airports with "Paris" in name/city)
+    - "CDG" → use this tool (IATA code search)
+
+    **DO NOT use this tool for "near" queries** - use find_airports_near_location instead for proximity searches.
+
+    **By default, large commercial airports are excluded** (not suitable for GA).
+    Set include_large_airports=True only if user explicitly asks for large/commercial airports.
+
+    Returns matching airports sorted by priority.
+    """
+    q = query.upper().strip()
+    matches: List[Airport] = []
+
+    # Check if query contains multiple ICAO codes (space-separated 4-letter codes)
+    # Filter out common conjunctions like "and", "or", commas
+    parts = [p.strip(",") for p in q.split() if p.upper() not in ("AND", "OR", "&", ",")]
+    if len(parts) > 1 and all(len(p) == 4 and p.isalpha() for p in parts):
+        # Multiple ICAO codes - search for each
+        icao_set = set(parts)
+        for a in ctx.model.airports:
+            if a.ident in icao_set:
+                matches.append(a)
+                if len(matches) >= len(icao_set):
+                    break  # Found all requested airports
+
+        # Skip country detection and standard search
+        # Filter and sort using common pipeline
+        persona_id = kwargs.pop("_persona_id", None)
+        result = _filter_and_sort_airports(
+            ctx=ctx,
+            airports=matches,
+            filters=filters,
+            include_large_airports=True,  # Don't filter out large airports when explicitly requested
+            priority_strategy=priority_strategy,
+            max_results=max(max_results, len(icao_set)),  # Return at least as many as requested
+            persona_id=persona_id,
+        )
+
+        airport_summaries = [_airport_summary(a) for a in result.airports]
+        filter_profile = _build_filter_profile({"search_query": query}, filters)
+
+        return {
+            "count": len(airport_summaries),
+            "airports": airport_summaries,
+            "filter_profile": filter_profile,
+            "visualization": {
+                "type": "markers",
+                "data": airport_summaries
+            }
+        }
+
+    # Country name to ISO-2 code mapping for common country searches
+    country_name_map = {
+        "GERMANY": "DE", "FRANCE": "FR", "UNITED KINGDOM": "GB", "UK": "GB",
+        "SPAIN": "ES", "ITALY": "IT", "NETHERLANDS": "NL", "BELGIUM": "BE",
+        "SWITZERLAND": "CH", "AUSTRIA": "AT", "POLAND": "PL", "PORTUGAL": "PT",
+        "GREECE": "GR", "IRELAND": "IE", "SWEDEN": "SE", "NORWAY": "NO",
+        "DENMARK": "DK", "FINLAND": "FI", "CZECH REPUBLIC": "CZ", "CZECHIA": "CZ",
+        "HUNGARY": "HU", "CROATIA": "HR", "SLOVENIA": "SI", "SLOVAKIA": "SK",
+        "ROMANIA": "RO", "BULGARIA": "BG", "TURKEY": "TR", "MALTA": "MT",
+        "LUXEMBOURG": "LU", "ICELAND": "IS", "ESTONIA": "EE", "LATVIA": "LV",
+        "LITHUANIA": "LT", "CYPRUS": "CY", "SERBIA": "RS", "ALBANIA": "AL",
+        "MONTENEGRO": "ME", "NORTH MACEDONIA": "MK", "BOSNIA": "BA",
+        "GUERNSEY": "GG", "JERSEY": "JE",
+    }
+
+    # Check if query is a country name
+    country_code = country_name_map.get(q)
+    detected_country = None  # Track if we detected a country for filter_profile
+
+    if country_code:
+        # Search by country code
+        detected_country = country_code
+        for a in ctx.model.airports:
+            if (a.iso_country or "").upper() == country_code:
+                matches.append(a)
+                if len(matches) >= 200:
+                    break
+    else:
+        # Standard search: ICAO, name, IATA, municipality, or ISO country
+        for a in ctx.model.airports:
+            if (
+                (q in a.ident)
+                or (a.name and q in a.name.upper())
+                or (getattr(a, "iata_code", None) and q in a.iata_code)
+                or (a.municipality and q in a.municipality.upper())
+                or ((a.iso_country or "").upper() == q)  # Also check ISO country code
+            ):
+                matches.append(a)
+                if len(matches) >= 200:  # Get more candidates before filtering
+                    break
+
+    # Filter and sort using common pipeline
+    persona_id = kwargs.pop("_persona_id", None)
+    result = _filter_and_sort_airports(
+        ctx=ctx,
+        airports=matches,
+        filters=filters,
+        include_large_airports=include_large_airports,
+        priority_strategy=priority_strategy,
+        max_results=max_results,
+        persona_id=persona_id,
+    )
+
+    # Convert to summaries
+    airport_summaries = [_airport_summary(a) for a in result.airports]
+
+    # Generate filter profile for UI synchronization
+    # Include detected country so UI can sync the country filter dropdown
+    base_profile: Dict[str, Any] = {"search_query": query}
+    if detected_country:
+        base_profile["country"] = detected_country
+    filter_profile = _build_filter_profile(base_profile, filters)
+
+    return {
+        "count": len(airport_summaries),
+        "airports": airport_summaries[:max_results],  # Limited for LLM
+        "filter_profile": filter_profile,
+        "visualization": {
+            "type": "markers",
+            "data": airport_summaries  # Show ALL matching airports on map
+        }
+    }
+
+
 def find_airports_near_location(
     ctx: ToolContext,
     location_query: str,
     max_distance_nm: float = 50.0,
+    max_results: int = 5,
     filters: Optional[Dict[str, Any]] = None,
-    priority_strategy: str = "cost_optimized",
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    max_hours_notice: Optional[int] = None,  # Filter by notification requirements
+    # Optional pre-resolved center (bypasses geocoding) - used by REST API
+    center_lat: Optional[float] = None,
+    center_lon: Optional[float] = None,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
 ) -> Dict[str, Any]:
     """
-    Find airports near a geographic location (free-text location name, city, landmark, or coordinates) within a specified distance.
+    Find airports near a geographic location (ICAO code, free-text location name, city, landmark, or coordinates) within a specified distance.
 
-    **USE THIS TOOL when user asks about airports "near", "around", "close to" a location that is NOT an ICAO code.**
+    **USE THIS TOOL when user asks about airports "near", "around", "close to" a location.**
 
     Examples:
+    - "airports near EGTF" → use this tool with location_query="EGTF"
     - "airports near Paris" → use this tool with location_query="Paris"
     - "airports around Lake Geneva" → use this tool with location_query="Lake Geneva"
     - "airports close to Zurich" → use this tool with location_query="Zurich"
     - "airports near 48.8584, 2.2945" → use this tool with location_query="48.8584, 2.2945"
+    - "airports near Vannes with less than 24h notice" → use with max_hours_notice=24
 
     Process:
-    1) Geocodes the location via Geoapify to get coordinates
-    2) Computes distance from each airport to that point and filters by max_distance_nm
-    3) Applies optional filters (fuel, customs, runway, etc.) and priority sorting
+    1) If location_query is an ICAO code, uses that airport's coordinates as center
+    2) Otherwise geocodes the location via Geoapify (or uses pre-resolved center if provided)
+    3) Computes distance from each airport to that point and filters by max_distance_nm
+    4) Applies optional filters (fuel, customs, runway, etc.) and priority sorting
+    5) If max_hours_notice is set, filters to airports requiring at most that many hours notice
 
-    **DO NOT use this tool if user provides ICAO codes** - use find_airports_near_route instead for route-based searches.
+    **By default, large commercial airports are excluded** (not suitable for GA).
+    Set include_large_airports=True only if user explicitly asks for large/commercial airports.
     """
-    geocode = _geoapify_geocode(location_query)
-    if not geocode:
-        return {
-            "found": False,
-            "pretty": f"Could not geocode '{location_query}'. Ensure GEOAPIFY_API_KEY is set and the query is valid."
+    # Use pre-resolved center if provided, otherwise try ICAO lookup then geocode
+    if center_lat is not None and center_lon is not None:
+        geocode = {
+            "lat": center_lat,
+            "lon": center_lon,
+            "formatted": location_query or "Center"
         }
+    else:
+        # First try direct ICAO lookup (handles "airports near EGTF" queries)
+        icao = location_query.strip().upper()
+        airport = ctx.model.airports.get(icao)
+        if airport and hasattr(airport, 'navpoint') and airport.navpoint:
+            geocode = {
+                "lat": airport.navpoint.latitude,
+                "lon": airport.navpoint.longitude,
+                "formatted": f"{airport.name} ({icao})"
+            }
+        else:
+            # Not found as ICAO - try geocoding as location name
+            geocode = _geoapify_geocode(location_query)
+            if not geocode:
+                return {
+                    "found": False,
+                    "pretty": f"Could not geocode '{location_query}'. Ensure GEOAPIFY_API_KEY is set and the query is valid."
+                }
 
     center_point = NavPoint(latitude=geocode["lat"], longitude=geocode["lon"], name=geocode["formatted"])
 
     # Compute distances to all airports and filter by radius
     candidate_airports: List[Airport] = []
     point_distances: Dict[str, float] = {}
-    for airport in ctx.model.airports.values():
+    for airport in ctx.model.airports:
         if not getattr(airport, "navpoint", None):
             continue
         try:
@@ -1088,76 +680,44 @@ def find_airports_near_location(
             candidate_airports.append(airport)
             point_distances[airport.ident] = float(distance_nm)
 
-    # Apply optional filters using FilterEngine
-    if filters:
-        filter_engine = FilterEngine(context=ctx)
-        candidate_airports = filter_engine.apply(candidate_airports, filters)
-
-    # Priority sort using PriorityEngine (use distances as context)
-    priority_engine = PriorityEngine(context=ctx)
-    sorted_airports = priority_engine.apply(
-        candidate_airports,
-        strategy=priority_strategy,
-        context={"point_distances": point_distances},
-        max_results=100
+    # Filter and sort using common pipeline
+    persona_id = kwargs.pop("_persona_id", None)
+    result = _filter_and_sort_airports(
+        ctx=ctx,
+        airports=candidate_airports,
+        filters=filters,
+        include_large_airports=include_large_airports,
+        priority_strategy=priority_strategy,
+        priority_context_extra={"point_distances": point_distances},
+        max_hours_notice=max_hours_notice,
+        max_results=100,
+        persona_id=persona_id,
     )
 
-    # Summaries with distance
+    # Build summaries with distance and notification info
     airports: List[Dict[str, Any]] = []
-    for a in sorted_airports:
+    for a in result.airports:
         summary = _airport_summary(a)
         summary["distance_nm"] = round(point_distances.get(a.ident, 0.0), 2)
+        if a.ident in result.notification_infos:
+            summary["notification"] = result.notification_infos[a.ident].to_summary_dict()
         airports.append(summary)
 
     total_count = len(airports)
-    airports_for_llm = airports[:20] if total_count > 20 else airports
-
-    # Build pretty output with airport list (similar to search_airports)
-    if airports:
-        pretty = f"Found {total_count} airports within {max_distance_nm}nm of {geocode['formatted']}:\n\n"
-        pretty += "\n\n".join(
-            f"**{a['ident']} - {a['name']}** ({a['distance_nm']}nm)\n"
-            f"Location: {a['municipality'] or 'Unknown'}, {a['country'] or 'Unknown'}"
-            for a in airports_for_llm[:20]  # Only show first 20 in text
-        )
-    else:
-        pretty = f"No airports within {max_distance_nm}nm of {geocode['formatted']}."
+    airports_for_llm = airports[:max_results]
 
     # Generate filter profile for UI synchronization
-    filter_profile: Dict[str, Any] = {
-        "location_query": location_query,
-        "radius_nm": max_distance_nm
-    }
-    if filters:
-        # Legacy filters
-        if filters.get("country"):
-            filter_profile["country"] = filters["country"]
-        if filters.get("has_procedures"):
-            filter_profile["has_procedures"] = True
-        if filters.get("has_aip_data"):
-            filter_profile["has_aip_data"] = True
-        if filters.get("has_hard_runway"):
-            filter_profile["has_hard_runway"] = True
-        if filters.get("point_of_entry"):
-            filter_profile["point_of_entry"] = True
-        # New filters
-        if filters.get("max_runway_length_ft"):
-            filter_profile["max_runway_length_ft"] = filters["max_runway_length_ft"]
-        if filters.get("min_runway_length_ft"):
-            filter_profile["min_runway_length_ft"] = filters["min_runway_length_ft"]
-        if filters.get("has_avgas"):
-            filter_profile["has_avgas"] = True
-        if filters.get("has_jet_a"):
-            filter_profile["has_jet_a"] = True
-        if filters.get("max_landing_fee"):
-            filter_profile["max_landing_fee"] = filters["max_landing_fee"]
+    filter_profile = _build_filter_profile(
+        {"location_query": location_query, "radius_nm": max_distance_nm},
+        filters,
+        max_hours_notice,
+    )
 
     return {
         "found": True,
         "count": total_count,
         "center": {"lat": geocode["lat"], "lon": geocode["lon"], "label": geocode["formatted"]},
         "airports": airports_for_llm,  # Limited for LLM
-        "pretty": pretty,
         "filter_profile": filter_profile,
         "visualization": {
             "type": "point_with_markers",
@@ -1166,24 +726,795 @@ def find_airports_near_location(
                 "lat": geocode["lat"],
                 "lon": geocode["lon"],
             },
-            "markers": airports  # Show all within radius on map
+            "markers": airports_for_llm,  # Only recommended airports for highlighting
+            "radius_nm": max_distance_nm  # For UI to trigger search with same radius
         }
     }
 
 
-def _tool_description(func: Callable) -> str:
-    return (func.__doc__ or "").strip()
+def find_airports_near_route(
+    ctx: ToolContext,
+    from_location: str,
+    to_location: str,
+    max_distance_nm: float = 50.0,
+    max_results: int = 5,
+    filters: Optional[Dict[str, Any]] = None,
+    include_large_airports: bool = False,
+    priority_strategy: str = "persona_optimized",
+    max_hours_notice: Optional[int] = None,  # Filter by notification requirements
+    max_leg_time_hours: Optional[float] = None,  # Filter by max flight time from departure
+    cruise_speed_kts: Optional[float] = None,  # Cruise speed for time-based filtering
+    aircraft_type: Optional[str] = None,  # Aircraft type for speed lookup
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner
+) -> Dict[str, Any]:
+    """
+    List airports within a specified distance from a direct route between two locations, with optional airport filters.
 
+    **USE THIS TOOL when user asks about airports "between" two locations.**
+
+    **IMPORTANT - Pass location names exactly as user provides them, INCLUDING country/region context:**
+    - Pass ICAO codes as-is (e.g., "LFPO", "EGKB", "EDDM")
+    - Pass location names WITH COUNTRY if user mentions it - DO NOT strip country context
+    - The tool will automatically geocode location names and find the nearest airport
+    - Examples:
+      - "between LFPO and Bromley" → from_location="LFPO", to_location="Bromley"
+      - "between Paris and Vik in Iceland" → from_location="Paris", to_location="Vik, Iceland"
+      - "Vik, Iceland" or "Vik in Iceland" → to_location="Vik, Iceland" (INCLUDE COUNTRY!)
+      - "between LFPO and EDDM" → from_location="LFPO", to_location="EDDM"
+      - "border entry between EGTF and LFMD with less than 24h notice" → use with point_of_entry=True, max_hours_notice=24
+
+    **Time-based filtering:**
+    When user asks for stops "within X hours flight", use max_leg_time_hours with speed:
+    - max_leg_time_hours: Maximum flight time from departure (e.g., 3 for "within 3 hours")
+    - cruise_speed_kts: Cruise speed in knots (e.g., 140)
+    - aircraft_type: Aircraft type for speed lookup (e.g., "C172", "SR22")
+    - If time is specified but no speed/aircraft, tool returns missing_info asking for speed
+    - Examples:
+      - "stop within 3h flight with my C172" → max_leg_time_hours=3, aircraft_type="C172"
+      - "fuel stop within 2 hours at 140 knots" → max_leg_time_hours=2, cruise_speed_kts=140
+
+    **Filters:**
+    When user mentions fuel (e.g., AVGAS, Jet-A), customs/border crossing, runway type (paved/hard), IFR procedures, country, or notification requirements, you MUST include the corresponding filter:
+    - has_avgas=True for AVGAS
+    - has_jet_a=True for Jet-A
+    - point_of_entry=True for customs
+    - has_hard_runway=True for paved runways
+    - has_procedures=True for IFR
+    - country='XX' for specific country
+    - max_hours_notice=24 for airports with <24h notification (or 48 for <48h, etc.)
+
+    **By default, large commercial airports are excluded** (not suitable for GA).
+    Set include_large_airports=True only if user explicitly asks for large/commercial airports.
+
+    Useful for finding fuel stops, alternates, or customs stops along a route.
+    """
+    # Resolve cruise speed if time-based filtering requested
+    max_enroute_distance_nm: Optional[float] = None
+    resolved_speed: Optional[float] = None
+    speed_source: Optional[str] = None
+
+    if max_leg_time_hours is not None:
+        resolved_speed, speed_source = resolve_cruise_speed(cruise_speed_kts, aircraft_type)
+        if resolved_speed:
+            max_enroute_distance_nm = max_leg_time_hours * resolved_speed
+        else:
+            # Time constraint specified but no speed - return missing_info
+            return {
+                "found": True,
+                "count": 0,
+                "airports": [],
+                "missing_info": [{
+                    "key": "cruise_speed",
+                    "reason": f"Required to calculate {max_leg_time_hours}h flight range",
+                    "prompt": "What's your cruise speed or aircraft type?",
+                    "examples": ["120 knots", "Cessna 172", "SR22"],
+                }],
+                "filter_profile": {
+                    "max_leg_time_hours": max_leg_time_hours,
+                },
+            }
+
+    # Try to resolve both locations (with fallback to nearest airport via geocoding)
+    from_result = _find_nearest_airport_in_db(ctx, from_location)
+    to_result = _find_nearest_airport_in_db(ctx, to_location)
+
+    if not from_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode departure location '{from_location}'. Please verify the ICAO code or location name.",
+            "pretty": f"Could not find airport or location '{from_location}'.",
+            "missing_info": [],
+        }
+
+    if not to_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode destination location '{to_location}'. Please verify the ICAO code or location name.",
+            "pretty": f"Could not find airport or location '{to_location}'.",
+            "missing_info": [],
+        }
+
+    from_airport = from_result["airport"]
+    to_airport = to_result["airport"]
+
+    # Build substitution notes if geocoding was used
+    substitution_notes = []
+    if from_result["was_geocoded"]:
+        substitution_notes.append(
+            f"Note: '{from_result['original_query']}' was geocoded to {from_result['geocoded_location']}. "
+            f"Using nearest airport {from_airport.ident} ({from_airport.name}), {from_result['distance_nm']}nm away."
+        )
+    if to_result["was_geocoded"]:
+        substitution_notes.append(
+            f"Note: '{to_result['original_query']}' was geocoded to {to_result['geocoded_location']}. "
+            f"Using nearest airport {to_airport.ident} ({to_airport.name}), {to_result['distance_nm']}nm away."
+        )
+
+    results = ctx.model.find_airports_near_route(
+        [from_airport.ident, to_airport.ident],
+        max_distance_nm
+    )
+
+    # Calculate total route distance for position-based sorting
+    total_route_distance_nm = 0.0
+    if hasattr(from_airport, 'navpoint') and hasattr(to_airport, 'navpoint'):
+        try:
+            _, total_route_distance_nm = from_airport.navpoint.haversine_distance(to_airport.navpoint)
+        except Exception:
+            pass  # Keep as 0.0 if calculation fails
+
+    # Extract airports and build distance map for context
+    airport_objects = [item["airport"] for item in results]
+    segment_distances = {
+        item["airport"].ident: float(item.get("segment_distance_nm") or 0.0) for item in results
+    }
+    enroute_distances = {
+        item["airport"].ident: item.get("enroute_distance_nm")
+        for item in results
+        if item.get("enroute_distance_nm") is not None
+    }
+
+    # Filter and sort using common pipeline
+    persona_id = kwargs.pop("_persona_id", None)
+    result = _filter_and_sort_airports(
+        ctx=ctx,
+        airports=airport_objects,
+        filters=filters,
+        include_large_airports=include_large_airports,
+        priority_strategy=priority_strategy,
+        priority_context_extra={
+            "segment_distances": segment_distances,
+            "enroute_distances": enroute_distances,
+            "total_route_distance_nm": total_route_distance_nm,
+            "sort_by": "halfway",  # Prioritize airports near middle of route
+        },
+        max_hours_notice=max_hours_notice,
+        max_results=100,
+        persona_id=persona_id,
+    )
+
+    # Build summaries with distance and notification info
+    airports: List[Dict[str, Any]] = []
+    for airport in result.airports:
+        summary = _airport_summary(airport)
+        summary["segment_distance_nm"] = segment_distances.get(airport.ident, 0.0)
+        if airport.ident in enroute_distances:
+            summary["enroute_distance_nm"] = enroute_distances[airport.ident]
+        if airport.ident in result.notification_infos:
+            summary["notification"] = result.notification_infos[airport.ident].to_summary_dict()
+        airports.append(summary)
+
+    # Filter by max enroute distance (time-based constraint)
+    if max_enroute_distance_nm is not None:
+        airports = [
+            a for a in airports
+            if a.get("enroute_distance_nm") is not None
+            and a["enroute_distance_nm"] <= max_enroute_distance_nm
+        ]
+
+    total_count = len(airports)
+    airports_for_llm = airports[:max_results]
+
+    # Generate filter profile for UI synchronization
+    filter_profile = _build_filter_profile(
+        {"route_distance": max_distance_nm},
+        filters,
+        max_hours_notice,
+    )
+
+    # Add time-based filter info if applicable
+    if max_leg_time_hours is not None and resolved_speed is not None:
+        filter_profile["max_leg_time_hours"] = max_leg_time_hours
+        filter_profile["cruise_speed_kts"] = resolved_speed
+        filter_profile["cruise_speed_source"] = speed_source
+        filter_profile["max_enroute_distance_nm"] = max_enroute_distance_nm
+
+    return {
+        "count": total_count,
+        "airports": airports_for_llm,  # Limited for LLM
+        "filter_profile": filter_profile,  # Filter settings for UI sync
+        "missing_info": [],  # No missing info on success
+        "substitutions": {
+            "from": {
+                "original": from_location,
+                "resolved": from_airport.ident,
+                "was_geocoded": from_result["was_geocoded"],
+                "geocoded_location": from_result.get("geocoded_location"),
+                "distance_nm": from_result.get("distance_nm", 0.0)
+            } if from_result["was_geocoded"] else None,
+            "to": {
+                "original": to_location,
+                "resolved": to_airport.ident,
+                "was_geocoded": to_result["was_geocoded"],
+                "geocoded_location": to_result.get("geocoded_location"),
+                "distance_nm": to_result.get("distance_nm", 0.0)
+            } if to_result["was_geocoded"] else None,
+        },
+        "visualization": {
+            "type": "route_with_markers",
+            "route": {
+                "from": {
+                    "icao": from_airport.ident,
+                    "name": from_airport.name,
+                    "municipality": from_airport.municipality,
+                    "lat": getattr(from_airport, "latitude_deg", None),
+                    "lon": getattr(from_airport, "longitude_deg", None),
+                },
+                "to": {
+                    "icao": to_airport.ident,
+                    "name": to_airport.name,
+                    "municipality": to_airport.municipality,
+                    "lat": getattr(to_airport, "latitude_deg", None),
+                    "lon": getattr(to_airport, "longitude_deg", None),
+                }
+            },
+            "markers": airports_for_llm,  # Only recommended airports for highlighting
+            "radius_nm": max_distance_nm  # For UI to trigger search with same radius
+        }
+    }
+
+
+def get_airport_details(
+    ctx: ToolContext,
+    icao_code: str,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
+) -> Dict[str, Any]:
+    """Get comprehensive details about a specific airport including runways, procedures, facilities, and AIP information."""
+    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
+    kwargs.pop("_persona_id", None)
+
+    icao = icao_code.strip().upper()
+    a = ctx.model.airports.get(icao)
+
+    if not a:
+        return {"found": False, "pretty": f"Airport {icao} not found."}
+
+    standardized = []
+    for e in (a.get_standardized_entries() or []):
+        if getattr(e, "std_field", None) and getattr(e, "value", None):
+            standardized.append({
+                "field": e.std_field,
+                "value": e.value
+            })
+
+    runways = []
+    for r in a.runways:
+        runways.append({
+            "le_ident": r.le_ident,
+            "he_ident": r.he_ident,
+            "length_ft": r.length_ft,
+            "width_ft": r.width_ft,
+            "surface": r.surface,
+            "lighted": bool(getattr(r, "lighted", False)),
+        })
+
+    return {
+        "found": True,
+        "airport": _airport_summary(a),
+        "runways": runways,
+        "runway_summary": {
+            "count": len(a.runways),
+            "longest_ft": getattr(a, "longest_runway_length_ft", None),
+            "has_hard_surface": bool(getattr(a, "has_hard_runway", False)),
+        },
+        "procedures": {"count": len(a.procedures)},
+        "aip_data": standardized,
+        "visualization": {
+            "type": "marker_with_details",
+            "marker": {
+                "ident": a.ident,
+                "lat": getattr(a, "latitude_deg", None),
+                "lon": getattr(a, "longitude_deg", None),
+                "zoom": 12
+            }
+        }
+    }
+
+
+
+# -----------------------------------------------------------------------------
+# Notification Requirements
+# -----------------------------------------------------------------------------
+
+def get_notification_for_airport(
+    ctx: ToolContext,
+    icao: str,
+    day_of_week: Optional[str] = None,
+    **kwargs: Any,  # Accept _persona_id injected by ToolRunner (not used by this tool)
+) -> Dict[str, Any]:
+    """
+    Get customs/immigration notification requirements for a specific airport.
+
+    Use when user asks about notification requirements, customs, or when to
+    notify for a specific airport.
+    """
+    # Extract and ignore _persona_id (injected by ToolRunner, not used by this tool)
+    kwargs.pop("_persona_id", None)
+
+    if not ctx.notification_service:
+        return {
+            "found": False,
+            "icao": icao.upper(),
+            "error": "Notification service not available.",
+            "pretty": f"Notification service not available. Cannot look up {icao.upper()}."
+        }
+    return ctx.notification_service.get_notification_for_airport(icao, day_of_week)
+
+
+# -----------------------------------------------------------------------------
+# Flight Distance & Time Calculation
+# -----------------------------------------------------------------------------
+
+def calculate_flight_distance(
+    ctx: ToolContext,
+    from_location: str,
+    to_location: str,
+    cruise_speed_kts: Optional[float] = None,
+    aircraft_type: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Calculate distance and estimated flight time between two airports or locations.
+
+    **USE THIS TOOL when user asks about:**
+    - Flight distance: "How far is EGTF from LFMD?"
+    - Flight time: "How long to fly from London to Nice?"
+    - Route planning: "What's the distance between Paris and Munich?"
+
+    **Speed/Aircraft handling:**
+    - If user specifies aircraft type (e.g., "with a C172"), use aircraft_type parameter
+    - If user specifies speed (e.g., "at 140 knots"), use cruise_speed_kts parameter
+    - If neither provided and user asks about TIME, tool returns distance and asks for speed
+    - If user only asks about DISTANCE, no speed needed
+
+    **Location resolution:**
+    - Accepts ICAO codes (e.g., "EGTF", "LFMD")
+    - Accepts city/location names (e.g., "Paris", "Nice, France")
+    - Automatically finds nearest airport for non-ICAO locations
+
+    Returns distance in nautical miles and estimated flight time if speed is known.
+    """
+    # Try to resolve both locations
+    from_result = _find_nearest_airport_in_db(ctx, from_location)
+    to_result = _find_nearest_airport_in_db(ctx, to_location)
+
+    if not from_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode departure location '{from_location}'.",
+            "missing_info": [{
+                "key": "from_location",
+                "reason": "Location not found in database or could not be geocoded",
+                "prompt": f"Could not find '{from_location}'. Please provide an ICAO code or valid location name.",
+                "examples": ["EGTF", "Paris", "Nice, France"],
+            }],
+        }
+
+    if not to_result:
+        return {
+            "found": False,
+            "error": f"Could not find or geocode destination location '{to_location}'.",
+            "missing_info": [{
+                "key": "to_location",
+                "reason": "Location not found in database or could not be geocoded",
+                "prompt": f"Could not find '{to_location}'. Please provide an ICAO code or valid location name.",
+                "examples": ["LFMD", "Cannes", "Munich, Germany"],
+            }],
+        }
+
+    from_airport = from_result["airport"]
+    to_airport = to_result["airport"]
+
+    # Calculate great circle distance
+    distance_nm: Optional[float] = None
+    if hasattr(from_airport, 'navpoint') and hasattr(to_airport, 'navpoint'):
+        try:
+            _, distance_nm = from_airport.navpoint.haversine_distance(to_airport.navpoint)
+            distance_nm = round(distance_nm, 1)
+        except Exception:
+            pass
+
+    if distance_nm is None:
+        return {
+            "found": False,
+            "error": "Could not calculate distance between airports (missing coordinates).",
+        }
+
+    # Resolve cruise speed
+    speed, speed_source = resolve_cruise_speed(cruise_speed_kts, aircraft_type)
+
+    # Build response
+    response: Dict[str, Any] = {
+        "found": True,
+        "from": {
+            "icao": from_airport.ident,
+            "name": from_airport.name,
+            "municipality": from_airport.municipality,
+            "lat": getattr(from_airport, "latitude_deg", None),
+            "lon": getattr(from_airport, "longitude_deg", None),
+        },
+        "to": {
+            "icao": to_airport.ident,
+            "name": to_airport.name,
+            "municipality": to_airport.municipality,
+            "lat": getattr(to_airport, "latitude_deg", None),
+            "lon": getattr(to_airport, "longitude_deg", None),
+        },
+        "distance_nm": distance_nm,
+        "cruise_speed_kts": speed,
+        "cruise_speed_source": speed_source,
+        "estimated_time_hours": None,
+        "estimated_time_formatted": None,
+        "missing_info": [],
+        "visualization": {
+            "type": "route",
+            "route": {
+                "from": {
+                    "icao": from_airport.ident,
+                    "name": from_airport.name,
+                    "lat": getattr(from_airport, "latitude_deg", None),
+                    "lon": getattr(from_airport, "longitude_deg", None),
+                },
+                "to": {
+                    "icao": to_airport.ident,
+                    "name": to_airport.name,
+                    "lat": getattr(to_airport, "latitude_deg", None),
+                    "lon": getattr(to_airport, "longitude_deg", None),
+                },
+            },
+        },
+    }
+
+    # Add substitution notes if locations were geocoded
+    if from_result["was_geocoded"] or to_result["was_geocoded"]:
+        response["substitutions"] = {
+            "from": {
+                "original": from_location,
+                "resolved": from_airport.ident,
+                "was_geocoded": from_result["was_geocoded"],
+                "geocoded_location": from_result.get("geocoded_location"),
+                "distance_nm": from_result.get("distance_nm", 0.0),
+            } if from_result["was_geocoded"] else None,
+            "to": {
+                "original": to_location,
+                "resolved": to_airport.ident,
+                "was_geocoded": to_result["was_geocoded"],
+                "geocoded_location": to_result.get("geocoded_location"),
+                "distance_nm": to_result.get("distance_nm", 0.0),
+            } if to_result["was_geocoded"] else None,
+        }
+
+    # Calculate time if speed is known
+    if speed:
+        time_hours = distance_nm / speed
+        response["estimated_time_hours"] = round(time_hours, 2)
+        response["estimated_time_formatted"] = format_time(time_hours)
+    else:
+        # No speed provided - add missing_info for formatter to ask
+        response["missing_info"] = [{
+            "key": "cruise_speed",
+            "reason": "Required to calculate flight time",
+            "prompt": "What's your cruise speed or aircraft type?",
+            "examples": ["120 knots", "Cessna 172", "SR22"],
+        }]
+
+    return response
+
+
+# =============================================================================
+# SECTION 6: RULES TOOLS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Country Rules
+# -----------------------------------------------------------------------------
+
+def answer_rules_question(
+    ctx: ToolContext,
+    country_code: str,
+    question: str,
+    tags: Optional[List[str]] = None,
+    use_rag: bool = True,
+) -> Dict[str, Any]:
+    """
+    Answer a specific question about aviation rules for a country.
+    Uses semantic search (RAG) to find the most relevant Q&A pairs.
+
+    Args:
+        country_code: ISO-2 country code (e.g., FR, GB)
+        question: The user's actual question
+        tags: Optional tags to filter results (used as fallback if RAG unavailable)
+        use_rag: Use RAG semantic search (default: True). Falls back to tags if False or RAG unavailable.
+    """
+    country_code = country_code.upper()
+    rules_manager = ctx.ensure_rules_manager()
+
+    # Try RAG-based retrieval first
+    if use_rag and ctx.rules_rag:
+        try:
+            results = ctx.rules_rag.retrieve_rules(
+                query=question,
+                countries=[country_code],
+                top_k=5,
+                similarity_threshold=0.3,
+            )
+
+            if results:
+                # Format results for display
+                formatted_lines = []
+                for r in results:
+                    q = r.get('question_text', '')
+                    a = r.get('answer_html', r.get('answer', ''))
+                    score = r.get('similarity', 0)
+                    formatted_lines.append(f"**Q: {q}**\nA: {a}\n(relevance: {score:.2f})")
+
+                return {
+                    "found": True,
+                    "country_code": country_code,
+                    "count": len(results),
+                    "retrieval_mode": "rag",
+                    "rules": results,
+                    "formatted_text": "\n\n".join(formatted_lines),
+                }
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"RAG retrieval failed, falling back to tags: {e}")
+
+    # Fallback to tag-based retrieval
+    rules = rules_manager.get_rules_for_country(
+        country_code=country_code,
+        tags=tags
+    )
+
+    if not rules:
+        available = ", ".join(rules_manager.get_available_countries())
+        return {
+            "found": False,
+            "country_code": country_code,
+            "count": 0,
+            "retrieval_mode": "tags",
+            "message": f"No rules found for {country_code}. Available countries: {available}"
+        }
+
+    formatted_text = rules_manager.format_rules_for_display(rules, group_by_category=True)
+
+    return {
+        "found": True,
+        "country_code": country_code,
+        "count": len(rules),
+        "retrieval_mode": "tags",
+        "rules": rules[:20],  # Limit for tag-based (less targeted)
+        "formatted_text": formatted_text,
+    }
+
+
+def browse_rules(
+    ctx: ToolContext,
+    country_code: str,
+    tags: Optional[List[str]] = None,
+    offset: int = 0,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """
+    Browse/list aviation rules for a country with pagination.
+    Use this when user wants to see all rules in a category, not answer a specific question.
+
+    Args:
+        country_code: ISO-2 country code (e.g., FR, GB)
+        tags: Optional tags to filter rules (e.g., ['flight_plan', 'transponder'])
+        offset: Starting index for pagination (default: 0)
+        limit: Maximum rules to return (default: 10, max: 50)
+    """
+    country_code = country_code.upper()
+    limit = min(limit, 50)  # Cap at 50
+
+    rules_manager = ctx.ensure_rules_manager()
+    all_rules = rules_manager.get_rules_for_country(
+        country_code=country_code,
+        tags=tags
+    )
+
+    if not all_rules:
+        available = ", ".join(rules_manager.get_available_countries())
+        return {
+            "found": False,
+            "country_code": country_code,
+            "total": 0,
+            "message": f"No rules found for {country_code}. Available countries: {available}"
+        }
+
+    total = len(all_rules)
+    paginated_rules = all_rules[offset:offset + limit]
+    has_more = (offset + limit) < total
+
+    formatted_text = rules_manager.format_rules_for_display(paginated_rules, group_by_category=True)
+    categories = list({r.get('category', 'General') for r in paginated_rules})
+
+    return {
+        "found": True,
+        "country_code": country_code,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": len(paginated_rules),
+        "has_more": has_more,
+        "rules": paginated_rules,
+        "formatted_text": formatted_text,
+        "categories": categories,
+        "next_offset": offset + limit if has_more else None,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Comparison
+# -----------------------------------------------------------------------------
+
+def compare_rules_between_countries(
+    ctx: ToolContext,
+    countries: List[str],
+    tags: Optional[List[str]] = None,
+    use_embeddings: bool = True,
+) -> Dict[str, Any]:
+    """
+    Compare aviation rules and regulations between countries (iso-2 codes eg FR,GB,DE).
+    Can be filtered by tags like flight_plan, transponder, airspace, etc.
+
+    This tool returns DATA only - synthesis is done by the formatter node.
+    Returns a _tool_type="comparison" marker for formatter routing.
+    """
+    countries = [c.upper() for c in countries]
+
+    # Try embedding-based comparison first (smarter - detects semantic differences)
+    # NOTE: Tool returns DATA only - synthesis is done by formatter
+    if use_embeddings and ctx.comparison_service:
+        try:
+            result = ctx.comparison_service.compare_countries(
+                countries=countries,
+                tags=tags,
+                synthesize=False,  # Never synthesize in tool - formatter does this
+            )
+
+            # Build differences for response
+            differences = result.differences if result.differences else []
+
+            # Build rules_context for formatter (pre-formatted for synthesis prompt)
+            rules_context_lines = []
+            for i, diff in enumerate(differences, 1):
+                rules_context_lines.append(f"\n### {i}. {diff.get('question_text', 'Unknown question')}")
+                rules_context_lines.append(f"Tags: {', '.join(diff.get('tags', []))}")
+                rules_context_lines.append(f"Semantic difference score: {diff.get('difference_score', 0):.2f}")
+                rules_context_lines.append("")
+                for cc, answer in diff.get("answers", {}).items():
+                    rules_context_lines.append(f"**{cc}**: {answer}")
+                rules_context_lines.append("")
+
+            countries_str = ", ".join(countries)
+            return {
+                "found": True,
+                "countries": countries,
+                "tags": tags,
+                "total_questions": result.total_questions,
+                "questions_analyzed": result.questions_analyzed,
+                "filtered_by_embedding": result.filtered_by_embedding,
+                "differences": differences,
+                "rules_context": "\n".join(rules_context_lines),  # For formatter synthesis
+                "total_differences": len(differences),
+                "message": f"Comparison between {countries_str} complete.",
+                # Mark this as a comparison tool for formatter routing
+                "_tool_type": "comparison",
+            }
+        except Exception as e:
+            # Log and fall back to simple comparison
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Embedding comparison failed, falling back to text: {e}"
+            )
+
+    # Fall back to simple text-based comparison (only supports 2 countries)
+    rules_manager = ctx.ensure_rules_manager()
+    if len(countries) >= 2:
+        comparison = rules_manager.compare_rules_between_countries(
+            country1=countries[0],
+            country2=countries[1],
+        )
+    else:
+        comparison = {"differences": []}
+
+    diff_count = len(comparison.get('differences', []))
+
+    # Build rules_context from text-based comparison for formatter
+    rules_context_lines = []
+    for i, diff in enumerate(comparison.get('differences', []), 1):
+        rules_context_lines.append(f"\n### {i}. {diff.get('question_text', 'Unknown')}")
+        for cc, rule in diff.get('rules', {}).items():
+            rules_context_lines.append(f"**{cc}**: {rule}")
+        rules_context_lines.append("")
+
+    countries_str = ", ".join(countries)
+    return {
+        "found": True,
+        "countries": countries,
+        "tags": tags,
+        "comparison": comparison,
+        "differences": comparison.get('differences', []),
+        "rules_context": "\n".join(rules_context_lines),  # For formatter synthesis
+        "total_differences": diff_count,
+        "filtered_by_embedding": False,
+        "message": f"Comparison between {countries_str} complete.",
+        "_tool_type": "comparison",
+    }
+
+
+def _compare_rules_between_countries_tool(
+    ctx: ToolContext,
+    countries: List[str],
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Wrapper that adds a human readable summary field expected by UI clients.
+    Used as the actual handler in the tool registry.
+    """
+    result = compare_rules_between_countries(
+        ctx, countries, tags=tags
+    )
+    if result.get("formatted_summary") and "pretty" not in result:
+        result["pretty"] = result["formatted_summary"]
+    return result
+
+
+# =============================================================================
+# SECTION 7: TOOL REGISTRY
+# =============================================================================
 
 def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
-    """Create the ordered manifest of shared tools."""
+    """
+    Create the ordered manifest of shared tools.
+
+    All tools have expose_to_llm=True and are available to the aviation agent and MCP server.
+
+    AIRPORT TOOLS:
+    - search_airports
+    - find_airports_near_location
+    - find_airports_near_route
+    - get_airport_details
+    - get_notification_for_airport
+    - calculate_flight_distance
+
+    RULES TOOLS:
+    - answer_rules_question
+    - browse_rules
+    - compare_rules_between_countries
+    """
     return OrderedDict([
+        # -----------------------------------------------------------------
+        # AIRPORT SEARCH & DISCOVERY
+        # -----------------------------------------------------------------
         (
             "search_airports",
             {
                 "name": "search_airports",
                 "handler": search_airports,
-                "description": _tool_description(search_airports),
+                "description": _get_tool_description(search_airports, "search_airports"),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1193,17 +1524,22 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                         },
                         "max_results": {
                             "type": "integer",
-                            "description": "Maximum number of results to return.",
-                            "default": 20,
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
                         },
                         "filters": {
                             "type": "object",
                             "description": "IMPORTANT: Use filters object to filter airports by characteristics mentioned in user's request. Examples: {'has_avgas': True} for AVGAS fuel, {'point_of_entry': True} for customs, {'has_hard_runway': True} for paved runways, {'has_procedures': True} for IFR, {'country': 'FR'} for country. ALWAYS include filters when user specifies characteristics.",
                         },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports (e.g., Heathrow, CDG, JFK). Default is False - large airports are excluded as they are not suitable for GA. Set to True ONLY if user explicitly asks for large/commercial/major airports.",
+                            "default": False,
+                        },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
                         },
                     },
                     "required": ["query"],
@@ -1216,7 +1552,7 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
             {
                 "name": "find_airports_near_location",
                 "handler": find_airports_near_location,
-                "description": _tool_description(find_airports_near_location),
+                "description": _get_tool_description(find_airports_near_location, "find_airports_near_location"),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1229,14 +1565,28 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "description": "Max distance from the location in nautical miles.",
                             "default": 50.0,
                         },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
+                        },
                         "filters": {
                             "type": "object",
                             "description": "Airport filters (fuel, customs, runway length, etc.).",
                         },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports (e.g., Heathrow, CDG, JFK). Default is False - large airports are excluded as they are not suitable for GA. Set to True ONLY if user explicitly asks for large/commercial/major airports.",
+                            "default": False,
+                        },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
+                        },
+                        "max_hours_notice": {
+                            "type": "integer",
+                            "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h).",
                         },
                     },
                     "required": ["location_query"],
@@ -1249,7 +1599,7 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
             {
                 "name": "find_airports_near_route",
                 "handler": find_airports_near_route,
-                "description": _tool_description(find_airports_near_route),
+                "description": _get_tool_description(find_airports_near_route, "find_airports_near_route"),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1266,14 +1616,40 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "description": "Max distance from route centerline in nautical miles.",
                             "default": 50.0,
                         },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of airports to return. Default is 5. Use higher values (e.g., 10, 20) when user asks for 'all airports', 'more airports', or specifies a number.",
+                            "default": 5,
+                        },
                         "filters": {
                             "type": "object",
                             "description": "IMPORTANT: Use filters object to filter airports by characteristics mentioned in user's request. Examples: {'has_avgas': True} for AVGAS fuel, {'point_of_entry': True} for customs, {'has_hard_runway': True} for paved runways, {'has_procedures': True} for IFR, {'country': 'FR'} for country. ALWAYS include filters when user specifies characteristics like fuel type, customs, runway type, etc.",
                         },
+                        "include_large_airports": {
+                            "type": "boolean",
+                            "description": "Include large commercial airports (e.g., Heathrow, CDG, JFK). Default is False - large airports are excluded as they are not suitable for GA. Set to True ONLY if user explicitly asks for large/commercial/major airports.",
+                            "default": False,
+                        },
                         "priority_strategy": {
                             "type": "string",
-                            "description": "Priority sorting strategy (e.g., cost_optimized).",
-                            "default": "cost_optimized",
+                            "description": "Priority sorting strategy (e.g., persona_optimized).",
+                            "default": "persona_optimized",
+                        },
+                        "max_hours_notice": {
+                            "type": "integer",
+                            "description": "Filter by notification requirements. Only include airports that require at most this many hours of prior notice (e.g., 24 for airports with less than 24h notice, 48 for less than 48h). Use when user asks for airports with specific notification constraints.",
+                        },
+                        "max_leg_time_hours": {
+                            "type": "number",
+                            "description": "Maximum flight time from departure in hours. Filters airports to only those reachable within this time. Requires cruise_speed_kts or aircraft_type. Use when user asks for stops 'within X hours flight'.",
+                        },
+                        "cruise_speed_kts": {
+                            "type": "number",
+                            "description": "Cruise speed in knots for time-based filtering. Use when user specifies speed (e.g., '140 knots', 'at 120 kts').",
+                        },
+                        "aircraft_type": {
+                            "type": "string",
+                            "description": "Aircraft type for speed lookup (e.g., 'C172', 'SR22', 'PA28'). Use when user mentions their aircraft type for time-based filtering.",
                         },
                     },
                     "required": ["from_location", "to_location"],
@@ -1286,7 +1662,7 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
             {
                 "name": "get_airport_details",
                 "handler": get_airport_details,
-                "description": _tool_description(get_airport_details),
+                "description": _get_tool_description(get_airport_details, "get_airport_details"),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1300,110 +1676,75 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                 "expose_to_llm": True,
             },
         ),
+        # -----------------------------------------------------------------
+        # NOTIFICATION
+        # -----------------------------------------------------------------
         (
-            "get_border_crossing_airports",
+            "get_notification_for_airport",
             {
-                "name": "get_border_crossing_airports",
-                "handler": get_border_crossing_airports,
-                "description": _tool_description(get_border_crossing_airports),
+                "name": "get_notification_for_airport",
+                "handler": get_notification_for_airport,
+                "description": _get_tool_description(get_notification_for_airport, "get_notification_for_airport"),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "country": {
+                        "icao": {
                             "type": "string",
-                            "description": "Optional ISO-2 country code (e.g., FR, DE).",
+                            "description": "Airport ICAO code (e.g., LFRG, LFPT).",
+                        },
+                        "day_of_week": {
+                            "type": "string",
+                            "description": "Optional day to get specific rules for (e.g., Saturday, Monday).",
                         },
                     },
+                    "required": ["icao"],
                 },
                 "expose_to_llm": True,
             },
         ),
+        # -----------------------------------------------------------------
+        # FLIGHT DISTANCE & TIME
+        # -----------------------------------------------------------------
         (
-            "get_airport_statistics",
+            "calculate_flight_distance",
             {
-                "name": "get_airport_statistics",
-                "handler": get_airport_statistics,
-                "description": _tool_description(get_airport_statistics),
+                "name": "calculate_flight_distance",
+                "handler": calculate_flight_distance,
+                "description": _get_tool_description(calculate_flight_distance, "calculate_flight_distance"),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "country": {
+                        "from_location": {
                             "type": "string",
-                            "description": "Optional ISO-2 country code to filter stats.",
+                            "description": "Departure location - ICAO code (e.g., 'EGTF') or location name (e.g., 'Paris', 'Nice, France').",
+                        },
+                        "to_location": {
+                            "type": "string",
+                            "description": "Destination location - ICAO code (e.g., 'LFMD') or location name (e.g., 'Cannes', 'Munich, Germany').",
+                        },
+                        "cruise_speed_kts": {
+                            "type": "number",
+                            "description": "Cruise speed in knots. Use when user specifies a speed (e.g., '140 knots', 'at 120 kts').",
+                        },
+                        "aircraft_type": {
+                            "type": "string",
+                            "description": "Aircraft type for speed lookup (e.g., 'C172', 'SR22', 'PA28', 'Cessna 182'). Use when user mentions their aircraft type.",
                         },
                     },
+                    "required": ["from_location", "to_location"],
                 },
                 "expose_to_llm": True,
             },
         ),
+        # -----------------------------------------------------------------
+        # RULES
+        # -----------------------------------------------------------------
         (
-            "get_airport_pricing",
+            "answer_rules_question",
             {
-                "name": "get_airport_pricing",
-                "handler": get_airport_pricing,
-                "description": _tool_description(get_airport_pricing),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code (e.g., EDAZ).",
-                        },
-                    },
-                    "required": ["icao_code"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_pilot_reviews",
-            {
-                "name": "get_pilot_reviews",
-                "handler": get_pilot_reviews,
-                "description": _tool_description(get_pilot_reviews),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code.",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of reviews to return.",
-                            "default": 10,
-                        },
-                    },
-                    "required": ["icao_code"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_fuel_prices",
-            {
-                "name": "get_fuel_prices",
-                "handler": get_fuel_prices,
-                "description": _tool_description(get_fuel_prices),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "icao_code": {
-                            "type": "string",
-                            "description": "Airport ICAO code.",
-                        },
-                    },
-                    "required": ["icao_code"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "list_rules_for_country",
-            {
-                "name": "list_rules_for_country",
-                "handler": list_rules_for_country,
-                "description": _tool_description(list_rules_for_country),
+                "name": "answer_rules_question",
+                "handler": answer_rules_question,
+                "description": _get_tool_description(answer_rules_question, "answer_rules_question"),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1411,14 +1752,46 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
                             "type": "string",
                             "description": "ISO-2 country code (e.g., FR, GB).",
                         },
-                        "category": {
+                        "question": {
                             "type": "string",
-                            "description": "Optional category filter (e.g., Customs).",
+                            "description": "The user's question about aviation rules.",
                         },
                         "tags": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional list of tags to filter rules.",
+                            "description": "Optional tags to help filter results (e.g., ['flight_plan', 'transponder']).",
+                        },
+                    },
+                    "required": ["country_code", "question"],
+                },
+                "expose_to_llm": True,
+            },
+        ),
+        (
+            "browse_rules",
+            {
+                "name": "browse_rules",
+                "handler": browse_rules,
+                "description": _get_tool_description(browse_rules, "browse_rules"),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "country_code": {
+                            "type": "string",
+                            "description": "ISO-2 country code (e.g., FR, GB).",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional tags to filter rules (e.g., ['flight_plan', 'transponder']).",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Starting index for pagination (default: 0).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum rules to return (default: 10, max: 50).",
                         },
                     },
                     "required": ["country_code"],
@@ -1431,78 +1804,41 @@ def _build_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
             {
                 "name": "compare_rules_between_countries",
                 "handler": _compare_rules_between_countries_tool,
-                "description": _tool_description(compare_rules_between_countries),
+                "description": _get_tool_description(compare_rules_between_countries, "compare_rules_between_countries"),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "country1": {
-                            "type": "string",
-                            "description": "First ISO-2 country code.",
-                        },
-                        "country2": {
-                            "type": "string",
-                            "description": "Second ISO-2 country code.",
-                        },
-                        "category": {
-                            "type": "string",
-                            "description": "Optional category filter.",
-                        },
-                    },
-                    "required": ["country1", "country2"],
-                },
-                "expose_to_llm": True,
-            },
-        ),
-        (
-            "get_answers_for_questions",
-            {
-                "name": "get_answers_for_questions",
-                "handler": get_answers_for_questions,
-                "description": _tool_description(get_answers_for_questions),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question_ids": {
+                        "countries": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "List of predefined question IDs.",
+                            "description": "List of ISO-2 country codes to compare (e.g., ['FR', 'GB', 'DE']).",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of tags to filter (e.g., ['flight_plan', 'transponder']).",
                         },
                     },
-                    "required": ["question_ids"],
+                    "required": ["countries"],
                 },
-                "expose_to_llm": False,
-            },
-        ),
-        (
-            "list_rule_categories_and_tags",
-            {
-                "name": "list_rule_categories_and_tags",
-                "handler": list_rule_categories_and_tags,
-                "description": _tool_description(list_rule_categories_and_tags),
-                "parameters": {"type": "object", "properties": {}},
-                "expose_to_llm": False,
-            },
-        ),
-        (
-            "list_rule_countries",
-            {
-                "name": "list_rule_countries",
-                "handler": list_rule_countries,
-                "description": _tool_description(list_rule_countries),
-                "parameters": {"type": "object", "properties": {}},
-                "expose_to_llm": False,
+                "expose_to_llm": True,
             },
         ),
     ])
 
 
+# Module-level tool registry (built once at import time)
 _SHARED_TOOL_SPECS: OrderedDictType[str, ToolSpec] = _build_shared_tool_specs()
 
 
 def get_shared_tool_specs() -> OrderedDictType[str, ToolSpec]:
     """
     Return the shared tool manifest.
+
     The mapping is ordered to keep registration deterministic.
+    Tools are organized into categories - see _build_shared_tool_specs() for details.
+
+    Returns:
+        OrderedDict mapping tool names to ToolSpec dicts
     """
     return _SHARED_TOOL_SPECS.copy()
-

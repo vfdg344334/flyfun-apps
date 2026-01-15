@@ -7,7 +7,7 @@ based on reviews, fees, and operational characteristics.
 Main components:
     - Models: Pydantic models for data structures
     - Config: Configuration loading and validation
-    - Storage: Database operations for ga_meta.sqlite
+    - Storage: Database operations for GA persona database
     - Ontology: Aspect/label ontology management
     - Personas: Persona-based scoring
 
@@ -72,8 +72,10 @@ from .models import (
     ParsedAIPRules,
     RuleSummary,
     # Feature mappings
-    FeatureMappingConfig,
     FeatureMappingsConfig,
+    ReviewFeatureDefinition,
+    AIPFeatureDefinition,
+    AspectConfig,
     # Build
     FailureMode,
     BuildMetrics,
@@ -141,6 +143,7 @@ from .cache import CachedDataLoader
 from .sources import (
     CSVReviewSource,
     AirfieldDirectorySource,
+    AirfieldDirectoryAPISource,
     AirportJsonDirectorySource,
     CompositeReviewSource,
     AirportsDatabaseSource,
@@ -158,6 +161,9 @@ from .features import (
 
 # --- Builder ---
 from .builder import GAFriendlinessBuilder
+
+# --- Service ---
+from .service import GAFriendlinessService
 
 __all__ = [
     # Exceptions
@@ -187,8 +193,10 @@ __all__ = [
     "NotificationRule",
     "ParsedAIPRules",
     "RuleSummary",
-    "FeatureMappingConfig",
     "FeatureMappingsConfig",
+    "ReviewFeatureDefinition",
+    "AIPFeatureDefinition",
+    "AspectConfig",
     "FailureMode",
     "BuildMetrics",
     "BuildResult",
@@ -232,6 +240,7 @@ __all__ = [
     # Sources
     "CSVReviewSource",
     "AirfieldDirectorySource",
+    "AirfieldDirectoryAPISource",
     "AirportJsonDirectorySource",
     "CompositeReviewSource",
     "AirportsDatabaseSource",
@@ -244,5 +253,7 @@ __all__ = [
     "apply_bayesian_smoothing",
     # Builder
     "GAFriendlinessBuilder",
+    # Service
+    "GAFriendlinessService",
 ]
 

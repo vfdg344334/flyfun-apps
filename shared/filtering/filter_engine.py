@@ -5,7 +5,6 @@ Filter engine for applying multiple filters to airports.
 import logging
 from typing import Dict, Any, List, Iterable, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
-from euro_aip.storage.enrichment_storage import EnrichmentStorage
 
 from .filters import (
     Filter,
@@ -14,18 +13,22 @@ from .filters import (
     HasAipDataFilter,
     HasHardRunwayFilter,
     PointOfEntryFilter,
+    ExcludeLargeAirportsFilter,
     MaxRunwayLengthFilter,
     MinRunwayLengthFilter,
     HasAvgasFilter,
     HasJetAFilter,
+    FuelTypeFilter,
     MaxLandingFeeFilter,
     TripDistanceFilter,
+    HotelFilter,
+    RestaurantFilter,
 )
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class FilterRegistry:
@@ -56,17 +59,29 @@ class FilterRegistry:
 
 
 # Auto-register all filters
+#
+# IMPORTANT: If you add or rename a filter that should be exposed to the LLM planner,
+# you MUST also update the filter list in:
+#   configs/aviation_agent/prompts/planner_v1.md
+#
+# Filters NOT exposed to LLM (internal use only):
+#   - has_aip_data, exclude_large_airports, trip_distance
+#
 FilterRegistry.register(CountryFilter())
 FilterRegistry.register(HasProceduresFilter())
 FilterRegistry.register(HasAipDataFilter())
 FilterRegistry.register(HasHardRunwayFilter())
 FilterRegistry.register(PointOfEntryFilter())
+FilterRegistry.register(ExcludeLargeAirportsFilter())
 FilterRegistry.register(MaxRunwayLengthFilter())
 FilterRegistry.register(MinRunwayLengthFilter())
 FilterRegistry.register(HasAvgasFilter())
 FilterRegistry.register(HasJetAFilter())
+FilterRegistry.register(FuelTypeFilter())
 FilterRegistry.register(MaxLandingFeeFilter())
 FilterRegistry.register(TripDistanceFilter())
+FilterRegistry.register(HotelFilter())
+FilterRegistry.register(RestaurantFilter())
 
 logger.info(f"Filter registry initialized with {len(FilterRegistry.list_all())} filters")
 
@@ -76,25 +91,21 @@ class FilterEngine:
     Engine for applying filters to airports.
 
     Usage:
-        engine = FilterEngine(enrichment_storage=storage)
+        engine = FilterEngine(context=ctx)
         filtered = engine.apply(airports, {"country": "FR", "has_avgas": True})
     """
 
     def __init__(
         self,
         context: Optional["ToolContext"] = None,
-        enrichment_storage: Optional[EnrichmentStorage] = None,
     ):
         """
         Initialize filter engine.
 
         Args:
-            enrichment_storage: Optional enrichment storage for pricing/fuel filters
+            context: ToolContext with services for filters that need them
         """
         self.context = context
-        if enrichment_storage is None and context is not None:
-            enrichment_storage = context.enrichment_storage
-        self.enrichment_storage = enrichment_storage
 
     def apply(
         self,

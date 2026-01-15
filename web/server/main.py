@@ -20,6 +20,7 @@ load_component_env(component_dir)
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -29,7 +30,6 @@ import logging
 from datetime import datetime
 import time
 
-from euro_aip.storage.database_storage import DatabaseStorage
 from euro_aip.models.euro_aip_model import EuroAipModel
 
 # Import security configuration (values only)
@@ -38,41 +38,53 @@ from security_config import (
     FORCE_HTTPS, SECURITY_HEADERS, LOG_LEVEL, LOG_FORMAT
 )
 
-# Import configuration helper functions (logic only)
-from config_helpers import (
-    get_safe_db_path, get_safe_rules_path, get_safe_ga_meta_db_path
-)
-
 # Import API routes
-from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness
+from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness, notifications
 
-from shared.rules_manager import RulesManager
+from shared.tool_context import ToolContext
 
-# Configure logging with file output only (uvicorn handles console)
+# Configure logging with file output (and optionally stderr for debugger)
 # Use /app/logs in Docker, /tmp/flyfun-logs for local development
 log_dir = Path(os.getenv("LOG_DIR", "/tmp/flyfun-logs"))
 log_dir.mkdir(exist_ok=True, parents=True)
 log_file = log_dir / "web_server.log"
 
-# Create file handler only (uvicorn's default handlers handle console)
-file_handler = logging.FileHandler(log_file)
+# Create formatter
 formatter = logging.Formatter(LOG_FORMAT)
+
+# Create file handler
+file_handler = logging.FileHandler(log_file)
 file_handler.setFormatter(formatter)
 
-# Configure root logger - only add file handler to avoid duplicate console output
+# Configure root logger
 root_logger = logging.getLogger()
 root_logger.setLevel(getattr(logging, LOG_LEVEL))
-# Only add if not already added
+
+# Add file handler if not already added
 if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file) for h in root_logger.handlers):
     root_logger.addHandler(file_handler)
 
+# Optionally add stderr handler for debugger visibility
+# Enable if LOG_TO_STDERR env var is set, or in development mode
+log_to_stderr = os.getenv("LOG_TO_STDERR", "").lower() in ("1", "true", "yes")
+if log_to_stderr:
+    # Check if stderr handler already exists to avoid duplicates
+    has_stderr_handler = any(
+        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr 
+        for h in root_logger.handlers
+    )
+    if not has_stderr_handler:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        root_logger.addHandler(stderr_handler)
+
 logger = logging.getLogger(__name__)
 logger.info(f"Logging to file: {log_file}")
+if log_to_stderr:
+    logger.info("Also logging to stderr for debugger visibility")
 
-# Global database storage
-db_storage = None
-model = None
-rules_manager: Optional[RulesManager] = None
+# Global ToolContext (created at startup)
+_tool_context: Optional[ToolContext] = None
 
 # Simple rate limiting storage
 request_counts = {}
@@ -105,59 +117,82 @@ def check_rate_limit(client_ip: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
-    global db_storage, model, rules_manager
+    global _tool_context
     
     # Startup
     logger.info("Starting up Euro AIP Airport Explorer...")
     
-    # Get database path from environment or use default
-    db_path = get_safe_db_path()
-    
     try:
-        logger.info(f"Loading model from database at '{db_path}'")
-        db_storage = DatabaseStorage(db_path)
-        model = db_storage.load_model()
-        model.remove_airports_by_country("RU")
-        logger.info(f"Loaded model with {len(model.airports)} airports")
+        # Create ToolContext with all services using centralized configuration
+        logger.info("Initializing ToolContext with all services...")
+        _tool_context = ToolContext.create(
+            load_airports=True,
+            load_rules=True,
+            load_notifications=True,
+            load_ga_friendliness=True
+        )
+        
+        # Apply custom logic to model
+        _tool_context.model.remove_airports_by_country("RU")
+        logger.info(f"Loaded model with {_tool_context.model.airports.count()} airports")
         
         # All derived fields are now updated automatically in load_model()
         logger.info("Model loaded with all derived fields updated")
         
-        # Make model available to API routes
-        airports.set_model(model)
-        procedures.set_model(model)
-        filters.set_model(model)
-        statistics.set_model(model)
+        # Make model available to API routes (extract from ToolContext)
+        airports.set_model(_tool_context.model)
+        procedures.set_model(_tool_context.model)
+        filters.set_model(_tool_context.model)
+        statistics.set_model(_tool_context.model)
 
-        # Initialize rules manager
-        rules_path = get_safe_rules_path()
-        logger.info(f"Loading rules from '{rules_path}'")
-        rules_manager = RulesManager(rules_path)
-        if not rules_manager.load_rules():
-            logger.warning("No rules loaded from %s", rules_path)
-        rules.set_rules_manager(rules_manager)
-
-        # Initialize GA friendliness service (optional)
-        # Web server only reads, so always use readonly=True
-        ga_meta_db_path = get_safe_ga_meta_db_path()
-        ga_service = ga_friendliness.GAFriendlinessService(ga_meta_db_path, readonly=True)
-        ga_friendliness.set_service(ga_service)
-        if ga_service.enabled:
-            logger.info(f"GA Friendliness service enabled (readonly): {ga_meta_db_path}")
+        # Extract and distribute rules manager from ToolContext
+        if _tool_context.rules_manager:
+            # ToolContext.create() already calls load_rules(), but check anyway
+            if not _tool_context.rules_manager.loaded:
+                if not _tool_context.rules_manager.load_rules():
+                    logger.warning("No rules loaded")
+            rules.set_rules_manager(_tool_context.rules_manager)
+            logger.info("Rules manager initialized")
         else:
-            logger.info("GA Friendliness service disabled (no database configured)")
+            logger.warning("Rules manager not available")
+
+        # Extract and distribute GA friendliness service
+        # Wrap the base service in the web API wrapper class for API response models
+        if _tool_context.ga_friendliness_service:
+            from api.ga_friendliness import GAFriendlinessService as WebGAFriendlinessService
+            # The web API wrapper extends the base service and adds methods that return API models
+            web_ga_service = WebGAFriendlinessService(
+                db_path=_tool_context.ga_friendliness_service.db_path,
+                readonly=_tool_context.ga_friendliness_service.readonly
+            )
+            ga_friendliness.set_service(web_ga_service)
+            if web_ga_service.enabled:
+                logger.info("GA Friendliness service enabled (readonly)")
+            else:
+                logger.info("GA Friendliness service disabled")
+        else:
+            logger.info("GA Friendliness service not configured")
+            ga_friendliness.set_service(None)
+
+        # Extract and distribute notification service
+        if _tool_context.notification_service:
+            notifications.set_notification_service(_tool_context.notification_service)
+            logger.info("Notification service initialized")
+        else:
+            logger.info("Notification service not available")
+            # Set None explicitly so API knows it's not available (instead of lazy creation)
 
         logger.info("Application startup complete")
         
     except Exception as e:
-        logger.error(f"Failed to load database: {e}")
+        logger.error(f"Failed to initialize services: {e}", exc_info=True)
         raise
     
     yield
     
     # Shutdown
     logger.info("Shutting down Euro AIP Airport Explorer...")
-    # Add any cleanup code here if needed
+    # ToolContext and its services will be cleaned up automatically
 
 # Create FastAPI app with lifespan context manager
 app = FastAPI(
@@ -228,12 +263,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add exception handler for validation errors to log details
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors for debugging."""
+    logger.warning(f"Validation error on {request.url.path}: {exc.errors()}")
+    # Log the body if available
+    if hasattr(exc, 'body') and exc.body:
+        try:
+            body_str = exc.body.decode('utf-8') if isinstance(exc.body, bytes) else str(exc.body)
+            logger.debug(f"Request body: {body_str}")
+        except Exception:
+            pass
+    # Return the default FastAPI validation error response
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(exc.body) if hasattr(exc, 'body') and exc.body else None}
+    )
+
 # Include API routes
 app.include_router(airports.router, prefix="/api/airports", tags=["airports"])
 app.include_router(procedures.router, prefix="/api/procedures", tags=["procedures"])
 app.include_router(filters.router, prefix="/api/filters", tags=["filters"])
 app.include_router(statistics.router, prefix="/api/statistics", tags=["statistics"])
 app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
+app.include_router(notifications.router)  # Has its own prefix /api/notifications
 
 if aviation_agent_chat.feature_enabled():
     logger.info("Aviation agent router enabled at /api/aviation-agent")
@@ -270,6 +324,12 @@ async def add_cache_control_headers(request: Request, call_next):
 # Mount static files
 css_dir = os.path.join(client_dir, "css")
 app.mount("/css", StaticFiles(directory=css_dir, html=True), name="css")
+
+# Mount assets (logos, images)
+assets_dir = client_dir / "assets"
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    logger.info(f"Assets directory mounted: {assets_dir}")
 
 # Mount TypeScript build output (for production)
 ts_dist_dir = client_dir / "dist"

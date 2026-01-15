@@ -8,6 +8,8 @@ RUN groupadd -r -g 2001 flyfun-mcp && \
 
 # Copy application-specific code
 COPY mcp_server/ /app/mcp_server/
+# Copy shared application code
+COPY shared/ /app/shared/
 
 # Set correct ownership
 RUN chown -R flyfun-mcp:flyfun-mcp /app
@@ -21,5 +23,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run the MCP server
 WORKDIR /app/mcp_server
-CMD ["python", "main.py", "--transport", "http", "--host", "127.0.0.1", "--port", "8001"]
+CMD ["python", "main.py", "--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
 

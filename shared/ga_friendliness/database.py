@@ -1,9 +1,10 @@
 """
-SQLite schema and connection management for ga_meta.sqlite.
+SQLite schema and connection management for GA persona database.
 
 Handles schema creation, versioning, and migrations.
 """
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -11,7 +12,7 @@ from typing import Optional
 from .exceptions import StorageError
 
 # Current schema version
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"  # Major version bump: breaking schema changes (renamed fields, removed persona scores)
 
 
 def get_schema_version(conn: sqlite3.Connection) -> Optional[str]:
@@ -34,7 +35,7 @@ def get_schema_version(conn: sqlite3.Connection) -> Optional[str]:
 
 def create_schema(conn: sqlite3.Connection) -> None:
     """
-    Create all tables in ga_meta.sqlite and set schema version.
+    Create all tables in GA persona database and set schema version.
     
     Tables:
         - ga_airfield_stats (main query table)
@@ -59,13 +60,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ga_airfield_stats (
             icao                TEXT PRIMARY KEY,
-            
-            -- Aggregate review info
+
+            -- ============================================
+            -- REVIEW AGGREGATE INFO
+            -- ============================================
             rating_avg          REAL,
             rating_count        INTEGER,
             last_review_utc     TEXT,
-            
-            -- Fee info (aggregated GA bands by MTOW ranges)
+
+            -- ============================================
+            -- FEE INFO (from review sources)
+            -- ============================================
             fee_band_0_749kg    REAL,
             fee_band_750_1199kg REAL,
             fee_band_1200_1499kg REAL,
@@ -74,34 +79,41 @@ def create_schema(conn: sqlite3.Connection) -> None:
             fee_band_4000_plus_kg REAL,
             fee_currency        TEXT,
             fee_last_updated_utc TEXT,
-            
-            -- Binary/boolean-style flags and IFR capabilities
-            mandatory_handling  INTEGER,
-            ifr_procedure_available INTEGER,
-            ifr_score           INTEGER,  -- 0=no IFR, 1=IFR permitted, 2=VOR/NDB, 3=RNP, 4=ILS
-            night_available     INTEGER,
-            
-            -- AIP metadata (from airports.db)
-            hotel_info          TEXT,
-            restaurant_info     TEXT,
-            
-            -- Normalized feature scores (0.0-1.0)
-            ga_cost_score       REAL,
-            ga_review_score     REAL,
-            ga_hassle_score     REAL,
-            ga_ops_ifr_score    REAL,
-            ga_ops_vfr_score    REAL,
-            ga_access_score     REAL,
-            ga_fun_score        REAL,
-            ga_hospitality_score REAL,
-            notification_hassle_score REAL,
-            
-            -- Persona-specific composite scores (denormalized cache; optional)
-            score_ifr_touring   REAL,
-            score_vfr_budget    REAL,
-            score_training      REAL,
-            
-            -- Versioning / provenance
+
+            -- ============================================
+            -- AIP RAW DATA (from airports.db/AIP)
+            -- ============================================
+            -- IFR capabilities
+            aip_ifr_available        INTEGER,   -- 0=no IFR, 1=IFR permitted (no procedures), 2=non-precision (VOR/NDB), 3=RNP/RNAV, 4=ILS
+            aip_night_available     INTEGER,    -- 0=unknown/unavailable, 1=available
+
+            -- Hospitality (encoded from AIP)
+            aip_hotel_info          INTEGER,   -- -1=unknown, 0=none, 1=vicinity, 2=at_airport
+            aip_restaurant_info     INTEGER,   -- -1=unknown, 0=none, 1=vicinity, 2=at_airport
+
+            -- ============================================
+            -- REVIEW-DERIVED FEATURE SCORES (0.0-1.0)
+            -- From parsing review text and extracting tags
+            -- ============================================
+            review_cost_score       REAL,
+            review_hassle_score     REAL,
+            review_review_score     REAL,
+            review_ops_ifr_score    REAL,
+            review_ops_vfr_score   REAL,
+            review_access_score     REAL,
+            review_fun_score        REAL,
+            review_hospitality_score REAL,
+
+            -- ============================================
+            -- AIP-DERIVED FEATURE SCORES (0.0-1.0)
+            -- Computed from AIP raw data fields
+            -- ============================================
+            aip_ops_ifr_score       REAL,
+            aip_hospitality_score   REAL,
+
+            -- ============================================
+            -- VERSIONING / PROVENANCE
+            -- ============================================
             source_version      TEXT,
             scoring_version     TEXT
         )
@@ -304,7 +316,7 @@ def ensure_schema_version(conn: sqlite3.Connection) -> None:
 
 def get_connection(db_path: Path, readonly: bool = False) -> sqlite3.Connection:
     """
-    Get a connection to ga_meta.sqlite.
+    Get a connection to GA persona database.
     
     Creates the database and schema if it doesn't exist (unless readonly=True).
     Ensures schema is at current version.
@@ -321,22 +333,31 @@ def get_connection(db_path: Path, readonly: bool = False) -> sqlite3.Connection:
         if not db_path.exists():
             raise StorageError(f"Database not found (readonly mode): {db_path}")
         
-        # Just open it, like DatabaseStorage does - simple and works without write permissions
-        conn = sqlite3.connect(str(db_path))
+        # Use URI mode with ?mode=ro to prevent SQLite from creating temporary files
+        # This is necessary when the database file is in a read-only directory (like Docker volume :ro)
+        # SQLite normally tries to create .db-shm and .db-wal files even for read-only access
+        # check_same_thread=False allows this connection to be used across threads (safe for read-only)
+        # Use absolute path for URI mode (required on some systems)
+        abs_path = str(db_path.resolve() if isinstance(db_path, Path) else Path(db_path).resolve())
+        db_uri = f"file:{abs_path}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+        
+        # Use URI mode with ?mode=ro to prevent SQLite from creating temporary files
+        # This is necessary when the database file is in a read-only directory (like Docker volume :ro)
+        # SQLite normally tries to create .db-shm and .db-wal files even for read-only access
+        # check_same_thread=False allows this connection to be used across threads (safe for read-only)
+        db_uri = f"file:{abs_path}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
     
-    # Write mode: create database and enable WAL for concurrent access
-    # Create parent dirs if needed
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create connection
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
-    # Set pragmas for better performance
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout = 30000")  # 30 seconds
 
     # Ensure schema is current
     ensure_schema_version(conn)
@@ -351,12 +372,12 @@ def attach_euro_aip(
     ATTACH euro_aip.sqlite for joint queries.
     
     Usage:
-        conn = get_connection(ga_meta_path)
+        conn = get_connection(ga_persona_path)
         attach_euro_aip(conn, euro_aip_path)
         # Now can query: SELECT * FROM aip.airport JOIN ga_airfield_stats ...
     
     Args:
-        conn: SQLite connection to ga_meta.sqlite
+        conn: SQLite connection to GA persona database
         euro_aip_path: Path to euro_aip.sqlite
         alias: Alias for attached database (default: 'aip')
     """

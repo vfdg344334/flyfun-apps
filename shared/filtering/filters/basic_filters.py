@@ -7,7 +7,7 @@ from euro_aip.models.airport import Airport
 from .base import Filter
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 class CountryFilter(Filter):
     """Filter airports by ISO country code."""
@@ -40,7 +40,7 @@ class HasProceduresFilter(Filter):
     ) -> bool:
         if value is None:
             return True
-        has_procedures = bool(airport.has_procedures)
+        has_procedures = bool(airport.procedures)
         return has_procedures == bool(value)
 
 
@@ -93,3 +93,21 @@ class PointOfEntryFilter(Filter):
             return True
         is_poe = bool(getattr(airport, "point_of_entry", False))
         return is_poe == bool(value)
+
+
+class ExcludeLargeAirportsFilter(Filter):
+    """Filter to exclude large airports (typically commercial hubs not suitable for GA)."""
+    name = "exclude_large_airports"
+    description = "Exclude large commercial airports (boolean, default True for GA searches)"
+
+    def apply(
+        self,
+        airport: Airport,
+        value: Any,
+        context: Optional["ToolContext"] = None,
+    ) -> bool:
+        if value is None or not value:
+            return True  # Don't filter if not set or False
+        airport_type = getattr(airport, "type", "") or ""
+        # Exclude if type is "large_airport"
+        return airport_type.lower() != "large_airport"

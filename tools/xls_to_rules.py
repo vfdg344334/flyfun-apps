@@ -339,13 +339,50 @@ def merge_rules_with_definitions(
         print(f"Warning: {len(inconsistent_qids)} inconsistent question IDs found", file=sys.stderr)
     return out
 
+def sync_definitions_to_rules(
+    rules: Dict[str, Any],
+    definitions: Dict[str, Dict[str, Any]],
+) -> Tuple[int, int]:
+    """
+    Sync tags and category from definitions to existing rules.
+    Updates even if already set.
+    Returns (updated_count, not_found_count).
+    """
+    defs = definitions["definitions"]
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for q in rules.get("questions", []):
+        if isinstance(q, dict) and "question_id" in q:
+            by_id[q["question_id"]] = q
+
+    updated = 0
+    not_found = 0
+    for qid, d in defs.items():
+        if qid in by_id:
+            q = by_id[qid]
+            old_category = q.get("category", "")
+            old_tags = q.get("tags", [])
+            new_category = d.get("category", "")
+            new_tags = list(d.get("tags", []))
+
+            if old_category != new_category or old_tags != new_tags:
+                q["category"] = new_category
+                q["tags"] = new_tags
+                updated += 1
+        else:
+            not_found += 1
+
+    return updated, not_found
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Convert definitions + country Excel Q/A files into rules.json")
     p.add_argument("--out", required=True, help="Output rules.json path")
-    p.add_argument("--defs", required=False, help="Definitions Excel path (Raw Question, Question, Category, Tags). Required if --add is used.")
+    p.add_argument("--defs", required=False, help="Definitions Excel path (Raw Question, Question, Category, Tags). Required if --add or --sync-defs is used.")
     p.add_argument("--append", action="store_true", help="Append into existing rules.json if present")
     p.add_argument("--add", action="append", nargs=2, metavar=("CC","XLSX"),
                    help="Add Excel file for country code CC (ISO-2), can be repeated. If omitted, only rebuilds RAG from existing rules.json")
+    p.add_argument("--sync-defs", action="store_true",
+                   help="Sync tags and category from definitions file to existing rules.json (updates even if already set)")
     
     # RAG vector database options
     p.add_argument("--build-rag", action="store_true", default=True,
@@ -363,10 +400,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out_path = Path(args.out)
     
-    # If --add is provided, --defs is required
-    if args.add:
+    # If --add or --sync-defs is provided, --defs is required
+    if args.add or args.sync_defs:
         if not args.defs:
-            p.error("--defs is required when using --add")
+            p.error("--defs is required when using --add or --sync-defs")
         defs_path = Path(args.defs).expanduser()
         if not defs_path.exists():
             print(f"Error: definitions file not found {defs_path}", file=sys.stderr)
@@ -430,8 +467,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         out_path.write_text(json.dumps(combined, ensure_ascii=False, indent=2), encoding="utf-8")
         num_q = len(combined.get('questions', []))
         print(f"Wrote {out_path} with {num_q} questions and {total_answers} country-answers.")
+    elif args.sync_defs:
+        # Sync definitions (tags/category) to existing rules.json
+        assert defs_path is not None, "--defs is required when using --sync-defs"
+        definitions = load_definitions(defs_path)
+        updated, not_found = sync_definitions_to_rules(combined, definitions)
+
+        # Write updated rules.json
+        out_path.write_text(json.dumps(combined, ensure_ascii=False, indent=2), encoding="utf-8")
+        num_q = len(combined.get('questions', []))
+        total_answers = sum(len(q.get("answers_by_country", {})) for q in combined.get("questions", []))
+        print(f"Synced definitions: {updated} questions updated, {not_found} definitions not found in rules.")
+        print(f"Wrote {out_path} with {num_q} questions and {total_answers} country-answers.")
     else:
-        # No --add: just report what we're working with
+        # No --add or --sync-defs: just report what we're working with
         num_q = len(combined.get('questions', []))
         total_answers = sum(len(q.get("answers_by_country", {})) for q in combined.get("questions", []))
         print(f"Using existing {out_path} with {num_q} questions and {total_answers} country-answers.")
@@ -454,17 +503,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 vector_db_path_str = args.vector_db_path or os.environ.get("VECTOR_DB_PATH", "cache/rules_vector_db")
                 vector_db_path = Path(vector_db_path_str)
             
-            doc_count = build_vector_db(
+            result = build_vector_db(
                 rules_json_path=out_path,
                 vector_db_path=vector_db_path,
                 vector_db_url=vector_db_url,
                 embedding_model=args.embedding_model,
-                force_rebuild=True  # Always rebuild to ensure new embeddings are used
+                force_rebuild=True,  # Always rebuild to ensure new embeddings are used
+                build_answer_embeddings=True  # Build answer embeddings for comparison feature
             )
-            if vector_db_url:
-                print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
+            # Handle both dict (new) and int (legacy) return types
+            if isinstance(result, dict):
+                q_count = result.get("questions", 0)
+                a_count = result.get("answers", 0)
+                location = vector_db_url or vector_db_path
+                print(f"✓ Vector database built at {location}")
+                print(f"  - Questions collection: {q_count} documents")
+                print(f"  - Answers collection: {a_count} documents")
             else:
-                print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
+                doc_count = result
+                if vector_db_url:
+                    print(f"✓ Vector database built with {doc_count} documents at {vector_db_url}")
+                else:
+                    print(f"✓ Vector database built with {doc_count} documents at {vector_db_path}")
         except ImportError as e:
             print(f"Warning: Could not build vector database: {e}", file=sys.stderr)
             print("Install dependencies: pip install chromadb langchain-openai", file=sys.stderr)

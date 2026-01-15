@@ -1,5 +1,5 @@
 """
-Storage operations for ga_meta.sqlite with transaction support.
+Storage operations for GA persona database with transaction support.
 
 Provides all CRUD operations for the GA friendliness database.
 """
@@ -58,7 +58,7 @@ def parse_timestamp(timestamp_str: str) -> datetime:
 
 class GAMetaStorage(StorageInterface):
     """
-    Handles all database operations for ga_meta.sqlite.
+    Handles all database operations for GA persona database.
     
     Supports:
         - Transaction management (context manager)
@@ -81,9 +81,17 @@ class GAMetaStorage(StorageInterface):
         """
         self.db_path = db_path
         self.readonly = readonly
+        # get_connection() uses check_same_thread=False for read-only mode,
+        # so a single shared connection is safe across threads for reads
         self.conn = get_connection(db_path, readonly=readonly)
         self._lock = threading.Lock()
         self._in_transaction = False
+    
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get database connection (same connection for all operations)."""
+        if self.conn is None:
+            raise StorageError("Database connection has been closed")
+        return self.conn
     
     def _check_readonly(self) -> None:
         """Raise error if attempting write operation in readonly mode."""
@@ -99,10 +107,11 @@ class GAMetaStorage(StorageInterface):
         self, exc_type: Any, exc_val: Any, exc_tb: Any
     ) -> None:
         """Context manager exit: commit or rollback."""
+        conn = self._get_connection()
         if exc_type is None:
-            self.conn.commit()
+            conn.commit()
         else:
-            self.conn.rollback()
+            conn.rollback()
         self._in_transaction = False
 
     def close(self) -> None:
@@ -117,18 +126,20 @@ class GAMetaStorage(StorageInterface):
         """Insert or update a row in ga_airfield_stats."""
         self._check_readonly()
         with self._lock:
+            conn = self._get_connection()
             try:
-                self.conn.execute("""
+                conn.execute("""
                     INSERT OR REPLACE INTO ga_airfield_stats (
                         icao, rating_avg, rating_count, last_review_utc,
                         fee_band_0_749kg, fee_band_750_1199kg, fee_band_1200_1499kg,
                         fee_band_1500_1999kg, fee_band_2000_3999kg, fee_band_4000_plus_kg,
-                        fee_currency,
-                        mandatory_handling, ifr_procedure_available, ifr_score, night_available,
-                        hotel_info, restaurant_info,
-                        ga_cost_score, ga_review_score, ga_hassle_score,
-                        ga_ops_ifr_score, ga_ops_vfr_score, ga_access_score,
-                        ga_fun_score, ga_hospitality_score, notification_hassle_score,
+                        fee_currency, fee_last_updated_utc,
+                        aip_ifr_available, aip_night_available,
+                        aip_hotel_info, aip_restaurant_info,
+                        review_cost_score, review_hassle_score, review_review_score,
+                        review_ops_ifr_score, review_ops_vfr_score, review_access_score,
+                        review_fun_score, review_hospitality_score,
+                        aip_ops_ifr_score, aip_hospitality_score,
                         source_version, scoring_version
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
@@ -143,33 +154,34 @@ class GAMetaStorage(StorageInterface):
                     stats.fee_band_2000_3999kg,
                     stats.fee_band_4000_plus_kg,
                     stats.fee_currency,
-                    1 if stats.mandatory_handling else 0,
-                    1 if stats.ifr_procedure_available else 0,
-                    stats.ifr_score,
-                    1 if stats.night_available else 0,
-                    stats.hotel_info,
-                    stats.restaurant_info,
-                    stats.ga_cost_score,
-                    stats.ga_review_score,
-                    stats.ga_hassle_score,
-                    stats.ga_ops_ifr_score,
-                    stats.ga_ops_vfr_score,
-                    stats.ga_access_score,
-                    stats.ga_fun_score,
-                    stats.ga_hospitality_score,
-                    stats.notification_hassle_score,
+                    stats.fee_last_updated_utc,
+                    stats.aip_ifr_available,
+                    stats.aip_night_available,
+                    stats.aip_hotel_info,
+                    stats.aip_restaurant_info,
+                    stats.review_cost_score,
+                    stats.review_hassle_score,
+                    stats.review_review_score,
+                    stats.review_ops_ifr_score,
+                    stats.review_ops_vfr_score,
+                    stats.review_access_score,
+                    stats.review_fun_score,
+                    stats.review_hospitality_score,
+                    stats.aip_ops_ifr_score,
+                    stats.aip_hospitality_score,
                     stats.source_version,
                     stats.scoring_version,
                 ))
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write airfield stats: {e}")
 
     def get_airfield_stats(self, icao: str) -> Optional[AirportStats]:
         """Read stats for a single airport."""
         try:
-            cursor = self.conn.execute(
+            conn = self._get_connection()
+            cursor = conn.execute(
                 "SELECT * FROM ga_airfield_stats WHERE icao = ?", (icao,)
             )
             row = cursor.fetchone()
@@ -188,21 +200,21 @@ class GAMetaStorage(StorageInterface):
                 fee_band_2000_3999kg=row["fee_band_2000_3999kg"],
                 fee_band_4000_plus_kg=row["fee_band_4000_plus_kg"],
                 fee_currency=row["fee_currency"],
-                mandatory_handling=bool(row["mandatory_handling"]),
-                ifr_procedure_available=bool(row["ifr_procedure_available"]),
-                ifr_score=row["ifr_score"] or 0,
-                night_available=bool(row["night_available"]),
-                hotel_info=row["hotel_info"],
-                restaurant_info=row["restaurant_info"],
-                ga_cost_score=row["ga_cost_score"],
-                ga_review_score=row["ga_review_score"],
-                ga_hassle_score=row["ga_hassle_score"],
-                ga_ops_ifr_score=row["ga_ops_ifr_score"],
-                ga_ops_vfr_score=row["ga_ops_vfr_score"],
-                ga_access_score=row["ga_access_score"],
-                ga_fun_score=row["ga_fun_score"],
-                ga_hospitality_score=row["ga_hospitality_score"],
-                notification_hassle_score=row["notification_hassle_score"],
+                fee_last_updated_utc=row["fee_last_updated_utc"],
+                aip_ifr_available=row["aip_ifr_available"] or 0,
+                aip_night_available=row["aip_night_available"] or 0,
+                aip_hotel_info=row["aip_hotel_info"],
+                aip_restaurant_info=row["aip_restaurant_info"],
+                review_cost_score=row["review_cost_score"],
+                review_hassle_score=row["review_hassle_score"],
+                review_review_score=row["review_review_score"],
+                review_ops_ifr_score=row["review_ops_ifr_score"],
+                review_ops_vfr_score=row["review_ops_vfr_score"],
+                review_access_score=row["review_access_score"],
+                review_fun_score=row["review_fun_score"],
+                review_hospitality_score=row["review_hospitality_score"],
+                aip_ops_ifr_score=row["aip_ops_ifr_score"],
+                aip_hospitality_score=row["aip_hospitality_score"],
                 source_version=row["source_version"] or "unknown",
                 scoring_version=row["scoring_version"] or "unknown",
             )
@@ -212,7 +224,8 @@ class GAMetaStorage(StorageInterface):
     def get_all_icaos(self) -> List[str]:
         """Get list of all ICAOs in ga_airfield_stats."""
         try:
-            cursor = self.conn.execute(
+            conn = self._get_connection()
+            cursor = conn.execute(
                 "SELECT icao FROM ga_airfield_stats ORDER BY icao"
             )
             return [row[0] for row in cursor.fetchall()]
@@ -229,15 +242,16 @@ class GAMetaStorage(StorageInterface):
                 now = datetime.now(timezone.utc).isoformat()
 
                 # Delete existing tags for this icao
-                self.conn.execute(
+                conn = self._get_connection()
+                conn.execute(
                     "DELETE FROM ga_review_ner_tags WHERE icao = ?", (icao,)
                 )
 
                 # Insert new tags
                 for extraction in tags:
                     for aspect_label in extraction.aspects:
-                        self.conn.execute("""
-                            INSERT INTO ga_review_ner_tags 
+                        conn.execute("""
+                            INSERT INTO ga_review_ner_tags
                             (icao, review_id, aspect, label, confidence, timestamp, created_utc)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (
@@ -251,7 +265,8 @@ class GAMetaStorage(StorageInterface):
                         ))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write review tags: {e}")
 
@@ -261,19 +276,20 @@ class GAMetaStorage(StorageInterface):
         """Write tags for multiple airports in a single transaction."""
         self._check_readonly()
         with self._lock:
+            conn = self._get_connection()
             try:
                 now = datetime.now(timezone.utc).isoformat()
 
                 for icao, extractions in tags_by_icao.items():
                     # Delete existing tags for this icao
-                    self.conn.execute(
+                    conn.execute(
                         "DELETE FROM ga_review_ner_tags WHERE icao = ?", (icao,)
                     )
 
                     # Insert new tags
                     for extraction in extractions:
                         for aspect_label in extraction.aspects:
-                            self.conn.execute("""
+                            conn.execute("""
                                 INSERT INTO ga_review_ner_tags 
                                 (icao, review_id, aspect, label, confidence, timestamp, created_utc)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -288,14 +304,16 @@ class GAMetaStorage(StorageInterface):
                             ))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write review tags batch: {e}")
 
     def get_processed_review_ids(self, icao: str) -> Set[str]:
         """Get set of review_ids already processed for this airport."""
         try:
-            cursor = self.conn.execute(
+            conn = self._get_connection()
+            cursor = conn.execute(
                 "SELECT DISTINCT review_id FROM ga_review_ner_tags WHERE icao = ? AND review_id IS NOT NULL",
                 (icao,)
             )
@@ -313,14 +331,16 @@ class GAMetaStorage(StorageInterface):
         with self._lock:
             try:
                 now = datetime.now(timezone.utc).isoformat()
-                self.conn.execute("""
+                conn = self._get_connection()
+                conn.execute("""
                     INSERT OR REPLACE INTO ga_review_summary 
                     (icao, summary_text, tags_json, last_updated_utc)
                     VALUES (?, ?, ?, ?)
                 """, (icao, summary_text, json.dumps(tags_json), now))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write review summary: {e}")
 
@@ -331,20 +351,23 @@ class GAMetaStorage(StorageInterface):
         self._check_readonly()
         with self._lock:
             try:
-                self.conn.execute("""
+                conn = self._get_connection()
+                conn.execute("""
                     INSERT OR REPLACE INTO ga_meta_info (key, value)
                     VALUES (?, ?)
                 """, (key, value))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write meta info: {e}")
 
     def get_meta_info(self, key: str) -> Optional[str]:
         """Read from ga_meta_info table."""
         try:
-            cursor = self.conn.execute(
+            conn = self._get_connection()
+            cursor = conn.execute(
                 "SELECT value FROM ga_meta_info WHERE key = ?", (key,)
             )
             row = cursor.fetchone()
@@ -427,6 +450,221 @@ class GAMetaStorage(StorageInterface):
 
         return False  # No changes detected
 
+    def has_fee_changes(
+        self, icao: str, fee_data: Optional[Dict[str, Any]]
+    ) -> bool:
+        """
+        Check if airport fees have changed.
+        
+        Args:
+            icao: Airport ICAO code
+            fee_data: Fee data dict with 'fees_last_changed' and 'bands', or None
+            
+        Returns:
+            True if fees have changed or if airport has no fee data but new data is available
+        """
+        # Get current fee data from database
+        current_stats = self.get_airfield_stats(icao)
+        if current_stats is None:
+            # Airport not in database, treat as change
+            return fee_data is not None
+        
+        # If no new fee data, no change
+        if fee_data is None:
+            return False
+        
+        # Compare fees_last_changed timestamps
+        new_fees_changed = fee_data.get("fees_last_changed")
+        current_fees_changed = current_stats.fee_last_updated_utc
+        
+        # If new data has timestamp but current doesn't, it's a change
+        if new_fees_changed and not current_fees_changed:
+            return True
+        
+        # If both have timestamps, compare them
+        if new_fees_changed and current_fees_changed:
+            try:
+                new_time = parse_timestamp(new_fees_changed)
+                current_time = parse_timestamp(current_fees_changed)
+                if new_time > current_time:
+                    return True
+            except ValueError:
+                # Invalid timestamp, compare fee values directly
+                pass
+        
+        # Compare fee band values (in case timestamps are missing or equal)
+        new_bands = fee_data.get("bands", {})
+        if not new_bands:
+            return False  # No new fee data
+        
+        # Check if any fee band values differ
+        current_bands = {
+            "fee_band_0_749kg": current_stats.fee_band_0_749kg,
+            "fee_band_750_1199kg": current_stats.fee_band_750_1199kg,
+            "fee_band_1200_1499kg": current_stats.fee_band_1200_1499kg,
+            "fee_band_1500_1999kg": current_stats.fee_band_1500_1999kg,
+            "fee_band_2000_3999kg": current_stats.fee_band_2000_3999kg,
+            "fee_band_4000_plus_kg": current_stats.fee_band_4000_plus_kg,
+        }
+        
+        for band_name, new_value in new_bands.items():
+            current_value = current_bands.get(band_name)
+            # Compare with small epsilon for floating point comparison
+            if abs((new_value or 0.0) - (current_value or 0.0)) > 0.01:
+                return True
+        
+        # Check currency change
+        new_currency = fee_data.get("currency", "EUR")
+        current_currency = current_stats.fee_currency or "EUR"
+        if new_currency != current_currency:
+            return True
+        
+        return False  # No fee changes detected
+
+    def update_fees_only(
+        self, icao: str, fee_data: Dict[str, Any]
+    ) -> None:
+        """
+        Update only fee data for an airport without processing reviews.
+        
+        Args:
+            icao: Airport ICAO code
+            fee_data: Fee data dict with 'currency', 'fees_last_changed', and 'bands'
+        """
+        self._check_readonly()
+        
+        # Get current stats to preserve other fields
+        current_stats = self.get_airfield_stats(icao)
+        if current_stats is None:
+            raise StorageError(f"Cannot update fees for {icao}: airport not in database")
+        
+        # Update only fee-related fields
+        fee_bands = fee_data.get("bands", {})
+        fee_currency = fee_data.get("currency", "EUR")
+        fee_last_updated = fee_data.get("fees_last_changed")
+        
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                conn.execute("""
+                    UPDATE ga_airfield_stats SET
+                        fee_band_0_749kg = ?,
+                        fee_band_750_1199kg = ?,
+                        fee_band_1200_1499kg = ?,
+                        fee_band_1500_1999kg = ?,
+                        fee_band_2000_3999kg = ?,
+                        fee_band_4000_plus_kg = ?,
+                        fee_currency = ?,
+                        fee_last_updated_utc = ?
+                    WHERE icao = ?
+                """, (
+                    fee_bands.get("fee_band_0_749kg"),
+                    fee_bands.get("fee_band_750_1199kg"),
+                    fee_bands.get("fee_band_1200_1499kg"),
+                    fee_bands.get("fee_band_1500_1999kg"),
+                    fee_bands.get("fee_band_2000_3999kg"),
+                    fee_bands.get("fee_band_4000_plus_kg"),
+                    fee_currency,
+                    fee_last_updated,
+                    icao,
+                ))
+                
+                if not self._in_transaction:
+                    conn = self._get_connection()
+                conn.commit()
+            except sqlite3.Error as e:
+                raise StorageError(f"Failed to update fees for {icao}: {e}")
+
+    def upsert_aip_only(
+        self,
+        icao: str,
+        aip_ifr_available: int,
+        aip_night_available: int,
+        aip_hotel_info: Optional[int],
+        aip_restaurant_info: Optional[int],
+        aip_ops_ifr_score: Optional[float],
+        aip_hospitality_score: Optional[float],
+    ) -> bool:
+        """
+        Update or insert only AIP-derived fields for an airport.
+
+        Works for airports not yet in ga_airfield_stats (creates minimal entry).
+        Does not touch review-derived fields.
+
+        Args:
+            icao: Airport ICAO code
+            aip_ifr_available: IFR availability (0-2)
+            aip_night_available: Night ops availability (0-2)
+            aip_hotel_info: Hotel info (-1=unknown, 0=none, 1=vicinity, 2=at_airport)
+            aip_restaurant_info: Restaurant info (-1=unknown, 0=none, 1=vicinity, 2=at_airport)
+            aip_ops_ifr_score: Computed IFR score (0-1)
+            aip_hospitality_score: Computed hospitality score (0-1)
+
+        Returns:
+            True if inserted (new airport), False if updated (existing)
+        """
+        self._check_readonly()
+
+        with self._lock:
+            try:
+                conn = self._get_connection()
+
+                # Check if airport exists
+                cursor = conn.execute(
+                    "SELECT 1 FROM ga_airfield_stats WHERE icao = ?", (icao,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Update only AIP fields
+                    conn.execute("""
+                        UPDATE ga_airfield_stats SET
+                            aip_ifr_available = ?,
+                            aip_night_available = ?,
+                            aip_hotel_info = ?,
+                            aip_restaurant_info = ?,
+                            aip_ops_ifr_score = ?,
+                            aip_hospitality_score = ?
+                        WHERE icao = ?
+                    """, (
+                        aip_ifr_available,
+                        aip_night_available,
+                        aip_hotel_info,
+                        aip_restaurant_info,
+                        aip_ops_ifr_score,
+                        aip_hospitality_score,
+                        icao,
+                    ))
+                else:
+                    # Insert minimal entry with only AIP fields
+                    conn.execute("""
+                        INSERT INTO ga_airfield_stats (
+                            icao,
+                            aip_ifr_available,
+                            aip_night_available,
+                            aip_hotel_info,
+                            aip_restaurant_info,
+                            aip_ops_ifr_score,
+                            aip_hospitality_score
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        icao,
+                        aip_ifr_available,
+                        aip_night_available,
+                        aip_hotel_info,
+                        aip_restaurant_info,
+                        aip_ops_ifr_score,
+                        aip_hospitality_score,
+                    ))
+
+                if not self._in_transaction:
+                    conn.commit()
+
+                return not exists
+
+            except sqlite3.Error as e:
+                raise StorageError(f"Failed to upsert AIP data for {icao}: {e}")
+
     # --- Resume Support ---
 
     def get_last_successful_icao(self) -> Optional[str]:
@@ -450,13 +688,14 @@ class GAMetaStorage(StorageInterface):
                 now = datetime.now(timezone.utc).isoformat()
 
                 # Delete existing rules for this icao
-                self.conn.execute(
+                conn = self._get_connection()
+                conn.execute(
                     "DELETE FROM ga_notification_requirements WHERE icao = ?", (icao,)
                 )
 
                 # Insert new rules
                 for rule in rules:
-                    self.conn.execute("""
+                    conn.execute("""
                         INSERT INTO ga_notification_requirements (
                             icao, rule_type, weekday_start, weekday_end,
                             notification_hours, notification_type, specific_time,
@@ -489,7 +728,8 @@ class GAMetaStorage(StorageInterface):
                     ))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write notification requirements: {e}")
 
@@ -499,7 +739,8 @@ class GAMetaStorage(StorageInterface):
         with self._lock:
             try:
                 now = datetime.now(timezone.utc).isoformat()
-                self.conn.execute("""
+                conn = self._get_connection()
+                conn.execute("""
                     INSERT OR REPLACE INTO ga_aip_rule_summary 
                     (icao, notification_summary, hassle_level, notification_score, last_updated_utc)
                     VALUES (?, ?, ?, ?, ?)
@@ -512,25 +753,11 @@ class GAMetaStorage(StorageInterface):
                 ))
 
                 if not self._in_transaction:
-                    self.conn.commit()
+                    conn = self._get_connection()
+                conn.commit()
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to write AIP rule summary: {e}")
 
-    def update_notification_hassle_score(self, icao: str, score: float) -> None:
-        """Update notification_hassle_score in ga_airfield_stats."""
-        self._check_readonly()
-        with self._lock:
-            try:
-                self.conn.execute("""
-                    UPDATE ga_airfield_stats 
-                    SET notification_hassle_score = ?
-                    WHERE icao = ?
-                """, (score, icao))
-
-                if not self._in_transaction:
-                    self.conn.commit()
-            except sqlite3.Error as e:
-                raise StorageError(f"Failed to update notification hassle score: {e}")
 
     def get_last_aip_processed_timestamp(self, icao: str) -> Optional[datetime]:
         """Get when AIP rules were last processed for this airport."""
@@ -556,31 +783,36 @@ class GAMetaStorage(StorageInterface):
     def compute_global_priors(self) -> Dict[str, float]:
         """Compute global average scores across all airports."""
         try:
-            cursor = self.conn.execute("""
-                SELECT 
-                    AVG(ga_cost_score) as ga_cost_score,
-                    AVG(ga_hassle_score) as ga_hassle_score,
-                    AVG(ga_review_score) as ga_review_score,
-                    AVG(ga_ops_ifr_score) as ga_ops_ifr_score,
-                    AVG(ga_ops_vfr_score) as ga_ops_vfr_score,
-                    AVG(ga_access_score) as ga_access_score,
-                    AVG(ga_fun_score) as ga_fun_score,
-                    AVG(ga_hospitality_score) as ga_hospitality_score
+            conn = self._get_connection()
+            cursor = conn.execute("""
+                SELECT
+                    AVG(review_cost_score) as review_cost_score,
+                    AVG(review_hassle_score) as review_hassle_score,
+                    AVG(review_review_score) as review_review_score,
+                    AVG(review_ops_ifr_score) as review_ops_ifr_score,
+                    AVG(review_ops_vfr_score) as review_ops_vfr_score,
+                    AVG(review_access_score) as review_access_score,
+                    AVG(review_fun_score) as review_fun_score,
+                    AVG(review_hospitality_score) as review_hospitality_score,
+                    AVG(aip_ops_ifr_score) as aip_ops_ifr_score,
+                    AVG(aip_hospitality_score) as aip_hospitality_score
                 FROM ga_airfield_stats
-                WHERE ga_cost_score IS NOT NULL
+                WHERE review_cost_score IS NOT NULL
             """)
             row = cursor.fetchone()
-            
+
             # Default to 0.5 for any NULL values
             return {
-                "ga_cost_score": row["ga_cost_score"] or 0.5,
-                "ga_hassle_score": row["ga_hassle_score"] or 0.5,
-                "ga_review_score": row["ga_review_score"] or 0.5,
-                "ga_ops_ifr_score": row["ga_ops_ifr_score"] or 0.5,
-                "ga_ops_vfr_score": row["ga_ops_vfr_score"] or 0.5,
-                "ga_access_score": row["ga_access_score"] or 0.5,
-                "ga_fun_score": row["ga_fun_score"] or 0.5,
-                "ga_hospitality_score": row["ga_hospitality_score"] or 0.5,
+                "review_cost_score": row["review_cost_score"] or 0.5,
+                "review_hassle_score": row["review_hassle_score"] or 0.5,
+                "review_review_score": row["review_review_score"] or 0.5,
+                "review_ops_ifr_score": row["review_ops_ifr_score"] or 0.5,
+                "review_ops_vfr_score": row["review_ops_vfr_score"] or 0.5,
+                "review_access_score": row["review_access_score"] or 0.5,
+                "review_fun_score": row["review_fun_score"] or 0.5,
+                "review_hospitality_score": row["review_hospitality_score"] or 0.5,
+                "aip_ops_ifr_score": row["aip_ops_ifr_score"] or 0.5,
+                "aip_hospitality_score": row["aip_hospitality_score"] or 0.5,
             }
         except sqlite3.Error as e:
             raise StorageError(f"Failed to compute global priors: {e}")
@@ -599,4 +831,61 @@ class GAMetaStorage(StorageInterface):
             except json.JSONDecodeError:
                 return None
         return None
+
+    def get_icaos_by_hospitality(
+        self,
+        hotel: Optional[str] = None,
+        restaurant: Optional[str] = None,
+    ) -> Set[str]:
+        """
+        Get set of ICAOs matching hospitality filter criteria.
+
+        Filter semantics:
+            - "at_airport": Most restrictive, only value 2
+            - "vicinity": Less restrictive, includes both vicinity (1) AND at_airport (2)
+            - "any": Same as "vicinity" (backwards compatibility)
+
+        Args:
+            hotel: "at_airport", "vicinity", "any", or None (no filter)
+            restaurant: "at_airport", "vicinity", "any", or None (no filter)
+
+        Returns:
+            Set of matching ICAO codes. Returns empty set if no filters specified.
+        """
+        if hotel is None and restaurant is None:
+            return set()  # No filter
+
+        conditions = []
+
+        # Database: -1=unknown, 0=none, 1=vicinity, 2=at_airport
+        # "vicinity" includes at_airport (>= 1), "at_airport" is exact (= 2)
+
+        if hotel is not None:
+            if hotel == "at_airport":
+                conditions.append("aip_hotel_info = 2")
+            elif hotel in ("vicinity", "any"):
+                # vicinity includes at_airport (value >= 1)
+                conditions.append("aip_hotel_info >= 1")
+
+        if restaurant is not None:
+            if restaurant == "at_airport":
+                conditions.append("aip_restaurant_info = 2")
+            elif restaurant in ("vicinity", "any"):
+                # vicinity includes at_airport (value >= 1)
+                conditions.append("aip_restaurant_info >= 1")
+
+        if not conditions:
+            return set()
+
+        query = f"""
+            SELECT icao FROM ga_airfield_stats
+            WHERE {' AND '.join(conditions)}
+        """
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(query, ())
+            return {row["icao"] for row in cursor}
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to query hospitality filters: {e}")
 

@@ -6,12 +6,12 @@ import logging
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from euro_aip.models.airport import Airport
 
-from .strategies import PriorityStrategy, CostOptimizedStrategy
+from .strategies import PriorityStrategy, PersonaOptimizedStrategy
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class StrategyRegistry:
@@ -37,7 +37,7 @@ class StrategyRegistry:
 
 
 # Auto-register strategies
-StrategyRegistry.register(CostOptimizedStrategy())
+StrategyRegistry.register(PersonaOptimizedStrategy())
 
 logger.info(f"Strategy registry initialized with {len(StrategyRegistry.list_all())} strategies")
 
@@ -47,8 +47,8 @@ class PriorityEngine:
     Engine for prioritizing and sorting airports.
 
     Usage:
-        engine = PriorityEngine(enrichment_storage=storage)
-        sorted_airports = engine.apply(airports, strategy="cost_optimized")
+        engine = PriorityEngine(context=ctx)
+        sorted_airports = engine.apply(airports, strategy="persona_optimized")
     """
 
     def __init__(self, context: Optional["ToolContext"] = None):
@@ -58,7 +58,7 @@ class PriorityEngine:
     def apply(
         self,
         airports: List[Airport],
-        strategy: str = "cost_optimized",
+        strategy: str = "persona_optimized",
         context: Optional[Dict[str, Any]] = None,
         max_results: int = 20
     ) -> List[Airport]:
@@ -67,8 +67,8 @@ class PriorityEngine:
 
         Args:
             airports: List of airports to prioritize
-            strategy: Strategy name (default: "cost_optimized")
-            context: Optional context (e.g., route distances)
+            strategy: Strategy name (default: "persona_optimized")
+            context: Optional context (e.g., route distances, persona_id)
             max_results: Maximum number of results to return
 
         Returns:
@@ -80,8 +80,8 @@ class PriorityEngine:
         # Get strategy
         strategy_obj = StrategyRegistry.get(strategy)
         if not strategy_obj:
-            logger.warning(f"Unknown strategy: {strategy}, using cost_optimized")
-            strategy_obj = StrategyRegistry.get("cost_optimized")
+            logger.warning(f"Unknown strategy: {strategy}, using persona_optimized")
+            strategy_obj = StrategyRegistry.get("persona_optimized")
 
         # Score airports
         scored = strategy_obj.score(

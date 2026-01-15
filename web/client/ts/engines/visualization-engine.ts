@@ -5,6 +5,14 @@
 
 import type { Airport, LegendMode, Highlight, RouteState, GAFriendlySummary } from '../store/types';
 import { useStore } from '../store/store';
+import { getStyleFromConfig, getColorFromConfig } from '../utils/legend-classifier';
+import {
+  NOTIFICATION_LEGEND_CONFIG,
+  AIRPORT_TYPE_LEGEND_CONFIG,
+  RUNWAY_LENGTH_LEGEND_CONFIG,
+  COUNTRY_LEGEND_CONFIG,
+  PROCEDURE_PRECISION_COLORS,
+} from '../config/legend-configs';
 
 // Leaflet types (will be imported when Leaflet is available)
 declare const L: any;
@@ -45,8 +53,9 @@ export class VisualizationEngine {
       return;
     }
     
-    // Initialize Leaflet map
-    this.map = L.map(containerId).setView([50.0, 10.0], 5);
+    // Initialize Leaflet map - read initial view from store (single source of truth)
+    const { mapView } = useStore.getState();
+    this.map = L.map(containerId).setView(mapView.center, mapView.zoom);
     
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -165,69 +174,50 @@ export class VisualizationEngine {
    */
   private getMarkerStyle(airport: Airport, legendMode: LegendMode): MarkerStyle {
     let color = '#ffc107'; // Default: yellow
-    let radius = 6;
-    
+    let radius = 7;
+    const baseRadius = 7;
+
     switch (legendMode) {
-      case 'airport-type':
-        if (airport.point_of_entry) {
-          color = '#28a745'; // Green
-          radius = 8;
-        } else if (airport.has_procedures) {
-          color = '#ffc107'; // Yellow
-          radius = 7;
-        } else {
-          color = '#dc3545'; // Red
-          radius = 6;
-        }
+      case 'airport-type': {
+        const style = getStyleFromConfig(airport, AIRPORT_TYPE_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
-      case 'runway-length':
-        if (airport.longest_runway_length_ft) {
-          if (airport.longest_runway_length_ft > 8000) {
-            color = '#28a745'; // Green
-            radius = 10;
-          } else if (airport.longest_runway_length_ft > 4000) {
-            color = '#ffc107'; // Yellow
-            radius = 7;
-          } else {
-            color = '#dc3545'; // Red
-            radius = 5;
-          }
-        } else {
-          color = '#6c757d'; // Gray
-          radius = 4;
-        }
+      }
+
+      case 'runway-length': {
+        const style = getStyleFromConfig(airport, RUNWAY_LENGTH_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
-      case 'country':
-        const icao = airport.ident || '';
-        if (icao.startsWith('LF')) {
-          color = '#007bff'; // Blue
-          radius = 7;
-        } else if (icao.startsWith('EG')) {
-          color = '#dc3545'; // Red
-          radius = 7;
-        } else if (icao.startsWith('ED')) {
-          color = '#28a745'; // Green
-          radius = 7;
-        } else {
-          color = '#ffc107'; // Yellow
-          radius = 6;
-        }
+      }
+
+      case 'country': {
+        const style = getStyleFromConfig(airport, COUNTRY_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
         break;
-        
+      }
+
       case 'procedure-precision':
         // Transparent markers, procedure lines shown separately
-        color = 'rgba(128, 128, 128, 0.3)';
+        color = PROCEDURE_PRECISION_COLORS.transparent;
         radius = 6;
         break;
-        
+
       case 'relevance':
         color = this.getRelevanceColor(airport);
         radius = 7;
         break;
+
+      case 'notification': {
+        const style = getStyleFromConfig(airport, NOTIFICATION_LEGEND_CONFIG, baseRadius);
+        color = style.color;
+        radius = style.radius;
+        break;
+      }
     }
-    
+
     const icon = L.divIcon({
       className: 'airport-marker',
       html: `<div style="
@@ -296,6 +286,17 @@ export class VisualizationEngine {
     } else {
       return getColor('bottom-quartile');
     }
+  }
+
+  /**
+   * Get notification color based on hours notice required.
+   * Uses shared legend configuration to ensure marker colors match legend display.
+   *
+   * @see config/legend-configs.ts for classification logic
+   * @see designs/LEGEND_DESIGN.md for architecture documentation
+   */
+  private getNotificationColor(airport: Airport): string {
+    return getColorFromConfig(airport, NOTIFICATION_LEGEND_CONFIG);
   }
   
   /**
@@ -389,39 +390,72 @@ export class VisualizationEngine {
    * Add highlight
    */
   private addHighlight(highlight: Highlight): void {
-    // Reference points (locate center, route airports) use larger blue dots
-    // Default styling for reference points vs other highlights
-    const isReferencePoint = highlight.id.startsWith('locate-center') || highlight.id.startsWith('route-airport-');
-    
-    const radius = highlight.radius || (isReferencePoint ? 14 : 15);
-    const fillColor = highlight.color || (isReferencePoint ? '#007bff' : '#ff0000');
-    const weight = isReferencePoint ? 3 : 3;
-    const fillOpacity = isReferencePoint ? 0.6 : 0.7; // Slightly transparent so airport colors show through
-    
-    const marker = L.circleMarker([highlight.lat, highlight.lng], {
-      radius,
-      fillColor,
-      color: '#ffffff',
-      weight,
-      opacity: 1,
-      fillOpacity,
-      id: highlight.id,
-      // Ensure reference points are clickable but don't interfere with airport markers
-      interactive: true
-    });
-    
+    let marker: any;
+
+    // Use pin marker for 'point' type (search locations like "Bromley")
+    if (highlight.type === 'point') {
+      const pinIcon = L.divIcon({
+        className: 'location-pin-marker',
+        html: `<div style="
+          position: relative;
+          width: 24px;
+          height: 36px;
+        ">
+          <div style="
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            border: 3px solid white;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+          "></div>
+          <div style="
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            width: 12px;
+            height: 12px;
+            background: white;
+            border-radius: 50%;
+            transform: rotate(-45deg);
+          "></div>
+        </div>`,
+        iconSize: [24, 36],
+        iconAnchor: [12, 36], // Point at bottom center
+        popupAnchor: [0, -36]
+      });
+
+      marker = L.marker([highlight.lat, highlight.lng], {
+        icon: pinIcon,
+        id: highlight.id,
+        interactive: true,
+        zIndexOffset: 1000 // Ensure pin is above airport markers
+      });
+    } else {
+      // Use circle marker for 'airport' type (blue dots behind airport markers)
+      const isReferencePoint = highlight.id.startsWith('locate-center') || highlight.id.startsWith('route-airport-');
+
+      const radius = highlight.radius || (isReferencePoint ? 14 : 15);
+      const fillColor = highlight.color || (isReferencePoint ? '#007bff' : '#007bff');
+      const fillOpacity = isReferencePoint ? 0.6 : 0.7;
+
+      marker = L.circleMarker([highlight.lat, highlight.lng], {
+        radius,
+        fillColor,
+        color: '#ffffff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity,
+        id: highlight.id,
+        interactive: true
+      });
+    }
+
     if (highlight.popup) {
       marker.bindPopup(highlight.popup);
-    } else if (isReferencePoint) {
-      // Add default popup for reference points
-      if (highlight.id.startsWith('locate-center')) {
-        marker.bindPopup('<b>Locate Center</b><br>Search origin point');
-      } else if (highlight.id.startsWith('route-airport-')) {
-        const icao = highlight.id.replace('route-airport-', '');
-        marker.bindPopup(`<b>Route Airport: ${icao}</b><br>Input airport`);
-      }
     }
-    
+
     marker.addTo(this.highlightLayer);
     this.highlights.set(highlight.id, marker);
   }

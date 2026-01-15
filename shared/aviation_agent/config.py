@@ -9,61 +9,119 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from shared.airport_tools import ToolContext
+from shared.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-AIRPORT_DB_CANDIDATES = [
-    "web/server/airports.db",
-    "data/airports.db",
-    "airports.db",
-]
-RULES_JSON_CANDIDATES = [
-    "data/rules.json",
-    "rules.json",
-    "web/server/rules.json",
-]
-VECTOR_DB_CANDIDATES = [
-    "out/rules_vector_db",
-    "cache/rules_vector_db",
-    "rules_vector_db",
-]
+# Use CONFIGS_DIR env var if set (for Docker), otherwise derive from file location
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
 
 
-def _locate_file(candidates: list[str]) -> Path:
-    for candidate in candidates:
-        path = PROJECT_ROOT / candidate
-        if path.exists():
-            return path
-    # fall back to the first candidate even if it does not exist yet
-    return PROJECT_ROOT / candidates[0]
+def _get_path_from_env(env_var: str, default_filename: str, allow_default: bool = False) -> Path:
+    """
+    Get path from environment variable.
+    
+    Args:
+        env_var: Environment variable name
+        default_filename: Default filename if env var not set (only used if allow_default=True)
+        allow_default: If True, use default_filename in current directory when env var not set.
+                      If False, raise ValueError (production mode - requires explicit config).
+    
+    Production code should use allow_default=False to require explicit environment configuration.
+    """
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return Path(env_value)
+    
+    if allow_default:
+        # Fallback to default in current directory (for backward compatibility)
+        return Path(default_filename)
+    
+    # Production mode: require explicit configuration
+    raise ValueError(
+        f"{env_var} environment variable is required. "
+        f"Please set it to the path of {default_filename}"
+    )
 
 
 def _default_airports_db() -> Path:
-    env_value = os.environ.get("AIRPORTS_DB")
-    if env_value:
-        env_path = Path(env_value)
-        if env_path.exists():
-            return env_path
-    return _locate_file(AIRPORT_DB_CANDIDATES)
+    """
+    Get airports.db path from AIRPORTS_DB environment variable.
+    
+    For production: requires AIRPORTS_DB to be set.
+    For backward compatibility: falls back to "airports.db" in current directory.
+    """
+    return _get_path_from_env("AIRPORTS_DB", "airports.db", allow_default=True)
 
 
 def _default_rules_json() -> Path:
-    env_value = os.environ.get("RULES_JSON")
+    """
+    Get rules.json path from RULES_JSON environment variable.
+    
+    For production: requires RULES_JSON to be set.
+    For backward compatibility: falls back to "rules.json" in current directory.
+    """
+    return _get_path_from_env("RULES_JSON", "rules.json", allow_default=True)
+
+
+def _default_ga_notifications_db() -> Path:
+    """
+    Get ga_notifications.db path from GA_NOTIFICATIONS_DB environment variable.
+    
+    For production: requires GA_NOTIFICATIONS_DB to be set.
+    For backward compatibility: falls back to "ga_notifications.db" in current directory.
+    """
+    return _get_path_from_env("GA_NOTIFICATIONS_DB", "ga_notifications.db", allow_default=True)
+
+
+def _default_ga_meta_db() -> Optional[Path]:
+    """
+    Get GA persona database path from GA_PERSONA_DB environment variable.
+    
+    Returns None if not set (service is optional).
+    """
+    env_value = os.environ.get("GA_PERSONA_DB")
     if env_value:
-        env_path = Path(env_value)
-        if env_path.exists():
-            return env_path
-    return _locate_file(RULES_JSON_CANDIDATES)
+        return Path(env_value)
+    return None
 
 
-def _default_vector_db() -> Path:
+def get_ga_notifications_db_path() -> str:
+    """
+    Get path to GA notifications database as a string.
+    
+    Requires GA_NOTIFICATIONS_DB environment variable to be set.
+    
+    Returns:
+        Path to the database as a string
+    """
+    return str(_default_ga_notifications_db())
+
+
+def get_ga_meta_db_path() -> Optional[str]:
+    """
+    Get path to GA meta database as a string.
+    
+    Returns None if GA_PERSONA_DB environment variable is not set (service is optional).
+    
+    Returns:
+        Path to the database as a string, or None if not configured
+    """
+    path = _default_ga_meta_db()
+    return str(path) if path else None
+
+
+def _default_vector_db() -> Optional[Path]:
+    """
+    Get vector database path from VECTOR_DB_PATH environment variable.
+    
+    Returns None if not set (vector DB is optional when using VECTOR_DB_URL).
+    """
     env_value = os.environ.get("VECTOR_DB_PATH")
     if env_value:
         return Path(env_value)
-    return _locate_file(VECTOR_DB_CANDIDATES)
+    return None
 
 
 def _default_vector_db_url() -> Optional[str]:
@@ -73,108 +131,119 @@ def _default_vector_db_url() -> Optional[str]:
 
 class AviationAgentSettings(BaseSettings):
     """
-    Central configuration for the aviation agent.
+    Deployment configuration for the aviation agent.
 
-    Putting the logic in a BaseSettings class lets FastAPI use dependency
-    injection while keeping CLI scripts simple.
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │ CONFIGURATION GUIDELINES                                                 │
+    │                                                                          │
+    │ This file (config.py) is for DEPLOYMENT/INFRASTRUCTURE settings:         │
+    │   ✓ Database paths and connection strings                                │
+    │   ✓ API keys and secrets                                                 │
+    │   ✓ Feature flags for enabling/disabling entire services                 │
+    │   ✓ Storage locations (checkpointer, logs, vector DB)                    │
+    │   ✓ Anything that varies between dev/staging/prod                        │
+    │                                                                          │
+    │ Behavior configuration (behavior_config.py / JSON files) is for:         │
+    │   ✓ LLM models, temperatures, prompts                                    │
+    │   ✓ Feature flags that change agent logic (routing, RAG, reranking)     │
+    │   ✓ Algorithm parameters (top_k, similarity thresholds)                  │
+    │   ✓ Anything that affects "how the agent thinks"                         │
+    │                                                                          │
+    │ The key question: "Does this change how the agent thinks, or where       │
+    │ data goes?" Behavior → JSON config. Infrastructure → .env                │
+    └─────────────────────────────────────────────────────────────────────────┘
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
+    # Master switch
     enabled: bool = Field(
         default=True,
         description="Feature flag that allows the FastAPI layer to disable the agent entirely.",
         alias="AVIATION_AGENT_ENABLED",
     )
-    planner_model: Optional[str] = Field(
-        default=None,
-        description="LLM name to use for the planner. If None, callers must inject an LLM instance.",
-        alias="AVIATION_AGENT_PLANNER_MODEL",
-    )
-    formatter_model: Optional[str] = Field(
-        default=None,
-        description="LLM name to use for the formatter. If None, callers must inject an LLM instance.",
-        alias="AVIATION_AGENT_FORMATTER_MODEL",
-    )
-    airports_db: Path = Field(
-        default_factory=_default_airports_db,
-        description="Path to airports.db used by ToolContext.",
-        alias="AIRPORTS_DB",
-    )
-    rules_json: Path = Field(
-        default_factory=_default_rules_json,
-        description="Path to rules.json used by ToolContext.",
-        alias="RULES_JSON",
-    )
-    vector_db_path: Path = Field(
-        default_factory=_default_vector_db,
-        description="Path to rules vector database for RAG retrieval (local mode).",
-        alias="VECTOR_DB_PATH",
-    )
-    vector_db_url: Optional[str] = Field(
-        default_factory=_default_vector_db_url,
-        description="URL to ChromaDB service for RAG retrieval (service mode). If set, takes precedence over vector_db_path.",
-        alias="VECTOR_DB_URL",
-    )
-    
-    # RAG settings
-    embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="Embedding model for RAG (OpenAI: text-embedding-3-small or text-embedding-3-large)",
-        alias="EMBEDDING_MODEL",
-    )
-    enable_query_reformulation: bool = Field(
-        default=True,
-        description="Whether to reformulate queries for better RAG matching",
-        alias="ENABLE_QUERY_REFORMULATION",
-    )
-    router_model: Optional[str] = Field(
-        default="gpt-4o-mini",
-        description="LLM model for query routing",
-        alias="ROUTER_MODEL",
-    )
+
+    # Which behavior config to load
     agent_config_name: Optional[str] = Field(
         default="default",
         description="Name of agent behavior config file (without .json). Loads from configs/aviation_agent/",
         alias="AVIATION_AGENT_CONFIG",
     )
 
-    def build_tool_context(self, *, load_rules: bool = True) -> ToolContext:
+    # External RAG resources (optional)
+    vector_db_path: Optional[Path] = Field(
+        default=None,
+        description="Path to local ChromaDB vector database for RAG retrieval.",
+        alias="VECTOR_DB_PATH",
+    )
+    vector_db_url: Optional[str] = Field(
+        default=None,
+        description="URL to ChromaDB service for RAG retrieval. If set, takes precedence over vector_db_path.",
+        alias="VECTOR_DB_URL",
+    )
+
+    # Checkpointer settings (conversation memory persistence)
+    # This is infrastructure config because it determines WHERE state is stored,
+    # not HOW the agent behaves. The same agent logic works with any storage backend.
+    checkpointer_provider: str = Field(
+        default="memory",
+        description="Checkpointer backend: 'memory' (dev), 'sqlite' (persistent), 'none' (disabled)",
+        alias="CHECKPOINTER_PROVIDER",
+    )
+    checkpointer_sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Path to SQLite database for checkpointer (only used when provider='sqlite')",
+        alias="CHECKPOINTER_SQLITE_PATH",
+    )
+
+    def build_tool_context(
+        self,
+        *,
+        load_rules: bool = True,
+        load_notifications: bool = True,
+        load_ga_friendliness: bool = True,
+    ) -> ToolContext:
         """
         Build or retrieve cached ToolContext.
         
         ToolContext is expensive to create (loads entire airport database + rules),
-        so we cache it at the module level. The cache key includes db_path, rules_path,
-        and load_rules flag to ensure we create separate contexts for different configs.
+        so we cache it at the module level. The cache key includes load flags
+        to ensure we create separate contexts for different configs.
+        
+        Args:
+            load_rules: Load rules manager (default: True)
+            load_notifications: Load notification service (default: True)
+            load_ga_friendliness: Load GA friendliness service (default: True)
         """
         return _cached_tool_context(
-            db_path=str(self.airports_db),
-            rules_path=str(self.rules_json),
             load_rules=load_rules,
+            load_notifications=load_notifications,
+            load_ga_friendliness=load_ga_friendliness,
         )
 
 
 @lru_cache(maxsize=1)
 def _cached_tool_context(
-    db_path: str,
-    rules_path: str,
     load_rules: bool,
+    load_notifications: bool,
+    load_ga_friendliness: bool,
 ) -> ToolContext:
     """
     Cached ToolContext factory.
     
     ToolContext creation is expensive (loads entire airport database + rules),
     so we cache it at the module level. Only one ToolContext is created per unique
-    combination of (db_path, rules_path, load_rules).
+    combination of load flags.
     
     This matches the pattern used in:
     - mcp_server/main.py (global _tool_context created once at startup)
     - tests/tools/conftest.py (@lru_cache on tool_context fixture)
     """
     return ToolContext.create(
-        db_path=db_path,
-        rules_path=rules_path,
+        load_airports=True,  # Always required
         load_rules=load_rules,
+        load_notifications=load_notifications,
+        load_ga_friendliness=load_ga_friendliness,
     )
 
 

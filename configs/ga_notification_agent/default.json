@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "name": "default",
+  "description": "Default GA notification agent configuration for extracting structured notification rules from AIP text",
+  "llm": {
+    "model": "gpt-4o-mini",
+    "temperature": 0.0
+  },
+  "parsing": {
+    "use_llm_fallback": true,
+    "complexity_threshold": 2,
+    "text_length_threshold": 300,
+    "confidence": {
+      "h24": 0.95,
+      "on_request": 0.90,
+      "as_ad_hours": 0.90,
+      "weekday_rules": 0.80,
+      "hours_rules": 0.80,
+      "business_day": 0.75,
+      "llm_extracted": 0.85,
+      "complete_threshold": 0.85
+    }
+  },
+  "prompts": {
+    "parser": "prompts/parser_v1.md"
+  }
+}

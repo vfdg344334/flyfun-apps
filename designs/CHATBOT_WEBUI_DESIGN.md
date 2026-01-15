@@ -7,7 +7,7 @@ This document describes the design and architecture of the LangGraph-based aviat
 **Current Architecture:**
 - `aviation_agent_chat.py`: FastAPI router with streaming endpoint
 - LangGraph-based agent with three-phase pipeline: Planner → Tool Runner → Formatter
-- Stable UI payload format (hybrid approach: flattened common fields + mcp_raw)
+- Stable UI payload format (flattened fields for convenient access)
 - State-based thinking (no tag parsing)
 - SSE streaming with token tracking
 - Conversation logging
@@ -16,11 +16,13 @@ This document describes the design and architecture of the LangGraph-based aviat
 - Streaming responses with Server-Sent Events (SSE)
 - State-based thinking extraction (planning + formatting reasoning)
 - Filter generation from user messages (extracted in planner)
-- Visualization enhancement (ICAO extraction from answers)
+- Tool-based visualizations (from tool results, not parsed from answers)
 - Conversation logging
 - Token tracking
 - Error handling via state propagation
-- Multi-turn conversations
+- Multi-turn conversations with checkpointing
+- Next query prediction (optional, configurable)
+- Notification enrichment for location/route tools
 
 ---
 
@@ -49,27 +51,33 @@ This document describes the design and architecture of the LangGraph-based aviat
 ```
 
 **Response Format (Streaming):**
-SSE events with the following types:
+SSE events with the following types (in order):
 - `plan` - Planner output (selected tool, arguments)
-- `thinking` - Planning reasoning
+- `thinking` - Planning reasoning (may be multiple chunks)
 - `tool_call_start` - Tool execution started
 - `tool_call_end` - Tool execution completed
 - `message` - Character-by-character answer stream
-- `ui_payload` - Visualization data
-- `done` - Request complete with token counts
+- `thinking_done` - Thinking complete
+- `ui_payload` - Visualization data (emitted once when formatter completes)
+- `final_answer` - Complete serializable state for logging
+- `done` - Request complete with token counts, session_id, thread_id, run_id
 - `error` - Error occurred
 
 ### 1.2 LangGraph Agent Structure
 
-**Three-Phase Pipeline:**
+**Pipeline Structure:**
 ```
 Planner Node
   ↓ (AviationPlan)
+[Next Query Predictor Node] (optional, configurable)
+  ↓ (suggested_queries)
 Tool Runner Node
   ↓ (tool_result)
 Formatter Node
   ↓ (final_answer + ui_payload)
 ```
+
+**Note:** Next Query Predictor node is optional and controlled via behavior config. When enabled, it runs after planner and before tool execution.
 
 **State:**
 ```python
@@ -83,12 +91,14 @@ class AgentState(TypedDict, total=False):
     thinking: Optional[str]  # Combined reasoning for UI
     ui_payload: Optional[dict]  # Stable UI structure
     error: Optional[str]  # Error message if execution fails
+    persona_id: Optional[str]  # Persona ID for airport prioritization
+    suggested_queries: Optional[List[dict]]  # Follow-up query suggestions
 ```
 
 **Benefits:**
 1. **Structured planning** - AviationPlan with selected_tool, arguments, answer_style
 2. **Separation of concerns** - Planning, execution, formatting are separate nodes
-3. **Stable UI payload** - Hybrid design: kind + top-level fields + mcp_raw
+3. **Stable UI payload** - Flattened design: kind + top-level fields for convenient access
 4. **Better testability** - Each node can be tested independently
 5. **Tool validation** - Planner validates tool exists before execution
 6. **State-based thinking** - Explicit reasoning fields, not parsed from text
@@ -110,6 +120,8 @@ class AgentState(TypedDict, total=False):
 - `thinking`: Combined reasoning (planning + formatting) for UI display
 - `ui_payload`: Structured payload for UI integration
 - `error`: Error message if execution fails
+- `persona_id`: Persona ID for airport prioritization (GA friendliness)
+- `suggested_queries`: Follow-up query suggestions (from next query predictor)
 
 **Why State-Based Thinking:**
 - ✅ **Structured** - Explicit state fields, not parsed from text
@@ -140,8 +152,9 @@ class AviationPlan(BaseModel):
 - Returns structured AviationPlan
 
 **Available Filters:**
-- `has_avgas`: Boolean (AVGAS fuel)
-- `has_jet_a`: Boolean (Jet-A fuel)
+- `fuel_type`: String ('avgas' | 'jet_a') - preferred for UI dropdown
+- `has_avgas`: Boolean (AVGAS fuel) - legacy, kept for backwards compatibility
+- `has_jet_a`: Boolean (Jet-A fuel) - legacy, kept for backwards compatibility
 - `has_hard_runway`: Boolean (paved/hard runways)
 - `has_procedures`: Boolean (IFR procedures)
 - `point_of_entry`: Boolean (customs/border crossing)
@@ -165,14 +178,35 @@ class AviationPlan(BaseModel):
 - `pretty`: Human-readable summary
 - Other tool-specific fields
 
+**Notification Enrichment (Post-Processing):**
+
+For location/route tools (`find_airports_near_location`, `find_airports_near_route`, `search_airports`), the tool node performs optional post-processing to enrich airport results with notification data.
+
+**Trigger Conditions:**
+- User query contains notification keywords: "notification", "notify", "customs", "notice", "prior", "how early", "when should"
+- Tool is a location/route tool
+- Tool result contains airports
+
+**Process:**
+1. Extract `day_of_week` from query if mentioned (e.g., "saturday", "sunday")
+2. For each airport (limited to first 15), fetch notification data via `NotificationService`
+3. Add `notification` field to each airport object
+4. Append notification summary to `pretty` output
+
+**Result:**
+- Enriched airports with `notification` field containing:
+  - `found`: Boolean indicating if notification data exists
+  - `hours_notice`: Required notice hours
+  - `day_specific_rule`: Day-specific notification rule (if applicable)
+  - `summary`: Human-readable summary
+
 ### 2.4 Formatting (`formatting.py`)
 
 **Formatter Responsibilities:**
 1. Convert tool results into user-facing answer
 2. Build UI payload from plan and tool result
-3. Extract ICAO codes from answer (optional enhancement)
-4. Enhance visualization with mentioned airports (optional)
-5. Generate formatting reasoning
+3. Generate formatting reasoning
+4. Include suggested queries in UI payload (if available)
 
 **Formatter Chain:**
 ```python
@@ -182,25 +216,58 @@ prompt | llm | StrOutputParser()
 **Key Design:**
 - **No tag parsing** - Streams LLM output directly as `message` events
 - **State-based thinking** - Formatting reasoning stored in state, not extracted from text
-- **Visualization enhancement** - Optional: extracts ICAOs from answer and enriches visualization
-- **UI payload building** - Uses hybrid approach (flattened common fields + mcp_raw)
+- **UI payload building** - Uses flattened approach for convenient access
+- **Specialized formatters** - Comparison tools use dedicated `comparison_synthesis` prompt
+
+**Visualization Source:**
+
+**Important:** Visualizations come **entirely from the tool result** in the UI payload. The formatter does NOT parse the LLM's answer text to determine what to visualize.
+
+- Tools return visualization data in their results
+- Formatter includes this visualization in the UI payload as-is
+- No extraction or filtering based on answer text
+- Visualization is determined by tool logic, not LLM output
+
+**Rationale:**
+- Tools return DATA, formatters do SYNTHESIS
+- Visualization should be consistent and reliable
+- No coupling between LLM text output and visualization
+- Single source of truth: tool result → UI payload → frontend
 
 **UI Payload Building:**
 ```python
 def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> Dict[str, Any] | None:
     """
-    Build UI payload using hybrid approach:
+    Build UI payload using flattened approach:
+    - Include tool name for frontend context (e.g., legend mode switching)
     - Flatten commonly-used fields (filters, visualization, airports) for convenience
-    - Keep mcp_raw for everything else and as authoritative source
+    - Build show_rules for rules tools to trigger frontend rules panel
     """
-    # Base payload with kind and mcp_raw
+    # Base payload with kind and tool
     base_payload = {
         "kind": _determine_kind(plan.selected_tool),
-        "mcp_raw": tool_result,
+        "tool": plan.selected_tool,  # For frontend context-aware behavior
     }
-    
+
     # Add kind-specific metadata (departure, destination, icao, etc.)
-    
+
+    # For rules tools: build show_rules with countries and tags
+    if plan.selected_tool in {"answer_rules_question", "browse_rules", "compare_rules_between_countries"}:
+        countries = []
+        if "country_code" in tool_result:
+            countries = [tool_result["country_code"]]
+        elif "countries" in tool_result:
+            countries = tool_result["countries"]
+
+        tags = plan.arguments.get("tags") or []
+        tags_by_country = {country: tags for country in countries} if tags else {}
+
+        if countries:
+            base_payload["show_rules"] = {
+                "countries": countries,
+                "tags_by_country": tags_by_country
+            }
+
     # Flatten commonly-used fields for convenience
     if "filter_profile" in tool_result:
         base_payload["filters"] = tool_result["filter_profile"]
@@ -208,7 +275,7 @@ def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> 
         base_payload["visualization"] = tool_result["visualization"]
     if "airports" in tool_result:
         base_payload["airports"] = tool_result["airports"]
-    
+
     return base_payload
 ```
 
@@ -216,13 +283,16 @@ def build_ui_payload(plan: AviationPlan, tool_result: Dict[str, Any] | None) -> 
 
 **Graph Structure:**
 ```
-planner → tool → formatter → END
+planner → [predict_next_queries] → tool → formatter → END
 ```
 
 **Node Functions:**
 1. **planner_node** - Invokes planner, generates planning_reasoning, returns plan
-2. **tool_node** - Executes tool from plan, returns tool_result
-3. **formatter_node** - Formats answer, builds UI payload, combines thinking, returns final_answer + ui_payload
+2. **predict_next_queries_node** (optional) - Generates follow-up query suggestions based on plan
+3. **tool_node** - Executes tool from plan, performs notification enrichment if applicable, returns tool_result
+4. **formatter_node** - Formats answer, builds UI payload, enhances visualization, combines thinking, returns final_answer + ui_payload
+
+**Note:** `predict_next_queries_node` is optional and controlled via behavior config. When enabled, it runs after planner and before tool execution.
 
 **Error Handling:**
 - Errors stored in state (`error` field)
@@ -255,21 +325,38 @@ Uses LangGraph's `astream_events()` API to capture:
 - Token usage
 - Tool execution
 
-**SSE Events Emitted:**
+**SSE Events Emitted (in order):**
 1. `plan` - When planner completes (AviationPlan structure)
-2. `thinking` - Planning reasoning (from planning_reasoning)
+2. `thinking` - Planning reasoning (from planning_reasoning, may be multiple chunks)
 3. `tool_call_start` - Tool execution started (name, arguments)
 4. `tool_call_end` - Tool execution completed (name, result)
-5. `message` - LLM answer chunks (character-by-character)
-6. `thinking_done` - Thinking complete
-7. `ui_payload` - Visualization data
-8. `done` - Request complete (session_id, token counts)
-9. `error` - Error occurred (error message)
+5. `message` - LLM answer chunks (character-by-character, from formatter)
+6. `thinking_done` - Thinking complete (emitted when formatter completes)
+7. `ui_payload` - Visualization data (emitted once when formatter completes)
+8. `final_answer` - Complete serializable state for logging (emitted after formatter)
+9. `done` - Request complete with metadata (session_id, thread_id, run_id, token counts)
+10. `error` - Error occurred (error message, can occur at any point)
+
+**Event Ordering:**
+Events are emitted in the order shown above. The `error` event can occur at any point if an error is encountered. The `final_answer` event contains the complete serializable state (excluding messages) for conversation logging purposes.
 
 **Token Tracking:**
 - Extracts token usage from `on_llm_end` and `on_chat_model_end` events
-- Accumulates across all LLM calls (planner + formatter)
+- Accumulates across ALL LLM calls (planner + formatter)
+- Tracks both input tokens (prompt) and output tokens (completion)
 - Returns in `done` event: `{input, output, total}`
+- Token usage is extracted from LLM response metadata
+
+**Thread ID and Session ID:**
+- `thread_id`: Generated if not provided (format: `thread_{uuid}`)
+  - Required for checkpointing (conversation memory)
+  - Enables multi-turn conversations
+  - Included in `done` event
+- `session_id`: Extracted from header or generated (format: `session_{timestamp}`)
+  - Used for conversation logging
+  - Included in `done` event
+- `run_id`: Generated UUID for LangSmith feedback tracking
+  - Included in `done` event for feedback submission
 
 **Implementation Pattern:**
 ```python
@@ -329,34 +416,38 @@ async def aviation_agent_chat_stream(
 
 ## 4. UI Payload Structure
 
-### 4.1 Hybrid Approach
+### 4.1 Flattened Approach
 
-**Design Decision:** Flatten commonly-used fields for convenience, keep `mcp_raw` as authoritative source.
+**Design Decision:** Flatten commonly-used fields for convenient access. No redundant data.
 
 **Structure:**
 ```json
 {
   "kind": "route",
+  "tool": "find_airports_near_route",  // Tool name for frontend context
   "departure": "EGTF",
   "destination": "LFMD",
-  "filters": {...},  // Flattened from mcp_raw.filter_profile
-  "visualization": {...},  // Flattened from mcp_raw.visualization
-  "airports": [...],  // Flattened from mcp_raw.airports
-  "mcp_raw": {
-    "filter_profile": {...},
-    "visualization": {...},
-    "airports": [...],
-    // ... all other tool result fields
+  "filters": {...},  // From tool_result.filter_profile
+  "visualization": {...},  // From tool_result.visualization
+  "airports": [...],  // From tool_result.airports
+  "suggested_queries": [...],  // Optional: follow-up query suggestions
+  "show_rules": {  // Optional: for rules tools
+    "countries": ["FR", "DE"],
+    "tags_by_country": {"FR": ["flight_plan", "ifr"], "DE": ["transponder", "vfr"]}
   }
 }
 ```
 
 **Benefits:**
-- ✅ **Convenient access** - `ui_payload.filters` instead of `ui_payload.mcp_raw.filter_profile`
-- ✅ **Future-proof** - New fields automatically in `mcp_raw`
-- ✅ **Authoritative source** - `mcp_raw` is the complete tool result
-- ✅ **No breaking changes** - UI can use either approach
-- ✅ **Limited flattening** - Only 3 commonly-used fields
+- ✅ **Convenient access** - Direct access to fields without nesting
+- ✅ **Reduced bandwidth** - No redundant data duplication
+- ✅ **Lower token usage** - Smaller payloads in LLM context
+- ✅ **Simpler structure** - Easier to work with in frontend
+- ✅ **Clear contract** - Only flattened fields, no hidden data
+
+**Core Fields:**
+1. `kind` - UI category: `route`, `airport`, or `rules`
+2. `tool` - Tool name (e.g., `find_airports_near_route`) - Enables frontend context-aware behavior (e.g., legend mode)
 
 **Flattened Fields:**
 1. `filters` (from `filter_profile`) - UI needs for filter sync
@@ -366,33 +457,278 @@ async def aviation_agent_chat_stream(
 **Kind-Specific Metadata:**
 - Route tools: `departure`, `destination`, `ifr`
 - Airport tools: `icao`
-- Rules tools: `region`, `topic`
+- Rules tools: `region`, `topic`, `show_rules` (optional)
+
+**Additional Fields:**
+- `suggested_queries`: Optional array of follow-up query suggestions (from next query predictor)
+  - Format: `[{text, tool, category, priority}, ...]`
+  - Only included if next query prediction is enabled
+- `show_rules`: Optional object for rules tools to trigger rules panel display
+  - Format: `{countries: string[], tags_by_country: Record<string, string[]>}`
+  - `tags_by_country` filters rules at the rule level (more precise than category filtering)
+  - Rules are displayed grouped by category, but filtered by tags
+  - Used by frontend to display country rules in right panel
 
 ### 4.2 UI Integration
 
+**Frontend Event Processing:**
+
+The frontend (`ChatbotManager`) processes `ui_payload` events as follows:
+
+1. **Extract `tool` + `filters`** → Call `llmIntegration.applySuggestedLegend()` (switches map legend based on query context)
+2. **Extract `visualization`** → Call `llmIntegration.handleVisualization()`
+3. **Extract `filter_profile`** → Call `llmIntegration.applyFilterProfile()`
+4. **Extract `show_rules`** → Dispatch `show-country-rules` event
+5. **Extract `suggested_queries`** → Render in UI
+
 **Frontend Usage:**
 ```javascript
-// Convenient access (recommended)
+// Direct access to flattened fields
 const filters = ui_payload.filters;
 const visualization = ui_payload.visualization;
 const airports = ui_payload.airports;
-
-// Or access via mcp_raw (if needed)
-const filters = ui_payload.mcp_raw.filter_profile;
-const visualization = ui_payload.mcp_raw.visualization;
+const suggestedQueries = ui_payload.suggested_queries;
 ```
 
-**Visualization Types:**
-- `route_with_markers` - Route line with airport markers
-- `markers` - Array of airports
-- `marker_with_details` - Single airport with details
-- `point_with_markers` - Location with nearby airports
+**Visualization Types and Behavior:**
 
-See `designs/UI_FILTER_STATE_DESIGN.md` for complete tool-to-visualization mapping and LLM integration details.
+The `LLMIntegration` class handles each visualization type as follows:
+
+1. **`markers`** - Display airports as markers (two modes)
+
+   **Mode 1: With meaningful filters** (country, point_of_entry, fuel_type, etc.):
+   - Clears old LLM highlights
+   - Applies filter profile to store (updates UI filter controls)
+   - Adds blue highlights for the specific airports returned by the tool
+   - Dispatches `trigger-filter-refresh` event to load ALL airports matching filters
+   - Result: Map shows all airports matching filters, with LLM recommendations highlighted in blue
+
+   **Mode 2: No meaningful filters** (just airport list):
+   - Clears old LLM highlights
+   - Sets airports in store directly (only shows returned airports)
+   - Adds blue highlights for all returned airports
+   - Fits map bounds to show all airports
+   - Result: Map shows only the returned airports, all highlighted
+
+2. **`route_with_markers`** - Display route with airports
+   - Clears old LLM highlights
+   - Sets highlights for airports mentioned in chat
+   - Updates search query in store
+   - Applies filter profile
+   - Triggers route search via `trigger-search` event
+   - Shows all airports along route with highlights on chat airports
+
+3. **`marker_with_details`** - Focus on specific airport
+   - Updates search query in store
+   - Triggers search via `trigger-search` event (centers map, shows marker)
+   - Triggers `airport-click` event (loads and displays details panel)
+
+4. **`point_with_markers`** - Display point location with airports
+   - Clears old LLM highlights
+   - Sets highlights for recommended airports
+   - Sets locate state in store with center point
+   - Applies filter profile
+   - **Caches geocode result** (label → coordinates) in `geocodeCache`
+   - Triggers locate search via `trigger-locate` event
+   - Shows all airports within radius with highlights on recommended airports
+   - **Important:** The geocode cache ensures that when the debounced search handler fires (due to search box text), it recognizes the cached location and performs a locate search instead of a text search
+
+**Filter Profile Application:**
+
+When `filter_profile` is present in `ui_payload`:
+1. Extract from `ui_payload.filters` (flattened field)
+2. Map to `FilterConfig` format (validate keys and types)
+3. Apply via `store.setFilters()`
+4. Sync UI controls via `uiManager.syncFiltersToUI()`
+
+**Rules Panel Display:**
+
+When `show_rules` is present in `ui_payload`:
+1. Extract `countries` and `tags_by_country`
+2. Dispatch `show-country-rules` event with details
+3. main.ts loads rules for each country via API
+4. Store updated with `tagsByCountry` visual filter
+5. Rules panel displays rules filtered by tags, grouped by category
+6. Empty categories (no matching rules) are automatically hidden
+
+**Tool-to-Visualization Mapping:**
+
+| Tool | Visualization Type | UI Behavior |
+|------|-------------------|-------------|
+| `search_airports` | `markers` | With filters: applies filters + loads ALL matching + highlights recommended. Without filters: shows returned airports + highlights all |
+| `find_airports_near_route` | `route_with_markers` | Highlights chat airports, triggers route search, shows route line |
+| `find_airports_near_location` | `point_with_markers` | Sets locate state, highlights recommended airports, triggers locate search |
+| `get_airport_details` | `marker_with_details` | Centers map, shows marker, opens details panel |
+| `get_notification_for_airport` | `marker_with_details` | Same as `get_airport_details` |
+| `answer_rules_question` | None | Triggers rules panel via `show_rules` field |
+| `browse_rules` | None | Triggers rules panel via `show_rules` field |
+| `compare_rules_between_countries` | None | Triggers rules panel via `show_rules` field |
+
+**Tool-to-Legend Mapping (Automatic Legend Switching):**
+
+The frontend automatically switches the map legend based on the tool used, providing context-relevant visualization. This is implemented in `llm-integration.ts` via `applySuggestedLegend()`.
+
+| Tool | Suggested Legend | Rationale |
+|------|-----------------|-----------|
+| `get_notification_for_airport` | `notification` | Query is about notification requirements |
+| `get_airport_details` | `airport-type` | Shows border crossing, procedures info |
+| `find_airports_near_route` | `airport-type` | Default for route searches |
+| `find_airports_near_location` | `airport-type` | Default for location searches |
+| `search_airports` | `airport-type` | Default for airport searches |
+| Rules tools | No change | Rules don't show on map |
+
+**Filter-Based Legend Overrides:**
+
+When certain filters are present, they take precedence over the tool-based mapping:
+
+| Filter | Legend Override | Priority |
+|--------|----------------|----------|
+| `max_hours_notice` (any value) | `notification` | 110 |
+| `point_of_entry: true` | `airport-type` | 100 |
+| `has_procedures: true` | `procedure-precision` | 90 |
+
+**Extending the Legend Mapping:**
+
+To add a new tool-to-legend or filter-to-legend mapping:
+
+1. **Tool-based mapping**: Add entry to `TOOL_TO_LEGEND_MAP` in `llm-integration.ts`
+   ```typescript
+   const TOOL_TO_LEGEND_MAP = {
+     'my_new_tool': 'relevant-legend',
+     // ...
+   };
+   ```
+
+2. **Filter-based override**: Add entry to `FILTER_LEGEND_OVERRIDES` in `llm-integration.ts`
+   ```typescript
+   const FILTER_LEGEND_OVERRIDES = [
+     { condition: (f) => f.my_filter === true, legend: 'relevant-legend', priority: 85 },
+     // ...
+   ];
+   ```
+
+**Adding New Filters (Important!):**
+
+All airport filtering uses `FilterEngine` (`shared/filtering/filter_engine.py`) as the single source of truth. Both LangGraph tools and REST API endpoints use the same engine.
+
+**To add a new filter:**
+
+1. **Create Filter class** in `shared/filtering/filters/`
+   ```python
+   class MyNewFilter(Filter):
+       name = "my_filter"
+       description = "Filter by something"
+
+       def apply(self, airport, value, context) -> bool:
+           # Return True if airport passes filter
+   ```
+
+2. **Register in FilterEngine** (`shared/filtering/filter_engine.py`)
+   ```python
+   FilterRegistry.register(MyNewFilter())
+   ```
+
+3. **Add to filter profile** (`shared/airport_tools.py:_build_filter_profile()`)
+   ```python
+   # For string/number values:
+   for key in ["country", ..., "my_filter"]:
+   # For boolean values:
+   for key in ["has_procedures", ..., "my_filter"]:
+   ```
+
+4. **Add REST API query parameter** (`web/server/api/airports.py`)
+   ```python
+   my_filter: Optional[str] = Query(None, description="...")
+   # Then add to filters dict:
+   if my_filter:
+       filters["my_filter"] = my_filter
+   ```
+
+5. **Add frontend support** (if UI control needed)
+   - `web/client/ts/store/types.ts` - Add to `FilterConfig`
+   - `web/client/ts/adapters/api-adapter.ts` - Add to `transformFiltersToParams()`
+   - `web/client/ts/adapters/llm-integration.ts` - Add to `applyFilterProfile()`
+   - `web/client/ts/managers/ui-manager.ts` - Add UI control handler and `syncFiltersToUI()`
+
+**Supported Filters:**
+- `country`, `has_procedures`, `has_aip_data`, `has_hard_runway`, `point_of_entry`
+- `fuel_type`, `has_avgas` (legacy), `has_jet_a` (legacy), `hotel`, `restaurant`
+- `min_runway_length_ft`, `max_runway_length_ft`, `max_landing_fee`
+- `trip_distance`, `exclude_large_airports`
+
+**Special Case:** AIP field filtering (`aip_field`, `aip_value`, `aip_operator`) uses `_matches_aip_field()` helper, not FilterEngine.
+
+See `designs/UI_FILTER_STATE_DESIGN.md` for complete UI, filter, state management, and LLM integration details.
 
 ---
 
-## 5. Conversation Logging
+## 5. State Management Rules
+
+### 5.1 Single Source of Truth
+
+**Principle:** All application state lives in the Zustand store (`web/client/ts/store/store.ts`).
+
+**Implementation:**
+- LLMIntegration updates store via actions only (`store.getState().setX()`)
+- No direct state manipulation
+- UI updates via store subscriptions (reactive)
+- No duplicated state in components
+
+### 5.2 UI Payload Validation Rules
+
+**Visualization Type Validation:**
+- Only accept known types: `markers`, `route_with_markers`, `marker_with_details`, `point_with_markers`
+- Reject unknown types with warning
+- Default to safe behavior (no visualization) if type is invalid
+
+**Filter Profile Validation:**
+- Only apply filters that exist in `FilterConfig` type
+- Validate filter values match expected types (boolean, string, number)
+- Ignore unknown filter keys (don't throw errors)
+- Handle null/undefined values gracefully
+
+**Store Action Consistency:**
+
+Each visualization type must map to specific store actions:
+
+- **`markers`** (with filters) → `store.setFilters()` + `store.highlightPoint()` + trigger `trigger-filter-refresh` event
+- **`markers`** (without filters) → `store.setAirports()` + `store.highlightPoint()`
+- **`route_with_markers`** → `store.setSearchQuery()` + `store.highlightPoint()` + trigger `trigger-search` event
+- **`marker_with_details`** → `store.setSearchQuery()` + trigger `trigger-search` and `airport-click` events
+- **`point_with_markers`** → `store.setLocate()` + `store.highlightPoint()` + trigger `trigger-locate` event
+- **Rules tools** → Dispatch `show-country-rules` event (no store updates)
+
+**No Direct DOM Manipulation:**
+- All UI updates must go through store subscriptions
+- Use custom events for cross-component communication
+- No direct DOM manipulation from LLMIntegration
+- UIManager handles DOM updates reactively
+
+**Idempotency:**
+- Visualization application should be idempotent
+- Filter profile application should be idempotent
+- Use flags (`visualizationApplied`, `filterProfileApplied`) to prevent duplicate application
+- Re-applying same visualization should not cause side effects
+
+**Event-Based Communication:**
+- Use custom events for cross-component actions:
+  - `trigger-search` - Trigger search from any component
+  - `trigger-locate` - Trigger locate search (caches label → coords in `geocodeCache` for consistent search behavior)
+  - `trigger-filter-refresh` - Load all airports matching current store filters (for markers with filters)
+  - `airport-click` - Open airport details panel
+  - `show-country-rules` - Display rules panel
+  - `reset-rules-panel` - Reset rules panel
+- Store updates trigger reactive UI updates
+- No direct method calls across components
+
+**Geocode Cache (`ts/utils/geocode-cache.ts`):**
+- Caches location label → coordinates mappings from locate searches
+- Prevents search box text (e.g., "Brac, Croatia") from triggering text search that overwrites locate results
+- See `UI_FILTER_STATE_DESIGN.md` → "Geocode Cache" section for full details
+
+---
+
+## 6. Conversation Logging
 
 ### 5.1 Logging Implementation (`adapters/logging.py`)
 
@@ -452,7 +788,84 @@ log_conversation_from_state(
 
 ---
 
-## 6. Design Principles
+## 7. Next Query Prediction
+
+### 7.1 Overview
+
+**Feature:** Optional node that generates follow-up query suggestions based on the planner's output.
+
+**Status:** Configurable via behavior config (`next_query_prediction.enabled`)
+
+**Location:** `shared/aviation_agent/next_query_predictor.py`, `shared/aviation_agent/graph.py:84`
+
+### 7.2 Implementation
+
+**When Enabled:**
+- Runs after planner node, before tool execution
+- Uses only plan information (user query, selected tool, arguments)
+- Does NOT use tool results (runs before tool execution)
+
+**Process:**
+1. Extract context from plan:
+   - User query text
+   - Selected tool name
+   - Tool arguments (including filters)
+2. Generate suggestions using rule-based predictor
+3. Format for UI: `[{text, tool, category, priority}, ...]`
+4. Store in state as `suggested_queries`
+5. Include in `ui_payload` for frontend display
+
+**Configuration:**
+- `enabled`: Boolean to enable/disable feature
+- `max_suggestions`: Maximum number of suggestions to generate
+
+**Benefits:**
+- Helps users discover related queries
+- Improves user engagement
+- Provides context-aware suggestions
+
+---
+
+## 8. Conversation Memory (Checkpointing)
+
+### 8.1 Overview
+
+**Feature:** Multi-turn conversation support using LangGraph checkpointing.
+
+**Status:** Always enabled (thread_id auto-generated if not provided)
+
+**Location:** `shared/aviation_agent/graph.py:352`, `shared/aviation_agent/adapters/streaming.py:68`
+
+### 8.2 Implementation
+
+**Thread ID:**
+- Generated if not provided: `thread_{uuid}`
+- Required for checkpointing to work
+- Included in `done` event for frontend to track
+
+**Checkpointing:**
+- Uses LangGraph's built-in checkpointing
+- State persists across requests with same `thread_id`
+- Conversation history maintained automatically
+- Enables context-aware responses
+
+**Usage:**
+```python
+# First request (new conversation)
+request = {"messages": [...], "thread_id": None}  # Auto-generated
+
+# Subsequent requests (continue conversation)
+request = {"messages": [...], "thread_id": "thread_abc123"}  # Use from previous response
+```
+
+**Benefits:**
+- Natural multi-turn conversations
+- Context preservation
+- Better user experience
+
+---
+
+## 9. Design Principles
 
 ### 6.1 State-Based Thinking
 
@@ -477,22 +890,22 @@ log_conversation_from_state(
 - Planner extracts filters into `plan.arguments.filters`
 - Tool runner uses `plan.arguments` directly
 - Tool returns `filter_profile` (what was actually applied)
-- UI gets filters from `ui_payload.filters` (flattened) or `ui_payload.mcp_raw.filter_profile`
+- UI gets filters from `ui_payload.filters` (flattened field)
 
 **Benefits:**
 - Simpler (no separate field)
 - Consistent (filters are tool arguments)
 - UI gets actual applied filters from tool result
 
-### 6.3 Hybrid UI Payload
+### 6.3 Flattened UI Payload
 
-**Principle:** Flatten commonly-used fields for convenience, keep `mcp_raw` as authoritative source.
+**Principle:** Flatten commonly-used fields for convenient access. No redundant data.
 
 **Benefits:**
-- Convenient UI access
-- Future-proof (new fields in mcp_raw)
-- No breaking changes
-- Limited flattening (only 3 fields)
+- Convenient UI access (no nesting)
+- Reduced bandwidth (no duplicate data)
+- Lower token usage (smaller payloads)
+- Simpler structure (easier to work with)
 
 ### 6.4 Error Handling in State
 
@@ -518,9 +931,56 @@ log_conversation_from_state(
 4. Handle errors in nodes, not external try/catch
 5. Use structured planning (AviationPlan)
 
+### 6.6 Store as Single Source of Truth
+
+**Principle:** All application state lives in the Zustand store, no duplicated state.
+
+**Implementation:**
+- All state updates go through store actions
+- No direct state manipulation
+- UI updates via store subscriptions (reactive)
+- No component-level state that mirrors store
+
+**Benefits:**
+- Predictable state management
+- Easier debugging
+- Consistent UI updates
+- No state synchronization issues
+
+### 6.7 UI Payload Validation
+
+**Principle:** Validate UI payloads before applying to ensure consistency with store state.
+
+**Implementation:**
+- Validate visualization types (only accept known types)
+- Validate filter profiles (match FilterConfig schema)
+- Ignore unknown fields gracefully
+- Reject invalid payloads with warnings
+
+**Benefits:**
+- Prevents UI errors
+- Ensures store consistency
+- Graceful degradation
+- Better error handling
+
+### 6.8 Idempotency
+
+**Principle:** Visualization and filter profile application should be idempotent.
+
+**Implementation:**
+- Use flags to prevent duplicate application
+- Re-applying same visualization should not cause side effects
+- Filter profile application is idempotent
+
+**Benefits:**
+- Safe to re-apply
+- No duplicate highlights
+- No duplicate filter updates
+- Better error recovery
+
 ---
 
-## 7. Code Structure
+## 10. Code Structure
 
 ### Current Structure
 ```
@@ -530,18 +990,32 @@ shared/aviation_agent/
   execution.py          # ToolRunner
   formatting.py         # Formatter + UI payload building
   graph.py              # Graph assembly
+  next_query_predictor.py  # Next query prediction (optional)
+  tools.py              # AviationToolClient
+  config.py              # Settings and behavior config
   adapters/
     streaming.py        # SSE streaming adapter
     logging.py          # Conversation logging
-    __init__.py
+    __init__.py         # Adapter exports
 
 web/server/api/
   aviation_agent_chat.py  # FastAPI router
+
+web/client/ts/
+  adapters/
+    llm-integration.ts  # LLM visualization handler
+  managers/
+    chatbot-manager.ts  # Chatbot UI and SSE event processing
+    ui-manager.ts      # UI event handling and search logic
+  store/
+    store.ts           # Zustand store (single source of truth)
+  utils/
+    geocode-cache.ts   # Geocode result cache for consistent search behavior
 ```
 
 ---
 
-## 8. Testing Strategy
+## 11. Testing Strategy
 
 ### Unit Tests
 - Test planner filter extraction
@@ -549,13 +1023,32 @@ web/server/api/
 - Test formatter UI payload building
 - Test state management
 - Test thinking combination
+- Test next query predictor
+- Test notification enrichment
 
 ### Integration Tests
 - Test streaming endpoint (SSE events)
-- Test visualization enhancement
+- Test event ordering
 - Test conversation logging
 - Test error handling
 - Test token tracking
+- Test thread_id generation
+- Test checkpointing (multi-turn conversations)
+
+### UI Payload Validation Tests
+- Test invalid visualization types are rejected
+- Test filter profile validation
+- Test store action consistency
+- Test idempotency of visualization application
+- Test filter profile idempotency
+
+### Visualization Type Tests
+- Test each visualization type triggers correct store actions
+- Test `markers` type behavior
+- Test `route_with_markers` type behavior
+- Test `marker_with_details` type behavior
+- Test `point_with_markers` type behavior
+- Test rules tools trigger rules panel correctly
 
 ### E2E Tests
 - Test full conversation flow
@@ -564,10 +1057,13 @@ web/server/api/
 - Test rules queries
 - Test streaming response
 - Test multi-turn conversations
+- Test next query prediction
+- Test notification enrichment
+- Test filter profile application
 
 ---
 
-## 9. Key Design Decisions
+## 12. Key Design Decisions
 
 ### 9.1 State-Based Thinking (Not Tag Parsing)
 
@@ -588,15 +1084,16 @@ web/server/api/
 - Consistent (filters are tool arguments)
 - UI gets actual applied filters from tool result (`filter_profile`)
 
-### 9.3 Hybrid UI Payload (Not Pure mcp_raw)
+### 9.3 Flattened UI Payload (Not Nested Structure)
 
-**Decision:** Flatten commonly-used fields (`filters`, `visualization`, `airports`) while keeping `mcp_raw` as authoritative source.
+**Decision:** Flatten commonly-used fields (`filters`, `visualization`, `airports`) for direct access. No redundant `mcp_raw` field.
 
 **Rationale:**
-- Convenient UI access
-- Future-proof (new fields in mcp_raw)
-- No breaking changes
-- Limited flattening (only 3 fields)
+- Convenient UI access (no nesting required)
+- Reduced bandwidth (no duplicate data)
+- Lower token usage (smaller payloads in LLM context)
+- Simpler structure (easier to work with in frontend)
+- Clear contract (only flattened fields, no hidden data)
 
 ### 9.4 Post-Execution Logging (Not Event-Based)
 
@@ -617,9 +1114,39 @@ web/server/api/
 - Streamable (errors can be streamed)
 - Graceful degradation (always produces some response)
 
+### 9.6 Store as Single Source of Truth (Not Component State)
+
+**Decision:** All state lives in Zustand store, no duplicated state in components.
+
+**Rationale:**
+- Predictable state management
+- Easier debugging
+- Consistent UI updates
+- No state synchronization issues
+
+### 9.7 UI Payload Validation (Not Blind Application)
+
+**Decision:** Validate UI payloads before applying to ensure consistency with store state.
+
+**Rationale:**
+- Prevents UI errors
+- Ensures store consistency
+- Graceful degradation
+- Better error handling
+
+### 9.8 Idempotent Visualization Application (Not Stateful)
+
+**Decision:** Visualization and filter profile application should be idempotent.
+
+**Rationale:**
+- Safe to re-apply
+- No duplicate highlights
+- No duplicate filter updates
+- Better error recovery
+
 ---
 
-## 10. Future Enhancements
+## 13. Future Enhancements
 
 ### Potential Improvements
 1. **Retry logic** - Add retry for transient failures (LLM API, MCP connection)
@@ -637,4 +1164,5 @@ web/server/api/
 
 - `designs/LLM_AGENT_DESIGN.md` - Original agent design
 - `designs/UI_FILTER_STATE_DESIGN.md` - Complete UI, filter, state management, and LLM visualization design
+- `designs/CHATBOT_WEBUI_DESIGN_REVIEW.md` - Review of this document against implementation
 - `PHASE5_UI_INTEGRATION_SUMMARY.md` - UI integration details

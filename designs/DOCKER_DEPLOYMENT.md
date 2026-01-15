@@ -25,10 +25,10 @@ git clone <repository-url>
 cd flyfun-apps
 
 # Create required directories
-mkdir -p data out logs
+mkdir -p data out logs out/chromadb_data
 
 # Set permissions (development - use proper ownership for production)
-chmod 777 out logs
+chmod 777 out logs out/chromadb_data
 ```
 
 ### 3. Prepare Data Files
@@ -38,7 +38,7 @@ chmod 777 out logs
 - `data/rules.json` - Aviation rules JSON (generate from Excel if needed)
 
 **Optional:**
-- `out/ga_meta.sqlite` - GA friendliness database (build if you have export data)
+- `data/ga_persona.db` - GA friendliness persona database (build if you have export data)
 
 ### 4. Configure Environment
 
@@ -113,7 +113,7 @@ docker exec -it flyfun-web-server python /app/tools/xls_to_rules.py \
     --build-rag
 ```
 
-This builds the ChromaDB vector database from `rules.json` (persists in `out/chromadb_data/`).
+This builds the ChromaDB vector database from `rules.json`. **Data persists in `out/chromadb_data/`** on the host and will survive container restarts and rebuilds.
 
 ### 8. Verify Setup
 
@@ -183,7 +183,7 @@ curl http://localhost:8000/api/airports/EGLL
 
 **Note:** The `data/` directory is mounted as a volume, so file changes are immediately available in containers.
 
-### Update ga_meta.sqlite
+### Update GA persona database
 
 **Option 1: Build from export data (recommended)**
 
@@ -191,7 +191,7 @@ curl http://localhost:8000/api/airports/EGLL
 # If you have airfield.directory export JSON
 docker exec -it flyfun-web-server python /app/tools/build_ga_friendliness.py \
     --export /path/to/export.json \
-    --output /app/out/ga_meta.sqlite
+    --output /app/data/ga_persona.db
 ```
 
 **Option 2: Replace existing file**
@@ -201,13 +201,13 @@ docker exec -it flyfun-web-server python /app/tools/build_ga_friendliness.py \
 docker-compose stop web-server
 
 # Replace file on host
-cp /path/to/new/ga_meta.sqlite out/ga_meta.sqlite
+cp /path/to/new/ga_persona.db data/ga_persona.db
 
 # Restart
 docker-compose start web-server
 ```
 
-**Note:** The file is in `out/ga_meta.sqlite` on the host, mounted into containers.
+**Note:** The file is in `data/ga_persona.db` on the host, mounted into containers.
 
 ### Rebuild RAG (Vector Database)
 
@@ -264,16 +264,21 @@ To update all services (web, MCP, ChromaDB):
 # Pull latest code
 git pull
 
+# Stop containers (data persists in volumes)
+docker-compose down
+
 # Rebuild all images
 docker-compose build
 
-# Restart all services
+# Start all services (ChromaDB data will be restored from volume)
 docker-compose up -d
 
 # Verify
 docker-compose ps
 docker-compose logs --tail=50
 ```
+
+**Important:** ChromaDB data persists in `out/chromadb_data/` on the host. After `docker-compose down` and rebuild, the data will automatically be restored when the container starts. You should **not** need to rebuild the vector database unless you've updated `rules.json`.
 
 ---
 
@@ -329,6 +334,51 @@ ls -la data/rules.json
 # Check ChromaDB data
 ls -la out/chromadb_data/
 ```
+
+**ChromaDB data lost after rebuild:**
+
+If ChromaDB appears empty after `docker-compose down` and rebuild:
+
+1. **Verify the data directory exists:**
+   ```bash
+   ls -la out/chromadb_data/
+   ```
+
+2. **Check ChromaDB logs for errors:**
+   ```bash
+   docker-compose logs chromadb | grep -i persist
+   ```
+
+3. **Verify volume mount:**
+   ```bash
+   docker inspect flyfun-chromadb | grep -A 10 Mounts
+   ```
+
+4. **Check directory permissions:**
+   ```bash
+   # Ensure directory is writable
+   chmod -R 777 out/chromadb_data
+   # Or use proper ownership
+   chown -R 2000:2000 out/chromadb_data
+   ```
+
+5. **Verify environment variables:**
+   ```bash
+   docker exec flyfun-chromadb env | grep -i persist
+   # Should show: IS_PERSISTENT=TRUE and PERSIST_DIRECTORY=/chroma/chroma
+   ```
+
+6. **If data is truly lost, rebuild:**
+   ```bash
+   docker exec -it flyfun-web-server python /app/tools/xls_to_rules.py \
+       --out /app/data/rules.json \
+       --build-rag
+   ```
+
+**Note:** ChromaDB data should persist automatically. If it doesn't, check that:
+- The `out/chromadb_data/` directory exists on the host
+- The directory has proper permissions (writable by the container)
+- You're not using `docker-compose down -v` (which removes volumes)
 
 ### Airport Data Not Showing
 
@@ -429,8 +479,8 @@ curl http://localhost:8000/health
 
 ```
 .
-├── data/              # Read-only: airports.db, rules.json
-├── out/               # Writable: ga_meta.sqlite, chromadb_data/
+├── data/              # Read-only: airports.db, rules.json, ga_persona.db
+├── out/               # Writable: chromadb_data/
 ├── logs/              # Writable: application logs
 ├── .env               # Environment configuration
 └── docker-compose.yml # Service orchestration

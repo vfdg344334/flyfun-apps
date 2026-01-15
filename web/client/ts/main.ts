@@ -10,7 +10,9 @@ import { UIManager } from './managers/ui-manager';
 import { LLMIntegration } from './adapters/llm-integration';
 import { ChatbotManager } from './managers/chatbot-manager';
 import { PersonaManager } from './managers/persona-manager';
-import type { AppState, RouteState, MapView, FilterConfig } from './store/types';
+import { getThemeManager, ThemeManager } from './managers/theme-manager';
+import { geocodeCache } from './utils/geocode-cache';
+import type { AppState, RouteState, MapView, FilterConfig, BoundingBox } from './store/types';
 
 // Global instances (for debugging/window access)
 declare global {
@@ -20,6 +22,8 @@ declare global {
     uiManager: UIManager;
     llmIntegration: LLMIntegration;
     personaManager: PersonaManager;
+    themeManager: ThemeManager;
+    geocodeCache: typeof geocodeCache;
   }
 }
 
@@ -34,8 +38,10 @@ class Application {
   private llmIntegration: LLMIntegration;
   private chatbotManager: ChatbotManager;
   private personaManager: PersonaManager;
+  private themeManager: ThemeManager;
   private currentSelectedIcao: string | null = null;
   private isUpdatingMapView: boolean = false; // Flag to prevent infinite loops
+  private isViewportLoading: boolean = false; // Flag to skip fitBounds during viewport loading
   private storeUnsubscribe?: () => void; // Store unsubscribe function
 
   constructor() {
@@ -60,12 +66,17 @@ class Application {
     // Initialize persona manager
     this.personaManager = new PersonaManager(this.apiAdapter);
 
+    // Initialize theme manager
+    this.themeManager = getThemeManager();
+
     // Expose to window for debugging
     window.appState = this.store as any;
     window.visualizationEngine = this.visualizationEngine;
     window.uiManager = this.uiManager;
     window.llmIntegration = this.llmIntegration;
     window.personaManager = this.personaManager;
+    window.themeManager = this.themeManager;
+    window.geocodeCache = geocodeCache;
     (window as any).chatbotManager = this.chatbotManager;
   }
 
@@ -81,6 +92,10 @@ class Application {
         document.addEventListener('DOMContentLoaded', resolve);
       });
     }
+
+    // Initialize theme manager (must be early to prevent flash of wrong theme)
+    this.themeManager.init();
+    this.initThemeToggle();
 
     // Initialize map
     this.initMap();
@@ -143,6 +158,37 @@ class Application {
   }
 
   /**
+   * Initialize theme toggle button
+   */
+  private initThemeToggle(): void {
+    const themeToggle = document.getElementById('theme-toggle');
+    if (!themeToggle) return;
+
+    // Update button icon and tooltip
+    const updateButton = () => {
+      const icon = themeToggle.querySelector('i');
+      if (icon) {
+        icon.className = `fas ${this.themeManager.getIconClass()}`;
+      }
+      themeToggle.title = this.themeManager.getTooltip();
+    };
+
+    // Set initial state
+    updateButton();
+
+    // Handle clicks
+    themeToggle.addEventListener('click', () => {
+      this.themeManager.cycleTheme();
+      updateButton();
+    });
+
+    // Subscribe to external theme changes
+    this.themeManager.subscribe(() => {
+      updateButton();
+    });
+  }
+
+  /**
    * Subscribe to store changes for visualization updates
    */
   private subscribeToStore(): void {
@@ -154,6 +200,7 @@ class Application {
     let lastRouteHash: string = '';
     let lastLocateHash: string = '';
     let lastProcedureLinesHash: string = ''; // Track loaded procedure lines
+    let lastRulesHash: string = ''; // Track rules state for Rules panel rendering
 
     // Zustand's subscribe - listens to all state changes
     // Use debounce to prevent infinite loops
@@ -189,14 +236,17 @@ class Application {
               airportsChanged,
               legendModeChanged,
               personaChanged,
-              selectedPersona: state.ga.selectedPersona
+              selectedPersona: state.ga.selectedPersona,
+              isViewportLoading: this.isViewportLoading
             });
 
-            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0;
+            // Only fit bounds when airports change from non-viewport sources (chatbot, search, etc.)
+            // Skip fitBounds during viewport-based loading to prevent zoom loops
+            const shouldFitBounds = airportsChanged && state.filteredAirports.length > 0 && !this.isViewportLoading;
             this.visualizationEngine.updateMarkers(
               state.filteredAirports,
               state.visualization.legendMode,
-              shouldFitBounds // Auto-fit bounds when airports change from chatbot
+              shouldFitBounds // Auto-fit bounds when airports change from chatbot/search
             );
 
             lastAirports = [...state.filteredAirports]; // Copy array for comparison
@@ -320,6 +370,17 @@ class Application {
 
           // NOTE: We don't update map view here to prevent infinite loops
           // Map view is only updated from map events (moveend/zoomend) or initial load
+
+          // --- Rules panel rendering (store-driven) ---
+          try {
+            const currentRulesHash = JSON.stringify((state as any).rules);
+            if (currentRulesHash !== lastRulesHash) {
+              this.renderRulesPanelFromStore();
+              lastRulesHash = currentRulesHash;
+            }
+          } catch (rulesError) {
+            console.error('Error updating Rules panel from store', rulesError);
+          }
         } catch (error) {
           console.error('Error in store subscription callback:', error);
         }
@@ -357,6 +418,21 @@ class Application {
     // Panel resize event (from collapse/expand buttons)
     window.addEventListener('panel-resize', () => {
       this.invalidateMapSize();
+      // After map size is recalculated, refresh airports for the new viewport
+      // Use a delay to ensure Leaflet has updated its bounds
+      setTimeout(() => {
+        const map = this.visualizationEngine.getMap();
+        if (map) {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }
+      }, 200);
     });
 
     // Render route event (from LLM integration)
@@ -364,14 +440,175 @@ class Application {
       this.visualizationEngine.displayRoute(e.detail.route);
     }) as EventListener);
 
-    // Trigger search event
-    window.addEventListener('trigger-search', ((e: CustomEvent<{ query: string }>) => {
-      // This will be handled by UI Manager's search handler
-      const searchInput = document.getElementById('search-input') as HTMLInputElement;
-      if (searchInput) {
-        searchInput.value = e.detail.query;
-        searchInput.dispatchEvent(new Event('input'));
+    // Trigger search event (from LLM integration)
+    // This is for programmatic searches - it updates the store and triggers the search directly,
+    // WITHOUT going through the input event (which would clear LLM highlights)
+    window.addEventListener('trigger-search', ((e: Event) => {
+      const customEvent = e as CustomEvent<{ query: string }>;
+      const query = customEvent.detail.query;
+      console.log('🔵 trigger-search event received:', query);
+      (async () => {
+
+      // Update store (UI syncs automatically via subscription)
+      this.store.getState().setSearchQuery(query);
+
+      // Parse route from query
+      const parts = query.trim().split(/\s+/).filter(part => part.length > 0);
+      const icaoPattern = /^[A-Za-z]{4}$/;
+      const allIcaoCodes = parts.every(part => icaoPattern.test(part));
+
+      if (allIcaoCodes && parts.length >= 1) {
+        // Route search - call API directly
+        const routeAirports = parts.map(part => part.toUpperCase());
+        const state = this.store.getState();
+        const distanceNm = state.filters.search_radius_nm;
+
+        try {
+          this.store.getState().setLoading(true);
+
+          // Get route airport coordinates for route line
+          const originalRouteAirports: Array<{ icao: string; lat: number; lng: number }> = [];
+          for (const icao of routeAirports) {
+            try {
+              const airport = await this.apiAdapter.getAirportDetail(icao);
+              if (airport.latitude_deg && airport.longitude_deg) {
+                originalRouteAirports.push({
+                  icao,
+                  lat: airport.latitude_deg,
+                  lng: airport.longitude_deg
+                });
+              }
+            } catch (error) {
+              console.error(`Error getting coordinates for ${icao}:`, error);
+            }
+          }
+
+          const response = await this.apiAdapter.searchAirportsNearRoute(
+            routeAirports,
+            distanceNm,
+            state.filters
+          );
+
+          // Extract airports
+          const airports = response.airports.map((item: any) => ({
+            ...item.airport,
+            _routeSegmentDistance: item.segment_distance_nm,
+            _routeEnrouteDistance: item.enroute_distance_nm,
+            _closestSegment: item.closest_segment
+          }));
+
+          this.store.getState().setAirports(airports);
+          this.store.getState().setRoute({
+            airports: routeAirports,
+            distance_nm: distanceNm,
+            originalRouteAirports,
+            isChatbotSelection: true,  // Mark as chatbot selection
+            chatbotAirports: null
+          });
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM route search: ${response.airports_found} airports within ${distanceNm}nm`);
+        } catch (error) {
+          console.error('Error in LLM route search:', error);
+          this.store.getState().setLoading(false);
+        }
+      } else {
+        // Text search - call API directly
+        try {
+          this.store.getState().setLoading(true);
+          this.store.getState().setRoute(null);
+          this.store.getState().setLocate(null);
+
+          const response = await this.apiAdapter.searchAirports(query, 50);
+          this.store.getState().setAirports(response.data);
+          this.store.getState().setLoading(false);
+
+          console.log(`✅ LLM text search: ${response.data.length} airports found for "${query}"`);
+        } catch (error) {
+          console.error('Error in LLM text search:', error);
+          this.store.getState().setLoading(false);
+        }
       }
+      })();
+    }));
+
+    // Trigger locate event (from LLM integration for point_with_markers)
+    window.addEventListener('trigger-locate', ((e: Event) => {
+      const customEvent = e as CustomEvent<{ lat: number; lon: number; label?: string }>;
+      const { lat, lon, label } = customEvent.detail;
+      (async () => {
+      const state = this.store.getState();
+      // Read radius from store (single source of truth)
+      const radiusNm = state.filters.search_radius_nm;
+      console.log('🔵 trigger-locate event received:', { lat, lon, label, radiusNm });
+
+      // Cache the geocode result BEFORE loading airports
+      // This ensures the debounced search handler can find the cache entry
+      if (label) {
+        geocodeCache.set(label, lat, lon, label);
+      }
+
+      try {
+        const response = await this.apiAdapter.locateAirportsByCenter(
+          { lat, lon, label: label || 'Location' },
+          radiusNm,
+          state.filters
+        );
+
+        if (response.airports) {
+          this.store.getState().setAirports(response.airports);
+          console.log(`✅ Loaded ${response.airports.length} airports within ${radiusNm}nm of "${label || 'location'}"`);
+        }
+      } catch (error) {
+        console.error('Error in trigger-locate:', error);
+      }
+      })();
+    }));
+
+    // Trigger filter refresh event (from LLM integration for markers with filters)
+    // Loads ALL airports matching current store filters
+    window.addEventListener('trigger-filter-refresh', (async () => {
+      console.log('🔵 trigger-filter-refresh event received');
+
+      try {
+        const state = this.store.getState();
+        const filters = state.filters;
+
+        console.log('🔵 Loading airports with filters:', filters);
+
+        // Load airports with current filters (high limit to get all matching)
+        const response = await this.apiAdapter.getAirports({ ...filters, limit: 500 });
+
+        if (response.data) {
+          this.store.getState().setAirports(response.data);
+          console.log(`✅ Loaded ${response.data.length} airports matching filters`);
+
+          // Fit bounds to show all airports
+          if (this.visualizationEngine && response.data.length > 0) {
+            setTimeout(() => {
+              this.visualizationEngine.fitBounds();
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error('Error in trigger-filter-refresh:', error);
+      }
+    }) as EventListener);
+
+    // Trigger viewport refresh event (from filter changes in viewport mode)
+    // Reloads airports within current viewport bounds using updated filters
+    window.addEventListener('trigger-viewport-refresh', (() => {
+      const map = this.visualizationEngine.getMap();
+      if (!map) return;
+
+      const bounds = map.getBounds();
+      const bbox: BoundingBox = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        west: bounds.getWest()
+      };
+      this.fetchAirportsInViewport(bbox);
     }) as EventListener);
 
     // Relevance tab listener and Persona selector listener moved to UIManager
@@ -392,74 +629,46 @@ class Application {
     // Reset rules panel event (from chatbot when starting new query)
     window.addEventListener('reset-rules-panel', (() => {
       console.log('FlyFunApp: Resetting rules panel');
-      // Clear rules summary header
-      const rulesSummary = document.getElementById('rules-summary');
-      if (rulesSummary) {
-        rulesSummary.textContent = '';
-      }
-      // Clear rules display - show "no selection" state
-      const rulesContent = document.getElementById('rules-content');
-      if (rulesContent) {
-        rulesContent.innerHTML = '<p class="text-muted">No rules to display. Ask a country-specific question to see relevant rules.</p>';
-      }
+      // Clear rules state in store and let renderer update the panel
+      const store = this.store as any;
+      store.getState().clearRules();
+      this.renderRulesPanelFromStore();
     }) as EventListener);
 
     // Show country rules event (from RAG chatbot)
     window.addEventListener('show-country-rules', (async (e: Event) => {
       const customEvent = e as CustomEvent<{
         countries: string[];
-        categoriesByCountry?: Record<string, string[]>;
+        tagsByCountry?: Record<string, string[]>;
       }>;
-      const { countries, categoriesByCountry } = customEvent.detail;
+      const { countries, tagsByCountry } = customEvent.detail;
 
       if (countries && countries.length > 0) {
-        console.log('FlyFunApp: Loading rules for countries', countries, 'categoriesByCountry:', categoriesByCountry);
+        console.log('FlyFunApp: Loading rules for countries', countries, 'tagsByCountry:', tagsByCountry);
 
         try {
           // Load rules for all countries in parallel
           const rulesPromises = countries.map(code => this.apiAdapter.getCountryRules(code));
           const allRulesResults = await Promise.all(rulesPromises);
 
-          // Filter each country's rules to only relevant categories and combine
-          const combinedCategories: any[] = [];
-          let totalRules = 0;
+          const store = this.store as any;
 
+          // Store full rules per country in centralized state
           countries.forEach((countryCode, index) => {
             const rules = allRulesResults[index];
-            const relevantCategories = categoriesByCountry?.[countryCode] || [];
-
-            if (rules && rules.categories) {
-              // Filter categories if we have specific ones
-              let filteredCategories = rules.categories;
-              if (relevantCategories.length > 0) {
-                filteredCategories = rules.categories.filter((cat: any) =>
-                  relevantCategories.includes(cat.name)
-                );
-              }
-
-              // Add country prefix to category names and combine
-              filteredCategories.forEach((cat: any) => {
-                combinedCategories.push({
-                  ...cat,
-                  name: `${countryCode}: ${cat.name}`,
-                  country: countryCode
-                });
-                totalRules += cat.count || 0;
-              });
+            if (rules) {
+              store.getState().setRulesForCountry(countryCode, rules);
             }
           });
 
-          // Create combined rules object
-          const combinedRules = {
-            country: countries.join(', '),
-            total_rules: totalRules,
-            categories: combinedCategories
-          };
+          // Persist selection and LLM-provided visual filter in store
+          store.getState().setRulesSelection(countries, {
+            tagsByCountry: tagsByCountry || {}
+          });
+          // Reset any existing free-text filter when applying a new selection
+          store.getState().setRulesTextFilter('');
 
-          console.log('FlyFunApp: Combined rules from', countries.length, 'countries,', combinedCategories.length, 'categories,', totalRules, 'rules');
-
-          // Display in right panel
-          this.displayCountryRules(combinedRules, countries.join(', '));
+          console.log('FlyFunApp: Stored rules for', countries.length, 'countries');
 
           // Show the right panel and switch to Rules tab
           this.showRulesTab();
@@ -469,12 +678,14 @@ class Application {
       }
     }) as EventListener);
 
-    // Map move/zoom events for URL sync
+    // Map move/zoom events for URL sync and viewport-based airport loading
     // Use a flag to prevent infinite loops
     const map = this.visualizationEngine.getMap();
     if (map) {
       // Debounce map view updates to prevent infinite loops
       let mapUpdateTimeout: number | null = null;
+      // Separate timeout for viewport loading (longer debounce)
+      let viewportLoadTimeout: number | null = null;
 
       map.on('moveend zoomend', () => {
         // Skip if we're updating from store (to prevent infinite loop)
@@ -482,7 +693,7 @@ class Application {
           return;
         }
 
-        // Debounce to prevent rapid-fire updates
+        // Debounce map view state updates (300ms)
         if (mapUpdateTimeout) {
           clearTimeout(mapUpdateTimeout);
         }
@@ -505,7 +716,22 @@ class Application {
             });
           }
         }, 300); // Debounce 300ms
-        // URL sync will be handled separately
+
+        // Debounce viewport-based airport loading (500ms)
+        if (viewportLoadTimeout) {
+          clearTimeout(viewportLoadTimeout);
+        }
+
+        viewportLoadTimeout = window.setTimeout(() => {
+          const bounds = map.getBounds();
+          const bbox: BoundingBox = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+          };
+          this.fetchAirportsInViewport(bbox);
+        }, 500); // Debounce 500ms for API calls
       });
     }
   }
@@ -597,27 +823,67 @@ class Application {
   }
 
   /**
-   * Load initial airports
+   * Load initial airports within the current viewport
+   * Uses viewport bounds to preserve the default Europe-centered view
    */
   private async loadInitialAirports(): Promise<void> {
-    const state = this.store.getState();
+    const map = this.visualizationEngine.getMap();
+    if (!map) return;
 
-    // Only load if filters are applied
-    const hasFilters = Object.values(state.filters).some(value =>
-      value !== null && value !== undefined && value !== ''
-    );
-
-    if (hasFilters) {
-      this.store.getState().setLoading(true);
-      try {
-        const response = await this.apiAdapter.getAirports(state.filters);
-        this.store.getState().setAirports(response.data);
-        this.store.getState().setLoading(false);
-      } catch (error: any) {
-        console.error('Error loading initial airports:', error);
-        this.store.getState().setError('Error loading airports: ' + (error.message || 'Unknown error'));
-        this.store.getState().setLoading(false);
+    // Wait for map to be fully ready (tiles loaded, bounds valid)
+    await new Promise<void>(resolve => {
+      if (map.getSize().x > 0 && map.getSize().y > 0) {
+        resolve();
+      } else {
+        // Wait for map container to have dimensions
+        setTimeout(resolve, 200);
       }
+    });
+
+    // Use viewport-based loading to preserve initial map view
+    const bounds = map.getBounds();
+    const bbox: BoundingBox = {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest()
+    };
+
+    await this.fetchAirportsInViewport(bbox);
+  }
+
+  // Limit for viewport-based airport loading (lower than default to improve performance)
+  private static readonly VIEWPORT_AIRPORT_LIMIT = 500;
+
+  /**
+   * Fetch airports within the current viewport bounds
+   */
+  private async fetchAirportsInViewport(bbox: BoundingBox): Promise<void> {
+    const store = this.store as any;
+    const state = store.getState();
+
+    // Skip if route or locate is active (don't override those results)
+    if (state.route || state.locate) {
+      return;
+    }
+
+    try {
+      // Set flag to prevent fitBounds during viewport loading
+      this.isViewportLoading = true;
+      store.getState().setLoading(true);
+      // Use viewport-specific limit for better performance
+      const filters = { ...state.filters, limit: Application.VIEWPORT_AIRPORT_LIMIT };
+      const response = await this.apiAdapter.getAirportsByBounds(bbox, filters);
+      store.getState().setAirports(response.data);
+    } catch (error: any) {
+      console.error('Error loading airports in viewport:', error);
+      // Don't show error to user for viewport loading - just log it
+    } finally {
+      store.getState().setLoading(false);
+      // Reset flag after a short delay to ensure subscription has processed
+      setTimeout(() => {
+        this.isViewportLoading = false;
+      }, 100);
     }
   }
 
@@ -677,9 +943,10 @@ class Application {
     runways: any[];
     aipEntries: any[];
     rules: any;
+    gaSummary?: any;
   }): void {
     const airport = data.detail;
-    const { procedures, runways, aipEntries, rules } = data;
+    const { procedures, runways, aipEntries, rules, gaSummary } = data;
 
     const infoContainer = document.getElementById('airport-info');
     const rightPanel = document.getElementById('right-panel');
@@ -783,6 +1050,16 @@ class Application {
       </div>
     `;
 
+    // Add Customs and Immigration section if available from GA summary
+    if (gaSummary?.notification_summary) {
+      html += `
+        <div class="info-card">
+          <h6><i class="fas fa-passport"></i> Customs and Immigration</h6>
+          <p class="text-muted small" style="white-space: pre-line;">${this.escapeHtml(gaSummary.notification_summary.replace(/\*\*/g, ''))}</p>
+        </div>
+      `;
+    }
+
     // Add runways section
     if (runways && runways.length > 0) {
       html += `
@@ -845,9 +1122,19 @@ class Application {
 
     infoContainer.innerHTML = html;
 
-    // Display AIP data and rules
+    // Display AIP data
     this.displayAIPData(aipEntries);
-    this.displayCountryRules(rules, airport.iso_country);
+
+    // Store country rules in centralized state and let the Rules panel render from store
+    const store = this.store as any;
+    if (airport.iso_country && rules) {
+      store.getState().setRulesForCountry(airport.iso_country, rules);
+      store.getState().setRulesSelection([airport.iso_country], null);
+      store.getState().setRulesTextFilter('');
+    } else {
+      // If we don't have country information, clear rules state so panel shows appropriate message
+      store.getState().clearRules();
+    }
 
     // Track selected airport and load GA relevance data
     this.currentSelectedIcao = airport.ident;
@@ -940,6 +1227,116 @@ class Application {
 
     aipContentContainer.innerHTML = html;
     this.initializeAIPFilter();
+  }
+
+  /**
+   * Compute visible rules from centralized store state
+   * This applies both the LLM visual filter (tagsByCountry) and the
+   * free-text filter from the Rules search box.
+   */
+  private getVisibleRulesFromStore(): { countryLabel: string | null; totalRules: number; categories: any[] } {
+    const state = (this.store as any).getState() as AppState & { rules: any };
+    const rulesState = (state as any).rules;
+    if (!rulesState) {
+      return { countryLabel: null, totalRules: 0, categories: [] };
+    }
+
+    const activeCountries: string[] = rulesState.activeCountries || [];
+    const allRulesByCountry = rulesState.allRulesByCountry || {};
+    const visualFilter = rulesState.visualFilter || null;
+    const tagsByCountry: Record<string, string[]> = visualFilter?.tagsByCountry || {};
+    const textFilter: string = (rulesState.textFilter || '').toLowerCase();
+
+    const combinedCategories: any[] = [];
+    let totalRules = 0;
+
+    activeCountries.forEach((countryCode: string) => {
+      const countryRules: any = allRulesByCountry[countryCode];
+      if (!countryRules || !Array.isArray(countryRules.categories)) {
+        return;
+      }
+
+      const relevantTags = tagsByCountry[countryCode] || [];
+
+      countryRules.categories.forEach((cat: any) => {
+        const rulesArray: any[] = Array.isArray(cat.rules) ? cat.rules : [];
+
+        // Apply tag filter (tagsByCountry) and free-text filter
+        const visibleRules = rulesArray.filter((rule: any) => {
+          // Apply tag filter: show rule if it has ANY of the relevant tags
+          if (relevantTags.length > 0) {
+            const ruleTags: string[] = Array.isArray(rule.tags) ? rule.tags : [];
+            const hasMatchingTag = relevantTags.some(tag => ruleTags.includes(tag));
+            if (!hasMatchingTag) return false;
+          }
+
+          // Apply free-text filter
+          if (!textFilter) return true;
+
+          const question = (rule.question_text || '').toString().toLowerCase();
+          const answer = (rule.answer_html || '').toString().toLowerCase();
+          const tags = Array.isArray(rule.tags) ? rule.tags.map((t: any) => String(t)).join(' ') : '';
+          const lastReviewed = rule.last_reviewed ? String(rule.last_reviewed) : '';
+          const confidence = rule.confidence ? String(rule.confidence) : '';
+          const categoryName = (cat.name || '').toString().toLowerCase();
+          const countryLabel = countryCode.toLowerCase();
+
+          const combined = `${question} ${answer} ${tags} ${lastReviewed} ${confidence} ${categoryName} ${countryLabel}`.toLowerCase();
+          return combined.includes(textFilter);
+        });
+
+        if (visibleRules.length === 0) {
+          return;
+        }
+
+        const displayName = activeCountries.length > 1
+          ? `${countryCode}: ${cat.name}`
+          : cat.name;
+
+        combinedCategories.push({
+          ...cat,
+          name: displayName,
+          country: countryCode,
+          count: visibleRules.length,
+          rules: visibleRules
+        });
+
+        totalRules += visibleRules.length;
+      });
+    });
+
+    const countryLabel = activeCountries.length > 0 ? activeCountries.join(', ') : null;
+    return { countryLabel, totalRules, categories: combinedCategories };
+  }
+
+  /**
+   * Render Rules panel from centralized store state
+   */
+  private renderRulesPanelFromStore(): void {
+    const rulesContainer = document.getElementById('rules-content');
+    const rulesSummary = document.getElementById('rules-summary');
+
+    if (!rulesContainer) {
+      return;
+    }
+
+    const { countryLabel, totalRules, categories } = this.getVisibleRulesFromStore();
+
+    if (!countryLabel || !categories.length) {
+      if (rulesSummary) {
+        rulesSummary.textContent = '';
+      }
+      rulesContainer.innerHTML = '<p class="text-muted">No rules to display. Ask a country-specific question to see relevant rules.</p>';
+      return;
+    }
+
+    const combinedRules = {
+      country: countryLabel,
+      total_rules: totalRules,
+      categories
+    };
+
+    this.displayCountryRules(combinedRules, countryLabel);
   }
 
   /**
@@ -1043,6 +1440,7 @@ class Application {
     rulesContainer.innerHTML = html;
     this.initializeRuleSections();
     this.initializeRulesFilter();
+    this.syncRulesFilterInput();
   }
 
   /**
@@ -1475,96 +1873,64 @@ class Application {
   }
 
   /**
-   * Initialize rules filter
+   * Initialize rules filter (only once - don't re-initialize on every render)
    */
+  private rulesFilterInitialized = false;
+
   private initializeRulesFilter(): void {
-    const filterInput = document.getElementById('rules-filter-input');
-    const clearButton = document.getElementById('rules-filter-clear');
+    // Only initialize once to avoid cloning/replacing input on every render (causes focus loss)
+    if (this.rulesFilterInitialized) return;
+
+    const filterInput = document.getElementById('rules-filter-input') as HTMLInputElement;
+    const clearButton = document.getElementById('rules-filter-clear') as HTMLButtonElement;
 
     if (!filterInput) return;
 
-    // Remove existing listeners by cloning and replacing
-    const newFilterInput = filterInput.cloneNode(true) as HTMLInputElement;
-    filterInput.parentNode?.replaceChild(newFilterInput, filterInput);
+    this.rulesFilterInitialized = true;
 
-    const newClearButton = clearButton ? (clearButton.cloneNode(true) as HTMLButtonElement) : null;
-    if (clearButton && newClearButton) {
-      clearButton.parentNode?.replaceChild(newClearButton, clearButton);
-    }
-
-    newFilterInput.value = ''; // Clear any stale value
-
-    newFilterInput.addEventListener('input', (e) => {
-      this.handleRulesFilter(e as any);
+    filterInput.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement;
+      const store = this.store as any;
+      store.getState().setRulesTextFilter(target.value || '');
+      this.renderRulesPanelFromStore();
     });
 
-    if (newClearButton) {
-      newClearButton.addEventListener('click', () => {
-        newFilterInput.value = '';
-        this.handleRulesFilter({ target: { value: '' } } as any);
+    if (clearButton) {
+      clearButton.addEventListener('click', () => {
+        filterInput.value = '';
+        const store = this.store as any;
+        store.getState().setRulesTextFilter('');
+        this.renderRulesPanelFromStore();
       });
     }
+
+    // Sync input value with store on first initialization
+    this.syncRulesFilterInput();
   }
 
   /**
-   * Handle rules filter
+   * Sync rules filter input value with store (without touching focus)
    */
-  private handleRulesFilter(event: { target: { value: string } }): void {
-    const filterText = (event.target.value || '').toLowerCase();
-    const entries = document.querySelectorAll('.rules-entry');
+  private syncRulesFilterInput(): void {
+    const filterInput = document.getElementById('rules-filter-input') as HTMLInputElement;
+    if (!filterInput) return;
 
-    const matchedSections = new Set<string>();
+    // Don't update if input has focus (user is typing)
+    if (document.activeElement === filterInput) return;
 
-    entries.forEach((entry) => {
-      const question = entry.querySelector('.rule-question')?.textContent || '';
-      const answer = entry.querySelector('.rule-answer')?.textContent || '';
-      const tags = Array.from(entry.querySelectorAll('.badge')).map(b => b.textContent || '').join(' ');
-      const meta = entry.querySelector('.text-muted')?.textContent || '';
-      const category = entry.closest('.rules-section')?.getAttribute('data-category') || '';
+    try {
+      const state = (this.store as any).getState() as AppState & { rules: any };
+      const rulesState = (state as any).rules;
+      const storeValue = (rulesState && typeof rulesState.textFilter === 'string')
+        ? rulesState.textFilter
+        : '';
 
-      const combined = `${question} ${answer} ${tags} ${meta} ${category}`.toLowerCase();
-      const matches = combined.includes(filterText);
-
-      if (matches) {
-        entry.classList.remove('hidden');
-        entry.classList.toggle('highlight', Boolean(filterText));
-        const sectionContent = entry.closest('.rules-section-content');
-        if (sectionContent) {
-          matchedSections.add((sectionContent as HTMLElement).id);
-        }
-      } else {
-        entry.classList.add('hidden');
-        entry.classList.remove('highlight');
+      if (filterInput.value !== storeValue) {
+        filterInput.value = storeValue;
       }
-    });
-
-    // Expand matched sections, collapse others if filter active
-    const sections = document.querySelectorAll('.rules-section-content');
-    sections.forEach((section) => {
-      const sectionId = (section as HTMLElement).id;
-      const toggle = document.getElementById(`rules-toggle-${sectionId}`);
-      const visibleEntries = section.querySelectorAll('.rules-entry:not(.hidden)');
-      const sectionElement = section.parentElement as HTMLElement;
-
-      if (filterText) {
-        const shouldExpand = matchedSections.has(sectionId) || visibleEntries.length > 0;
-        if (shouldExpand) {
-          section.classList.add('expanded');
-          if (toggle) toggle.classList.add('expanded');
-        } else {
-          section.classList.remove('expanded');
-          if (toggle) toggle.classList.remove('expanded');
-        }
-        if (sectionElement) {
-          sectionElement.style.display = visibleEntries.length > 0 ? 'block' : 'none';
-        }
-      } else {
-        // Restore visibility when filter cleared
-        if (sectionElement) {
-          sectionElement.style.display = 'block';
-        }
-      }
-    });
+    } catch {
+      // Ignore errors
+    }
   }
 
 

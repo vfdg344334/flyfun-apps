@@ -1,11 +1,143 @@
 /**
  * LLM Integration - Clean interface for chatbot interactions
  * Handles visualization data from LLM responses and applies filter profiles
+ *
+ * This adapter normalizes data from chatbot responses to match the app's
+ * internal types. For example, chatbot may send 'country' but app uses 'iso_country'.
  */
 
 import { useStore } from '../store/store';
-import type { Airport, FilterConfig } from '../store/types';
+import type { Airport, FilterConfig, LegendMode } from '../store/types';
 import { APIAdapter } from './api-adapter';
+
+/**
+ * Tool-to-Legend Mapping Configuration
+ *
+ * Maps chatbot tool names to suggested legend modes.
+ * This allows the UI to automatically switch to the most relevant legend
+ * based on what the user is asking about.
+ *
+ * Priority: More specific mappings should come first if we ever need
+ * to support multiple matching conditions.
+ *
+ * To add a new mapping:
+ * 1. Add the tool name as key
+ * 2. Set the legend mode value
+ * 3. Optionally add a filter-based override in getSuggestedLegend()
+ */
+const TOOL_TO_LEGEND_MAP: Partial<Record<string, LegendMode>> = {
+  // Notification queries → notification legend
+  'get_notification_for_airport': 'notification',
+
+  // Airport details → airport-type (shows border crossing, procedures)
+  'get_airport_details': 'airport-type',
+
+  // Route/location searches → airport-type by default
+  // (can be overridden by filter-based logic below)
+  'find_airports_near_route': 'airport-type',
+  'find_airports_near_location': 'airport-type',
+  'search_airports': 'airport-type',
+
+  // Rules tools don't change legend (they show rules panel, not map)
+  // 'answer_rules_question': null,
+  // 'browse_rules': null,
+  // 'compare_rules_between_countries': null,
+};
+
+/**
+ * Filter-based legend overrides
+ *
+ * When certain filters are present, they suggest a more relevant legend
+ * than the tool default. These take precedence over tool-based mappings.
+ */
+interface FilterLegendOverride {
+  condition: (filters: Record<string, unknown>) => boolean;
+  legend: LegendMode;
+  priority: number; // Higher = more specific
+}
+
+const FILTER_LEGEND_OVERRIDES: FilterLegendOverride[] = [
+  // Notification-related queries → notification legend
+  // max_hours_notice filter indicates user cares about notification requirements
+  {
+    condition: (f) => f.max_hours_notice != null,
+    legend: 'notification',
+    priority: 110,
+  },
+  // Customs/border crossing queries → airport-type
+  {
+    condition: (f) => f.point_of_entry === true,
+    legend: 'airport-type',
+    priority: 100,
+  },
+  // Procedure queries → procedure-precision
+  {
+    condition: (f) => f.has_procedures === true,
+    legend: 'procedure-precision',
+    priority: 90,
+  },
+  // Extensible: add more filter-based overrides here
+  // {
+  //   condition: (f) => f.some_filter === value,
+  //   legend: 'some-legend',
+  //   priority: X,
+  // },
+];
+
+/**
+ * Get suggested legend mode based on tool name and filters.
+ *
+ * Priority:
+ * 1. Filter-based overrides (most specific)
+ * 2. Tool-based mapping
+ * 3. null (no change suggested)
+ *
+ * @param tool - Tool name from ui_payload.tool
+ * @param filters - Optional filter profile from ui_payload.filters
+ * @returns Suggested legend mode or null if no change suggested
+ */
+export function getSuggestedLegend(
+  tool: string | undefined,
+  filters?: Record<string, unknown>
+): LegendMode | null {
+  // 1. Check filter-based overrides first (most specific)
+  if (filters && typeof filters === 'object') {
+    const matchingOverrides = FILTER_LEGEND_OVERRIDES
+      .filter(override => override.condition(filters))
+      .sort((a, b) => b.priority - a.priority);
+
+    if (matchingOverrides.length > 0) {
+      return matchingOverrides[0].legend;
+    }
+  }
+
+  // 2. Fall back to tool-based mapping
+  if (tool && TOOL_TO_LEGEND_MAP[tool]) {
+    return TOOL_TO_LEGEND_MAP[tool]!;
+  }
+
+  // 3. No suggestion (don't change legend)
+  return null;
+}
+
+/**
+ * Normalize airport data from chatbot responses.
+ * Ensures iso_country is always set (chatbot may send 'country' instead).
+ */
+function normalizeAirport(airport: any): Airport {
+  return {
+    ...airport,
+    // Normalize: prefer iso_country, fall back to country for legacy responses
+    iso_country: airport.iso_country || airport.country,
+  };
+}
+
+/**
+ * Normalize an array of airports from chatbot responses.
+ */
+function normalizeAirports(airports: any[]): Airport[] {
+  return airports.map(normalizeAirport);
+}
 
 /**
  * Visualization types from LLM
@@ -18,9 +150,10 @@ interface Visualization {
     from: {icao: string; lat?: number; lon?: number; latitude?: number; longitude?: number};
     to: {icao: string; lat?: number; lon?: number; latitude?: number; longitude?: number};
   };
-  point?: {lat: number; lng: number; label: string};
+  point?: {lat: number; lon?: number; lng?: number; label?: string};
   marker?: {ident: string; lat?: number; lon?: number; zoom?: number};
   filter_profile?: Partial<FilterConfig>;
+  radius_nm?: number;  // Search radius for point_with_markers and route_with_markers
 }
 
 /**
@@ -37,6 +170,12 @@ export class LLMIntegration {
     this.apiAdapter = apiAdapter;
     this.uiManager = uiManager;
     this.visualizationEngine = visualizationEngine;
+
+    // Listen for clear-llm-highlights event (from UI manager when user initiates new search or clears filters)
+    window.addEventListener('clear-llm-highlights', (() => {
+      console.log('🔵 clear-llm-highlights event received');
+      this.clearLLMHighlights();
+    }) as EventListener);
   }
   
   /**
@@ -98,75 +237,135 @@ export class LLMIntegration {
   }
   
   /**
+   * Check if filter profile has meaningful filters (not just search_query or empty)
+   * Meaningful filters: country, point_of_entry, fuel_type, has_procedures, etc.
+   */
+  private hasMeaningfulFilters(filterProfile: Record<string, unknown> | undefined): boolean {
+    if (!filterProfile || typeof filterProfile !== 'object') {
+      return false;
+    }
+
+    // List of filter keys that would trigger loading all matching airports
+    const meaningfulFilterKeys = [
+      'country',
+      'point_of_entry',
+      'fuel_type',
+      'has_avgas',   // Keep for backwards compatibility with chatbot
+      'has_jet_a',   // Keep for backwards compatibility with chatbot
+      'has_procedures',
+      'has_aip_data',
+      'has_hard_runway',
+      'min_runway_length_ft',
+      'max_runway_length_ft',
+      'max_landing_fee',
+      'hotel',
+      'restaurant',
+    ];
+
+    return meaningfulFilterKeys.some(key => {
+      const value = filterProfile[key];
+      // Check if the value is truthy (for booleans) or non-empty (for strings/numbers)
+      return value !== undefined && value !== null && value !== '' && value !== false;
+    });
+  }
+
+  /**
+   * Add blue highlights for airports returned by the tool
+   */
+  private addAirportHighlights(airports: Airport[], label: string = 'Mentioned in chat'): number {
+    const store = this.store as any;
+    let highlightCount = 0;
+
+    airports.forEach((airport: any) => {
+      if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
+        store.getState().highlightPoint({
+          id: `llm-airport-${airport.ident}`,
+          type: 'airport' as const,
+          lat: airport.latitude_deg,
+          lng: airport.longitude_deg,
+          color: '#007bff',
+          radius: 15,
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>${label}</em>`,
+          country: airport.iso_country
+        });
+        highlightCount++;
+      }
+    });
+
+    return highlightCount;
+  }
+
+  /**
    * Handle markers visualization
+   *
+   * Two modes:
+   * 1. With meaningful filters (country, point_of_entry, etc.):
+   *    - Apply filters to store → Load ALL matching airports via API → Highlight specific ones
+   * 2. Without meaningful filters (just airport list):
+   *    - Show returned airports → Fit bounds → Highlight them
    */
   private handleMarkers(viz: Visualization): boolean {
-    const allAirports = viz.data || viz.markers || [];
-    const highlightAirports = (viz as any).markers || allAirports; // Airports to highlight (subset)
-    const style = (viz as any).style; // Get style field (e.g., "customs")
+    // Airports returned by the tool (these will be highlighted)
+    // Normalize at entry point to ensure iso_country is set
+    const toolAirports = normalizeAirports(viz.data || viz.markers || []);
+    const filterProfile = viz.filter_profile as Record<string, unknown> | undefined;
 
-    if (!Array.isArray(allAirports) || allAirports.length === 0) {
+    if (!Array.isArray(toolAirports) || toolAirports.length === 0) {
       console.error('LLMIntegration: markers visualization missing valid airports array', viz);
       return false;
     }
 
+    const hasMeaningfulFilters = this.hasMeaningfulFilters(filterProfile);
+
     console.log('LLMIntegration: Handling markers visualization', {
       type: viz.type,
-      style: style,
-      totalAirportCount: allAirports.length,
-      highlightAirportCount: highlightAirports.length,
-      allAirports: allAirports.slice(0, 3).map((a: any) => a.ident), // Log first 3 ICAOs
-      highlightAirports: highlightAirports.slice(0, 3).map((a: any) => a.ident)
+      toolAirportCount: toolAirports.length,
+      hasMeaningfulFilters,
+      filterProfile,
+      toolAirports: toolAirports.slice(0, 3).map((a: any) => a.ident)
     });
 
-    // Clear old LLM highlights if we're adding new ones
-    if (style === 'customs') {
-      this.clearLLMHighlights();
-    }
+    // Clear old LLM highlights
+    this.clearLLMHighlights();
 
-    // Update store with ALL airports - this should trigger the map update via store subscription
     const store = this.store as any;
-    store.getState().setAirports(allAirports);
 
-    console.log('LLMIntegration: Set airports in store', {
-      storeAirportCount: store.getState().airports.length,
-      storeFilteredCount: store.getState().filteredAirports.length
-    });
+    if (hasMeaningfulFilters) {
+      // MODE 1: Has meaningful filters
+      // Apply filters → Load ALL matching airports → Highlight specific ones
 
-    // Add blue highlights for customs/border crossing airports (only for highlighted subset)
-    if (style === 'customs') {
-      let highlightCount = 0;
-      highlightAirports.forEach((airport: any) => {
-        if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
-          store.getState().highlightPoint({
-            id: `llm-airport-${airport.ident}`,
-            type: 'airport' as const,
-            lat: airport.latitude_deg,
-            lng: airport.longitude_deg,
-            color: '#007bff',
-            radius: 15,
-            popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Border Crossing Point</em>`,
-            country: airport.iso_country || airport.country
-          });
-          highlightCount++;
-        }
-      });
-      console.log(`✅ Added blue highlights for ${highlightCount} border crossing airports (from ${highlightAirports.length} LLM-mentioned airports)`);
-    }
+      console.log('🔵 Mode: Filters - applying filters and loading all matching airports');
 
-    // Fit bounds will be handled automatically by updateMarkers via store subscription
-    // But we can also fit bounds here as a backup after a delay
-    if (this.visualizationEngine && allAirports.length > 0) {
-      setTimeout(() => {
-        this.visualizationEngine.fitBounds();
-        console.log('LLMIntegration: Fitted map bounds to show all airports');
-      }, 300); // Delay to ensure markers are rendered via store subscription
-    }
+      // 1. Apply filter profile to store (updates UI filter controls)
+      this.applyFilterProfile(filterProfile!);
 
-    // Apply filter profile if provided
-    const filterProfile = viz.filter_profile as Partial<FilterConfig> | undefined;
-    if (filterProfile) {
-      this.applyFilterProfile(filterProfile);
+      // 2. Add blue highlights for the specific airports from the tool
+      const highlightCount = this.addAirportHighlights(toolAirports, 'Recommended by assistant');
+      console.log(`✅ Added blue highlights for ${highlightCount} recommended airports`);
+
+      // 3. Dispatch event to load ALL airports matching the filters
+      window.dispatchEvent(new CustomEvent('trigger-filter-refresh'));
+
+    } else {
+      // MODE 2: No meaningful filters (just airport list)
+      // Show returned airports → Fit bounds → Highlight them
+
+      console.log('🔵 Mode: No filters - showing returned airports directly');
+
+      // 1. Set airports in store (shows only these airports)
+      store.getState().setAirports(toolAirports);
+
+      // 2. Add blue highlights for all returned airports
+      const highlightCount = this.addAirportHighlights(toolAirports, 'Search result');
+      console.log(`✅ Added blue highlights for ${highlightCount} airports`);
+
+      // 3. Fit bounds to show all airports
+      if (this.visualizationEngine && toolAirports.length > 0) {
+        setTimeout(() => {
+          this.visualizationEngine.fitBounds();
+          console.log('LLMIntegration: Fitted map bounds to show all airports');
+        }, 100);
+      }
     }
 
     return true;
@@ -189,7 +388,8 @@ export class LLMIntegration {
     }
 
     const route = viz.route as Visualization['route'];
-    const airports = (viz.markers || []) as Airport[];
+    // Normalize at entry point to ensure iso_country is set
+    const airports = normalizeAirports(viz.markers || []);
     const fromIcao = route?.from?.icao;
     const toIcao = route?.to?.icao;
 
@@ -225,10 +425,10 @@ export class LLMIntegration {
           color: '#007bff',
           radius: 15,
           popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
-          country: airport.iso_country || airport.country  // Add country for filtering
+          country: airport.iso_country
         });
         highlightCount++;
-        console.log(`🔵 Added highlight for ${airport.ident} (${airport.iso_country || airport.country || 'unknown'})`);
+        console.log(`🔵 Added highlight for ${airport.ident} (${airport.iso_country || 'unknown'})`);
       }
     });
 
@@ -268,13 +468,13 @@ export class LLMIntegration {
 
     if (highlights instanceof globalThis.Map) {
       highlights.forEach((_, id: string) => {
-        if (id.startsWith('llm-airport-')) {
+        if (id.startsWith('llm-airport-') || id === 'llm-location-center') {
           idsToRemove.push(id);
         }
       });
     } else if (highlights && typeof highlights === 'object') {
       Object.keys(highlights).forEach((id: string) => {
-        if (id.startsWith('llm-airport-')) {
+        if (id.startsWith('llm-airport-') || id === 'llm-location-center') {
           idsToRemove.push(id);
         }
       });
@@ -353,26 +553,49 @@ export class LLMIntegration {
   
   /**
    * Handle point with markers visualization
+   * Shows all airports near location via search, highlights specific airports from chat
    */
   private handlePointWithMarkers(viz: Visualization): boolean {
-    const airports = (viz.markers || []) as Airport[];
-    const pointData = viz.point as {lat: number; lng: number; label?: string} | undefined;
+    // Normalize at entry point to ensure iso_country is set
+    const recommendedAirports = normalizeAirports(viz.markers || []);
+    const pointData = viz.point;
+    const radiusNm = viz.radius_nm || 50.0;
 
-    if (!Array.isArray(airports) || airports.length === 0) {
-      console.error('point_with_markers missing valid airports array');
+    if (!pointData) {
+      console.error('point_with_markers missing point data');
       return false;
     }
+
+    // Normalize lon/lng
+    const pointLon = pointData.lon ?? pointData.lng;
+    if (pointLon === undefined) {
+      console.error('point_with_markers missing longitude');
+      return false;
+    }
+
+    console.log('🔵 handlePointWithMarkers called with viz:', {
+      point: pointData,
+      radiusNm,
+      recommendedCount: recommendedAirports.length
+    });
 
     // Clear old LLM highlights
     this.clearLLMHighlights();
 
-    // Update store with airports
     const store = this.store as any;
-    store.getState().setAirports(airports as Airport[]);
 
-    // Add blue highlights for airports mentioned in chat (same as route_with_markers)
+    // Add location marker for the search point itself (e.g., "Bromley")
+    store.getState().highlightPoint({
+      id: 'llm-location-center',
+      type: 'point' as const,
+      lat: pointData.lat,
+      lng: pointLon,
+      popup: `<b>${pointData.label || 'Search Location'}</b><br>Search center point`
+    });
+
+    // Add blue highlights for recommended airports only (not all airports)
     let highlightCount = 0;
-    airports.forEach((airport) => {
+    recommendedAirports.forEach((airport) => {
       if (airport.ident && airport.latitude_deg && airport.longitude_deg) {
         store.getState().highlightPoint({
           id: `llm-airport-${airport.ident}`,
@@ -381,42 +604,49 @@ export class LLMIntegration {
           lng: airport.longitude_deg,
           color: '#007bff',
           radius: 15,
-          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Mentioned in chat</em>`,
-          country: airport.iso_country || airport.country  // Add country for filtering
+          popup: `<b>${airport.ident}</b><br>${airport.name || 'Airport'}<br><em>Recommended by assistant</em>`,
+          country: airport.iso_country
         });
         highlightCount++;
       }
     });
 
-    console.log(`✅ Point with markers: highlighted ${highlightCount} airports from chat`);
+    console.log(`🔵 Added highlights for ${highlightCount} recommended airports`);
 
-    // Fit bounds to show all airports after markers are updated
-    if (this.visualizationEngine && airports.length > 0) {
-      setTimeout(() => {
-        this.visualizationEngine.fitBounds();
-        console.log('LLMIntegration: Fitted map bounds for point with airports');
-      }, 300);
-    }
+    // Set locate state with center point
+    store.getState().setLocate({
+      query: pointData.label || null,
+      center: {
+        lat: pointData.lat,
+        lng: pointLon,
+        label: pointData.label || 'Location'
+      },
+      radiusNm: radiusNm
+    });
 
-    // Set locate state if point provided
-    if (pointData) {
-      (this.store as any).getState().setLocate({
-        query: pointData.label || null,
-        center: {
-          lat: pointData.lat,
-          lng: pointData.lng,
-          label: pointData.label || 'Location'
-        },
-        radiusNm: 50.0 // Default, will be updated from filter profile if provided
-      });
-    }
+    // Update search radius in store (single source of truth)
+    store.getState().setFilters({ search_radius_nm: radiusNm });
 
-    // Apply filter profile if provided
+    // Apply filter profile if provided (before triggering search)
     const filterProfile = viz.filter_profile;
     if (filterProfile) {
       this.applyFilterProfile(filterProfile);
     }
 
+    // Update search query in store (will display in UI)
+    store.getState().setSearchQuery(pointData.label || '');
+
+    // Trigger locate search via event (uses normal search flow to load ALL airports)
+    // Radius is read from store.filters.search_radius_nm
+    window.dispatchEvent(new CustomEvent('trigger-locate', {
+      detail: {
+        lat: pointData.lat,
+        lon: pointLon,
+        label: pointData.label
+      }
+    }));
+
+    console.log(`✅ LLM point visualization: location "${pointData.label}", radius ${radiusNm}nm, highlighting ${recommendedAirports.length} recommended airports`);
     return true;
   }
   
@@ -440,19 +670,52 @@ export class LLMIntegration {
     if (profile.has_aip_data) filters.has_aip_data = Boolean(profile.has_aip_data);
     if (profile.has_hard_runway) filters.has_hard_runway = Boolean(profile.has_hard_runway);
     if (profile.point_of_entry) filters.point_of_entry = Boolean(profile.point_of_entry);
-    if (profile.has_avgas) filters.has_avgas = Boolean(profile.has_avgas);
-    if (profile.has_jet_a) filters.has_jet_a = Boolean(profile.has_jet_a);
+    // Handle fuel_type (new style) or has_avgas/has_jet_a (legacy chatbot style)
+    if (profile.fuel_type) {
+      filters.fuel_type = String(profile.fuel_type) as 'avgas' | 'jet_a';
+    } else if (profile.has_avgas) {
+      filters.fuel_type = 'avgas';
+    } else if (profile.has_jet_a) {
+      filters.fuel_type = 'jet_a';
+    }
     if (profile.max_runway_length_ft) filters.max_runway_length_ft = Number(profile.max_runway_length_ft);
     if (profile.min_runway_length_ft) filters.min_runway_length_ft = Number(profile.min_runway_length_ft);
     if (profile.max_landing_fee) filters.max_landing_fee = Number(profile.max_landing_fee);
+    if (profile.hotel) filters.hotel = String(profile.hotel) as 'at_airport' | 'vicinity';
+    if (profile.restaurant) filters.restaurant = String(profile.restaurant) as 'at_airport' | 'vicinity';
     
     // Update store filters
     const store = this.store as any;
     store.getState().setFilters(filters);
-    
+
     // Sync to UI controls (if uiManager available)
     if (this.uiManager && typeof this.uiManager.syncFiltersToUI === 'function') {
       this.uiManager.syncFiltersToUI(filters);
+    }
+  }
+
+  /**
+   * Apply suggested legend mode based on tool and filters from ui_payload.
+   *
+   * Called by chatbot-manager when processing ui_payload events.
+   * Uses the tool-to-legend mapping to automatically switch to the most
+   * relevant legend based on what the user is asking about.
+   *
+   * @param tool - Tool name from ui_payload.tool
+   * @param filters - Optional filter profile from ui_payload.filters
+   */
+  applySuggestedLegend(tool: string | undefined, filters?: Record<string, unknown>): void {
+    const suggestedLegend = getSuggestedLegend(tool, filters);
+
+    if (suggestedLegend) {
+      const store = this.store as any;
+      const currentLegend = store.getState().visualization.legendMode;
+
+      // Only change if different from current
+      if (currentLegend !== suggestedLegend) {
+        store.getState().setLegendMode(suggestedLegend);
+        console.log(`🔵 LLM suggested legend: ${suggestedLegend} (tool: ${tool}, was: ${currentLegend})`);
+      }
     }
   }
 }

@@ -28,6 +28,7 @@ python tools/aipexport.py [AIRPORTS ...]
   [--worldairports --worldairports-db PATH --worldairports-filter {required,europe,all}]
   [--france-eaip DIR | --france-web [--eaip-date YYYY-MM-DD]]
   [--uk-eaip DIR | --uk-web]
+  [--norway-web]
   [--autorouter --autorouter-username USER --autorouter-password PASS]
   [--pointdepassage [--pointdepassage-journal FILE]]
   [--database-storage[=PATH]] [--json FILE] [--save-all-fields]
@@ -65,6 +66,7 @@ from euro_aip.sources import (
 )
 from euro_aip.sources.france_eaip_web import FranceEAIPWebSource
 from euro_aip.sources.uk_eaip_web import UKEAIPWebSource
+from euro_aip.sources.norway_eaip_web import NorwayEAIPWebSource
 from euro_aip.models import EuroAipModel, Airport
 from euro_aip.sources.base import SourceInterface
 from euro_aip.utils.field_standardization_service import FieldStandardizationService
@@ -138,7 +140,13 @@ class ModelBuilder:
                 cache_dir=str(self.cache_dir),
                 airac_date=self.args.airac_date
             )
-        
+
+        if getattr(self.args, 'norway_web', False):
+            self.sources['norway_eaip_web'] = NorwayEAIPWebSource(
+                cache_dir=str(self.cache_dir),
+                airac_date=self.args.airac_date
+            )
+
         if self.args.uk_eaip:
             self.sources['uk_eaip'] = UKEAIPSource(
                 cache_dir=str(self.cache_dir),
@@ -193,7 +201,7 @@ class ModelBuilder:
                         self._update_model_with_worldairports(source, model, airports)
                     else:
                         source.update_model(model, airports)
-                    logger.info(f"Updated model with {source_name}: {len(model.airports)} airports")
+                    logger.info(f"Updated model with {source_name}: {model.airports.count()} airports")
                 else:
                     logger.warning(f"Source {source_name} doesn't implement SourceInterface, skipping")
             except Exception as e:
@@ -201,26 +209,39 @@ class ModelBuilder:
         
         # Filter to specific airports if provided
         if airports:
+            logger.info(f"Filtering model to {len(airports)} specified airports")
             filtered_model = EuroAipModel()
+
+            # Get airports to add
+            airports_to_add = []
             for airport_code in airports:
-                if airport_code in model.airports:
-                    filtered_model.airports[airport_code] = model.airports[airport_code]
+                airport = model.airports.where(ident=airport_code).first()
+                if airport:
+                    airports_to_add.append(airport)
                 else:
                     logger.warning(f"Airport {airport_code} not found in model")
-            model = filtered_model
+
+            # Use bulk add for efficiency
+            if airports_to_add:
+                result = filtered_model.bulk_add_airports(airports_to_add)
+                logger.info(f"Filtered model created: {result['added']} airports added")
+                model = filtered_model
+            else:
+                logger.warning("No airports found to add to filtered model, using original model")
+
         
         # Log field mapping statistics
         mapping_stats = model.get_field_mapping_statistics()
         logger.info(f"Field mapping statistics: {mapping_stats['mapped_fields']}/{mapping_stats['total_fields']} fields mapped ({mapping_stats['mapping_rate']:.1%})")
         logger.info(f"Average mapping score: {mapping_stats['average_mapping_score']:.2f}")
         
-        logger.info(f"Final model contains {len(model.airports)} airports")
+        logger.info(f"Final model contains {model.airports.count()} airports")
         return model
 
     def _update_model_with_worldairports(self, source, model, airports):
         """Special update logic for WorldAirportsSource with filtering."""
         if self.args.worldairports_filter == 'required':
-            existing_airports = list(model.airports.keys())
+            existing_airports = [a.ident for a in model.airports]
             if existing_airports:
                 source.update_model(model, existing_airports)
                 logger.info(f"Updated WorldAirports with {len(existing_airports)} existing airports")
@@ -271,8 +292,8 @@ class ModelBuilder:
                 logger.debug(f"Source {source_name} does not support find_available_airports")
         
         if not all_airports:
-            if self.base_model is not None and getattr(self.base_model, 'airports', None):
-                base_airports = list(self.base_model.airports.keys())
+            if self.base_model is not None:
+                base_airports = [a.ident for a in self.base_model.airports]
                 logger.info(f"Using {len(base_airports)} airports from base model")
                 return base_airports
             logger.warning("No airports found from any source that supports find_available_airports")
@@ -292,7 +313,7 @@ class JSONExporter:
     
     def save_model(self, model: EuroAipModel):
         """Export the entire model to JSON."""
-        logger.info(f"Exporting {len(model.airports)} airports to JSON")
+        logger.info(f"Exporting {model.airports.count()} airports to JSON")
         
         # Convert model to dictionary
         model_data = model.to_dict()
@@ -384,6 +405,7 @@ def main():
     parser.add_argument('--eaip-date', help='eAIP date (YYYY-MM-DD) for France web source (defaults to AIRAC date if not provided)', required=False)
     parser.add_argument('--uk-eaip', help='UK eAIP root directory')
     parser.add_argument('--uk-web', help='Enable UK eAIP web source (HTML index)', action='store_true')
+    parser.add_argument('--norway-web', help='Enable Norway eAIP web source (HTML index)', action='store_true')
     parser.add_argument('--airac-date', help='AIRAC effective date (YYYY-MM-DD) for web sources', required=False)
     
     parser.add_argument('--autorouter', help='Enable Autorouter source', action='store_true')
@@ -418,8 +440,9 @@ def main():
     
     # Validate that at least one source and one output format are specified
     sources_enabled = any([
-        args.database is not None, args.worldairports, args.france_eaip, getattr(args, 'france_web', False), 
-        args.uk_eaip, getattr(args, 'uk_web', False), args.autorouter, args.pointdepassage
+        args.database is not None, args.worldairports, args.france_eaip, getattr(args, 'france_web', False),
+        args.uk_eaip, getattr(args, 'uk_web', False), getattr(args, 'norway_web', False),
+        args.autorouter, args.pointdepassage
     ])
     
     outputs_enabled = bool(args.json) or args.database_storage is not None
@@ -433,7 +456,7 @@ def main():
         return
     
     # Handle AIRAC date for web sources
-    web_sources_enabled = getattr(args, 'france_web', False) or getattr(args, 'uk_web', False)
+    web_sources_enabled = getattr(args, 'france_web', False) or getattr(args, 'uk_web', False) or getattr(args, 'norway_web', False)
     if web_sources_enabled and not args.airac_date:
         # Calculate the current effective AIRAC date
         calculator = AIRACDateCalculator()

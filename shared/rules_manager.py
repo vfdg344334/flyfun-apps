@@ -14,6 +14,51 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def normalize_tag(tag: str) -> str:
+    """Normalize tag names: lowercase and replace spaces with underscores."""
+    return tag.lower().strip().replace(" ", "_")
+
+
+# Tag specificity: more specific tags suppress broader ones when both are inferred.
+# This prevents overly broad queries when a specific tag captures the intent.
+# Format: "specific_tag": ["broader_tag1", "broader_tag2", ...]
+TAG_SUPPRESSION_RULES: Dict[str, List[str]] = {
+    # If asking about VFR/IFR transition, don't also pull in all VFR and IFR questions
+    "vfr_ifr_transition": ["vfr", "ifr"],
+    "ifr": ["vfr"],
+}
+
+
+def apply_tag_preferences(tags: List[str]) -> List[str]:
+    """
+    Remove lower-priority tags when higher-priority (more specific) ones are present.
+
+    For example, if 'vfr_ifr_transition' is in tags, remove 'vfr' and 'ifr'
+    since the transition tag is more specific and we don't want to pull in
+    all general VFR/IFR questions.
+
+    Args:
+        tags: List of tags (will be normalized)
+
+    Returns:
+        Filtered list with suppressed tags removed
+    """
+    if not tags:
+        return tags
+
+    # Normalize input tags
+    normalized = [normalize_tag(t) for t in tags]
+
+    # Collect all tags that should be suppressed
+    suppressed: Set[str] = set()
+    for tag in normalized:
+        if tag in TAG_SUPPRESSION_RULES:
+            suppressed.update(TAG_SUPPRESSION_RULES[tag])
+
+    # Return tags that aren't suppressed
+    return [t for t in normalized if t not in suppressed]
+
+
 class RulesManager:
     """Manages aviation rules data for multiple countries."""
 
@@ -100,7 +145,10 @@ class RulesManager:
             question_raw = question.get('question_raw', "")
             question_prefix = question.get('question_prefix', "")
             category = question.get('category') or "General"
-            tags = question.get('tags') or []
+            # Normalize tags: lowercase and replace spaces with underscores
+            # Tags are dynamically injected into the planner prompt via get_available_tags()
+            raw_tags = question.get('tags') or []
+            tags = [normalize_tag(t) for t in raw_tags]
             answers_by_country = question.get('answers_by_country') or {}
 
             question_info = {
@@ -188,11 +236,14 @@ class RulesManager:
         if category:
             entries = [r for r in entries if category.lower() in r.get('category').lower()]
 
-        # Apply tags filter
+        # Apply tags filter (with suppression rules for domain-specific optimization)
         if tags:
+            # Apply tag suppression: if specific tags are present, remove broader ones
+            # e.g., 'vfr_ifr_transition' suppresses 'vfr' and 'ifr'
+            filtered_tags = apply_tag_preferences(tags)
             entries = [
                 r for r in entries
-                if any(tag in (r.get('tags') or []) for tag in tags)
+                if any(tag in (r.get('tags') or []) for tag in filtered_tags)
             ]
 
         # Apply search term filter
@@ -479,6 +530,77 @@ class RulesManager:
             return []
         return sorted(self.rules_index.get('categories', {}).keys())
 
+    def get_available_tags(self) -> List[str]:
+        """Get list of available tags."""
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        return sorted(self.rules_index.get('tags', {}).keys())
+
+    def get_questions_by_tag(self, tag: str) -> List[str]:
+        """
+        Get question IDs that have a specific tag.
+
+        Args:
+            tag: Tag name to filter by (will be normalized)
+
+        Returns:
+            List of question IDs
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        # Normalize input tag to match indexed tags
+        normalized_tag = normalize_tag(tag)
+        question_ids = self.rules_index.get('tags', {}).get(normalized_tag, set())
+        return sorted(question_ids)
+
+    def get_questions_by_tags(self, tags: List[str]) -> List[str]:
+        """
+        Get question IDs that have any of the specified tags (union).
+
+        Applies tag suppression rules: if specific tags are present, broader
+        ones are removed (e.g., 'vfr_ifr_transition' suppresses 'vfr', 'ifr').
+
+        Args:
+            tags: List of tag names to filter by (each will be normalized)
+
+        Returns:
+            List of question IDs matching any of the tags
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+
+        # Apply tag suppression for domain-specific optimization
+        filtered_tags = apply_tag_preferences(tags)
+
+        question_id_set: Set[str] = set()
+        for tag in filtered_tags:
+            normalized_tag = normalize_tag(tag)
+            question_id_set.update(self.rules_index.get('tags', {}).get(normalized_tag, set()))
+        return sorted(question_id_set)
+
+    def get_questions_by_category(self, category: str) -> List[str]:
+        """
+        Get question IDs that belong to a specific category.
+
+        Args:
+            category: Category name to filter by
+
+        Returns:
+            List of question IDs
+        """
+        if not self.loaded:
+            self.load_rules()
+        if not self.loaded:
+            return []
+        question_ids = self.rules_index.get('categories', {}).get(category, set())
+        return sorted(question_ids)
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about loaded rules."""
         if not self.loaded:
@@ -490,7 +612,9 @@ class RulesManager:
             'total_questions': len(self.question_map),
             'countries': len(self.rules_index.get('by_country', {})),
             'categories': len(self.rules_index.get('categories', {})),
+            'tags': len(self.rules_index.get('tags', {})),
             'country_list': self.get_available_countries(),
-            'category_list': self.get_available_categories()
+            'category_list': self.get_available_categories(),
+            'tag_list': self.get_available_tags()
         }
 

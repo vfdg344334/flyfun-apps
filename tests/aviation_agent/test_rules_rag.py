@@ -159,22 +159,42 @@ class TestQueryReformulator:
 
 class TestBuildVectorDB:
     """Tests for build_vector_db function."""
-    
+
     def test_build_from_sample_rules(self, sample_rules_json, tmp_path):
         """Test building vector DB from sample rules.json."""
         vector_db_path = tmp_path / "test_vector_db"
-        
+
+        result = build_vector_db(
+            rules_json_path=sample_rules_json,
+            vector_db_path=vector_db_path,
+            embedding_model="text-embedding-3-small",
+            force_rebuild=True,
+            build_answer_embeddings=True  # New: also build answer embeddings
+        )
+
+        # Should return a dict with both counts
+        assert isinstance(result, dict)
+        assert result["questions"] == 3  # 2 countries for q1 + 1 country for q2
+        assert result["answers"] == 3  # Same number of answers
+        assert vector_db_path.exists()
+
+    def test_build_without_answer_embeddings(self, sample_rules_json, tmp_path):
+        """Test building vector DB without answer embeddings (legacy mode)."""
+        vector_db_path = tmp_path / "test_vector_db_legacy"
+
         doc_count = build_vector_db(
             rules_json_path=sample_rules_json,
             vector_db_path=vector_db_path,
             embedding_model="text-embedding-3-small",
-            force_rebuild=True
+            force_rebuild=True,
+            build_answer_embeddings=False  # Legacy mode
         )
-        
-        # Should have 3 documents (2 countries for q1 + 1 country for q2)
+
+        # Should return an int in legacy mode
+        assert isinstance(doc_count, int)
         assert doc_count == 3
         assert vector_db_path.exists()
-    
+
     def test_build_with_missing_file(self, tmp_path):
         """Test error handling when rules.json doesn't exist."""
         with pytest.raises(FileNotFoundError):
@@ -183,26 +203,28 @@ class TestBuildVectorDB:
                 vector_db_path=tmp_path / "db",
                 force_rebuild=True
             )
-    
+
     def test_no_rebuild_when_exists(self, sample_rules_json, tmp_path):
         """Test that existing DB is not rebuilt without force_rebuild."""
         vector_db_path = tmp_path / "test_vector_db"
-        
+
         # First build
-        count1 = build_vector_db(
+        result1 = build_vector_db(
             rules_json_path=sample_rules_json,
             vector_db_path=vector_db_path,
-            force_rebuild=True
+            force_rebuild=True,
+            build_answer_embeddings=True
         )
-        
+
         # Second build without force_rebuild
-        count2 = build_vector_db(
+        result2 = build_vector_db(
             rules_json_path=sample_rules_json,
             vector_db_path=vector_db_path,
             force_rebuild=False  # Should skip rebuild
         )
-        
-        assert count1 == count2
+
+        # Both should have the same question count (second returns just int for questions)
+        assert result1["questions"] == result2
 
 
 class TestRulesRAG:

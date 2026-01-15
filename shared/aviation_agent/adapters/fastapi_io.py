@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Sequence
+from typing import List, Literal, Optional, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -22,6 +22,14 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(default_factory=list)
+    persona_id: Optional[str] = Field(
+        default="ifr_touring_sr22",
+        description="Persona ID for airport prioritization"
+    )
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Thread ID for conversation memory. If provided, continues an existing conversation. If None, starts a new conversation (server will generate thread_id)."
+    )
 
     def to_langchain(self) -> List[BaseMessage]:
         if not self.messages:
@@ -33,14 +41,29 @@ class ChatResponse(BaseModel):
     answer: str
     planner_meta: dict | None = None
     ui_payload: dict | None = None
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Thread ID for continuing this conversation"
+    )
 
 
-def build_chat_response(state: AgentState) -> ChatResponse:
+def build_chat_response(state: AgentState, thread_id: Optional[str] = None) -> ChatResponse:
+    """
+    Build ChatResponse from agent state.
+
+    Args:
+        state: Agent state after execution
+        thread_id: Thread ID for conversation continuity
+
+    Returns:
+        ChatResponse with answer, metadata, and thread_id
+    """
     planner = state.get("plan")
     planner_meta = planner.model_dump() if hasattr(planner, "model_dump") else planner
     return ChatResponse(
         answer=state.get("final_answer") or "",
         planner_meta=planner_meta,
         ui_payload=state.get("ui_payload"),
+        thread_id=thread_id,
     )
 

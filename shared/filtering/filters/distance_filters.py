@@ -7,7 +7,7 @@ from euro_aip.models.airport import Airport
 from .base import Filter
 
 if TYPE_CHECKING:
-    from shared.airport_tools import ToolContext
+    from shared.tool_context import ToolContext
 
 
 class TripDistanceFilter(Filter):
@@ -27,7 +27,7 @@ class TripDistanceFilter(Filter):
         from_icao = value.get("from")
         if from_icao is None:
             return True  # from airport not specified, leave filtering to caller
-        from_airport = context.model.get_airport(from_icao.upper())
+        from_airport = context.model.airports.where(ident=from_icao.upper()).first()
         if from_airport is None:
             return True  # from airport not found, leave filtering to caller
         _, distance_nm = from_airport.navpoint.haversine_distance(airport.navpoint)

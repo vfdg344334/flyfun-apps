@@ -1,85 +1,71 @@
 """
 Batch processor for extracting notification requirements.
 
-Processes all airports and stores results in SQLite database.
+Processes airports from airports.db and stores detailed results in ga_notifications.db.
+This module writes FACTUAL extracted data (the "truth" from AIP).
+
+For the CLI tool, see tools/build_ga_notifications.py
+For scoring/hassle computation, see scorer.py (writes to ga_persona.db)
 """
 
-import os
 import sqlite3
 import json
-import httpx
-import time
 import logging
-from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Any
-from dotenv import load_dotenv
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Any, Optional, List
 
-# Load environment variables from .env file
-load_dotenv()
+from .config import get_notification_config, NotificationAgentConfig
+from .parser import NotificationParser
+from .models import ParsedNotificationRules
 
 logger = logging.getLogger(__name__)
 
 
 class NotificationBatchProcessor:
-    """Process notification requirements for airports using LLM.
-    
-    Configure via environment variables:
-    - LLM_API_BASE: API endpoint (e.g., https://api.example.com/v1/chat/completions)
-    - LLM_MODEL: Model name to use
-    - LLM_API_KEY: API key for authentication
     """
-    
-    SYSTEM_PROMPT = '''You are an aviation expert. Extract notification requirements and return JSON.
+    Process notification requirements for airports using NotificationParser.
 
-The "summary" field MUST be formatted exactly like this for UI display:
-Line 1: Weekday rules | Weekend rules  
-Line 2: Schengen info (if applicable) | Hours: HH:MM-HH:MM
-Line 3: 📞 phone number (if available)
-Line 4: 📧 email address (if available)
+    Uses the unified NotificationParser for extraction (regex + optional LLM fallback).
+    Stores detailed results in ga_notifications.db for the NotificationService to query.
 
-Example summary:
-"Mon-Fri: 24h notice | Sat-Sun/HOL: 48h notice
-Non-Schengen only | Hours: 07:00-19:00
-📞 09 70 27 51 53
-📧 bse-saint-malo@douane.finances.gouv.fr"
+    Configuration is loaded from configs/ga_notification_agent/default.json.
+    """
 
-Return JSON:
-{
-    "reasoning": "Step-by-step analysis",
-    "rule_type": "customs" or "immigration",
-    "notification_type": "hours" or "h24" or "on_request" or "business_day" or "as_ad_hours",
-    "hours_notice": max hours required (integer or null),
-    "operating_hours_start": "HHMM" or null,
-    "operating_hours_end": "HHMM" or null,
-    "weekday_rules": {"Mon-Fri": "...", "Sat-Sun": "..."},
-    "schengen_rules": {"schengen_only": bool, "non_schengen_only": bool},
-    "contact_info": {"phone": "...", "email": "..."},
-    "summary": "Formatted multi-line summary for UI (include schengen info)",
-    "confidence": 0.0-1.0
-}'''
-    
-    def __init__(self, output_db_path: str, api_key: str = None, api_base: str = None, model: str = None):
-        self.api_base = api_base or os.environ.get("LLM_API_BASE")
-        self.model = model or os.environ.get("LLM_MODEL")
-        self.api_key = api_key or os.environ.get("LLM_API_KEY")
-        
-        if not self.api_base:
-            raise ValueError("LLM_API_BASE not set")
-        if not self.model:
-            raise ValueError("LLM_MODEL not set")
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY not set")
-        
-        self.output_db_path = output_db_path
+    def __init__(
+        self,
+        output_db_path: Path,
+        config: Optional[NotificationAgentConfig] = None,
+        config_name: str = "default",
+    ):
+        """
+        Initialize batch processor.
+
+        Args:
+            output_db_path: Path to output database (ga_notifications.db)
+            config: Pre-loaded config (optional)
+            config_name: Name of config to load if config not provided
+        """
+        if config is None:
+            config = get_notification_config(config_name)
+
+        self._config = config
+        self.output_db_path = Path(output_db_path)
+
+        # Initialize parser with config
+        self._parser = NotificationParser(config=config)
+
+        # Initialize database
         self._init_db()
-    
-    def _init_db(self):
-        """Initialize the output database."""
+
+    def _init_db(self) -> None:
+        """Initialize the output database schema."""
         conn = sqlite3.connect(self.output_db_path)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS ga_notification_requirements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                icao TEXT NOT NULL,
+                icao TEXT NOT NULL UNIQUE,
                 rule_type TEXT,
                 notification_type TEXT,
                 hours_notice INTEGER,
@@ -91,77 +77,116 @@ Return JSON:
                 summary TEXT,
                 raw_text TEXT,
                 confidence REAL,
-                llm_response TEXT,
-                created_utc TEXT,
-                UNIQUE(icao, rule_type)
+                extraction_method TEXT,
+                created_utc TEXT
             )
         ''')
+
+        # Schema migration: add extraction_method if missing (old schema had llm_response)
+        cursor = conn.execute("PRAGMA table_info(ga_notification_requirements)")
+        columns = {row[1] for row in cursor}
+        if "extraction_method" not in columns:
+            conn.execute("ALTER TABLE ga_notification_requirements ADD COLUMN extraction_method TEXT")
+            logger.info("Migrated schema: added extraction_method column")
+
         conn.commit()
         conn.close()
-    
-    def extract_one(self, icao: str, text: str) -> Dict[str, Any]:
-        """Extract notification requirements for one airport."""
-        prompt = f"Airport: {icao}\nText: {text}"
-        
-        try:
-            response = httpx.post(
-                self.api_base,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0
-                },
-                timeout=60.0
-            )
-            response.raise_for_status()
-            
-            llm_response = response.json()["choices"][0]["message"]["content"]
-            
-            # Parse JSON
-            content = llm_response
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            parsed = json.loads(content.strip())
-            parsed["llm_response"] = llm_response
-            parsed["raw_text"] = text
-            return parsed
-            
-        except Exception as e:
-            logger.error(f"Failed to extract {icao}: {e}")
+
+    def _parsed_to_db_record(
+        self, icao: str, parsed: ParsedNotificationRules
+    ) -> Dict[str, Any]:
+        """Convert ParsedNotificationRules to database record format."""
+        if not parsed.rules:
             return {
+                "icao": icao,
                 "rule_type": None,
                 "notification_type": None,
                 "hours_notice": None,
-                "operating_hours_start": None,
-                "operating_hours_end": None,
                 "weekday_rules": None,
                 "schengen_rules": None,
-                "contact_info": None,
-                "summary": f"Extraction failed: {e}",
-                "raw_text": text,
+                "summary": parsed.get_summary() if parsed.rules else "No rules found",
+                "raw_text": parsed.raw_text,
                 "confidence": 0.0,
-                "llm_response": str(e)
+                "extraction_method": "none",
             }
-    
-    def save_result(self, icao: str, result: Dict[str, Any]):
+
+        # Aggregate rules into a single record
+        # Take the dominant rule type
+        rule_types = [r.rule_type.value for r in parsed.rules]
+        dominant_rule_type = max(set(rule_types), key=rule_types.count)
+
+        # Determine notification type from rules
+        # Priority: actionable types > not_available (unless ALL are not_available)
+        # Filter out NOT_AVAILABLE rules that only apply to specific flight types
+        actionable_rules = [
+            r for r in parsed.rules
+            if r.notification_type.value != "not_available"
+        ]
+
+        if actionable_rules:
+            # Use actionable rules to determine dominant type
+            notification_types = [r.notification_type.value for r in actionable_rules]
+            dominant_notif_type = max(set(notification_types), key=notification_types.count)
+            # Get max hours from actionable rules
+            hours_notices = [r.hours_notice for r in actionable_rules if r.hours_notice]
+        else:
+            # All rules are not_available
+            notification_types = [r.notification_type.value for r in parsed.rules]
+            dominant_notif_type = "not_available"
+            hours_notices = []
+
+        # Max hours notice across relevant rules
+        max_hours = max(hours_notices) if hours_notices else None
+
+        # Build weekday rules dict
+        weekday_rules = {}
+        for rule in parsed.rules:
+            if rule.weekday_start is not None:
+                days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                start = days[rule.weekday_start]
+                end = days[rule.weekday_end] if rule.weekday_end is not None else start
+                key = f"{start}-{end}" if start != end else start
+                if rule.includes_holidays:
+                    key += "/HOL"
+                value = f"{rule.hours_notice}h" if rule.hours_notice else rule.notification_type.value
+                weekday_rules[key] = value
+
+        # Build Schengen rules
+        schengen_rules = {
+            "schengen_only": any(r.schengen_only for r in parsed.rules),
+            "non_schengen_only": any(r.non_schengen_only for r in parsed.rules),
+        }
+
+        # Average confidence
+        avg_confidence = sum(r.confidence for r in parsed.rules) / len(parsed.rules)
+
+        # Extraction method
+        methods = [r.extraction_method or "regex" for r in parsed.rules]
+        method = "llm" if "llm" in methods else "regex"
+
+        return {
+            "icao": icao,
+            "rule_type": dominant_rule_type,
+            "notification_type": dominant_notif_type,
+            "hours_notice": max_hours,
+            "weekday_rules": weekday_rules if weekday_rules else None,
+            "schengen_rules": schengen_rules if any(schengen_rules.values()) else None,
+            "summary": parsed.get_summary(),
+            "raw_text": parsed.raw_text,
+            "confidence": avg_confidence,
+            "extraction_method": method,
+        }
+
+    def save_result(self, icao: str, result: Dict[str, Any]) -> None:
         """Save extraction result to database."""
         conn = sqlite3.connect(self.output_db_path)
-        
+
         conn.execute('''
-            INSERT OR REPLACE INTO ga_notification_requirements 
-            (icao, rule_type, notification_type, hours_notice, 
+            INSERT OR REPLACE INTO ga_notification_requirements
+            (icao, rule_type, notification_type, hours_notice,
              operating_hours_start, operating_hours_end,
              weekday_rules, schengen_rules, contact_info,
-             summary, raw_text, confidence, llm_response, created_utc)
+             summary, raw_text, confidence, extraction_method, created_utc)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             icao,
@@ -176,85 +201,143 @@ Return JSON:
             result.get("summary"),
             result.get("raw_text"),
             result.get("confidence"),
-            result.get("llm_response"),
-            datetime.utcnow().isoformat()
+            result.get("extraction_method"),
+            datetime.now(timezone.utc).isoformat()
         ))
         conn.commit()
         conn.close()
-    
+
+    def _get_existing_data(self) -> Dict[str, str]:
+        """Get existing ICAO -> raw_text mapping from output database."""
+        if not self.output_db_path.exists():
+            return {}
+
+        conn = sqlite3.connect(self.output_db_path)
+        cursor = conn.execute("SELECT icao, raw_text FROM ga_notification_requirements")
+        existing = {row[0]: row[1] for row in cursor}
+        conn.close()
+        return existing
+
     def process_airports(
-        self, 
-        airports_db_path: str, 
-        icao_prefix: str = None,
-        limit: int = None,
-        delay: float = 0.5
+        self,
+        airports_db_path: Path,
+        icao_prefixes: Optional[List[str]] = None,
+        icaos: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        delay: float = 0.5,
+        mode: str = "full",
     ) -> Dict[str, Any]:
-        """Process airports from source database."""
-        
-        # Get airports to process
+        """
+        Process airports from source database.
+
+        Args:
+            airports_db_path: Path to airports.db
+            icao_prefixes: Filter by ICAO prefixes (e.g., ["LF", "EG"] for France, UK)
+            icaos: Specific ICAOs to process (overrides prefixes)
+            limit: Max airports to process
+            delay: Delay between LLM calls (seconds)
+            mode: Processing mode:
+                - "full": Process all matching airports (default)
+                - "incremental": Skip airports already in output DB
+                - "changed": Only process airports where AIP text changed
+                - "force": Process all, even if unchanged (same as full)
+
+        Returns:
+            Dict with processing statistics
+        """
+        # Get airports to process from source
         conn = sqlite3.connect(airports_db_path)
         conn.row_factory = sqlite3.Row
-        
+
         query = "SELECT airport_icao, value FROM aip_entries WHERE std_field_id = 302 AND value IS NOT NULL"
-        params = []
-        
-        if icao_prefix:
-            query += " AND airport_icao LIKE ?"
-            params.append(f"{icao_prefix}%")
-        
+        params: List[Any] = []
+
+        if icaos:
+            placeholders = ",".join("?" for _ in icaos)
+            query += f" AND airport_icao IN ({placeholders})"
+            params.extend(icaos)
+        elif icao_prefixes:
+            prefix_conditions = " OR ".join("airport_icao LIKE ?" for _ in icao_prefixes)
+            query += f" AND ({prefix_conditions})"
+            params.extend(f"{p}%" for p in icao_prefixes)
+
         query += " ORDER BY airport_icao"
-        
+
         if limit:
             query += " LIMIT ?"
             params.append(limit)
-        
+
         cursor = conn.execute(query, params)
         airports = [(row["airport_icao"], row["value"]) for row in cursor]
         conn.close()
-        
-        print(f"Processing {len(airports)} airports...")
-        
+
+        original_count = len(airports)
+        unchanged_count = 0
+
+        # Apply mode filtering
+        if mode == "incremental":
+            # Skip airports that already exist in output DB
+            existing = self._get_existing_data()
+            airports = [(icao, text) for icao, text in airports if icao not in existing]
+            logger.info(f"Incremental mode: {original_count} → {len(airports)} airports (skipped {original_count - len(airports)} existing)")
+
+        elif mode == "changed":
+            # Only process airports where AIP text changed
+            existing = self._get_existing_data()
+            changed_airports = []
+            for icao, text in airports:
+                if icao not in existing:
+                    # New airport
+                    changed_airports.append((icao, text))
+                elif existing[icao] != text:
+                    # Text changed
+                    changed_airports.append((icao, text))
+                    logger.debug(f"{icao}: AIP text changed, will reprocess")
+                else:
+                    unchanged_count += 1
+            airports = changed_airports
+            logger.info(f"Changed mode: {original_count} → {len(airports)} airports ({unchanged_count} unchanged, skipped)")
+
+        # mode == "full" or "force": process all
+
+        logger.info(f"Processing {len(airports)} airports...")
+
         success = 0
         failed = 0
-        
+        skipped = 0
+
         for i, (icao, text) in enumerate(airports):
-            print(f"[{i+1}/{len(airports)}] {icao}...", end=" ")
-            
-            result = self.extract_one(icao, text)
-            self.save_result(icao, result)
-            
-            if result.get("confidence", 0) > 0:
-                success += 1
-                print(f"✓ {result.get('notification_type')} ({result.get('confidence'):.2f})")
-            else:
+            logger.info(f"[{i+1}/{len(airports)}] {icao}...")
+
+            try:
+                # Parse using NotificationParser
+                parsed = self._parser.parse(icao, text)
+
+                # Convert to DB record format
+                result = self._parsed_to_db_record(icao, parsed)
+
+                # Save to database
+                self.save_result(icao, result)
+
+                if result.get("confidence", 0) > 0:
+                    success += 1
+                    logger.info(f"  ✓ {result.get('notification_type')} ({result.get('confidence'):.2f})")
+                else:
+                    skipped += 1
+                    logger.info(f"  ○ No rules found")
+
+            except Exception as e:
                 failed += 1
-                print(f"✗ Failed")
-            
+                logger.error(f"  ✗ Failed: {e}")
+
+            # Delay between processing (mainly for LLM rate limiting)
             if delay and i < len(airports) - 1:
                 time.sleep(delay)
-        
+
         return {
             "total": len(airports),
             "success": success,
-            "failed": failed
+            "failed": failed,
+            "skipped": skipped,
+            "unchanged": unchanged_count,
         }
-
-
-def process_french_airports():
-    """Process all French airports (LF* prefix)."""
-    airports_db = "/home/qian/dev/022_Home/flyfun-apps/web/server/airports.db"
-    output_db = "/tmp/ga_notifications.db"
-    
-    # Will read LLM_API_BASE, LLM_MODEL, LLM_API_KEY from environment
-    processor = NotificationBatchProcessor(output_db)
-    stats = processor.process_airports(airports_db, icao_prefix="LF", delay=0.3)
-    
-    print(f"\n=== Summary ===")
-    print(f"Total: {stats['total']}")
-    print(f"Success: {stats['success']}")
-    print(f"Failed: {stats['failed']}")
-    print(f"Output: {output_db}")
-
-
-if __name__ == "__main__":
-    process_french_airports()

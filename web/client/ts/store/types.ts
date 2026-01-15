@@ -18,6 +18,18 @@ export interface GAFriendlySummary {
   notification_hassle?: string | null;
 }
 
+/**
+ * Notification info for an airport (from chatbot tool responses)
+ */
+export interface NotificationSummary {
+  notification_type?: string;  // 'h24', 'hours', 'on_request', etc.
+  hours_notice?: number | null;
+  is_h24?: boolean;
+  is_on_request?: boolean;
+  easiness_score?: number;  // 0-100
+  summary?: string;
+}
+
 export interface Airport {
   ident: string;
   name?: string;
@@ -38,6 +50,8 @@ export interface Airport {
   _closestSegment?: [string, string];
   // GA Friendliness data (populated when include_ga=true)
   ga?: GAFriendlySummary | null;
+  // Notification data (from chatbot tool responses)
+  notification?: NotificationSummary | null;
 }
 
 /**
@@ -52,21 +66,25 @@ export interface FilterConfig {
   aip_field: string | null;
   aip_value: string | null;
   aip_operator: 'contains' | 'equals' | 'not_empty' | 'starts_with' | 'ends_with';
-  has_avgas: boolean | null;
-  has_jet_a: boolean | null;
+  // Fuel type filter: single-selection dropdown (avgas, jet_a, or null for no filter)
+  fuel_type: 'avgas' | 'jet_a' | null;
   max_runway_length_ft: number | null;
   min_runway_length_ft: number | null;
   max_landing_fee: number | null;
+  // Hospitality filters: at_airport (most restrictive) or vicinity (includes at_airport)
+  hotel: 'at_airport' | 'vicinity' | null;
+  restaurant: 'at_airport' | 'vicinity' | null;
   limit: number;
   offset: number;
-  // Route-specific filters (not part of standard FilterConfig but used in API)
-  enroute_distance_max_nm?: number;
+  // Search radius/distance parameters (used for route corridor and locate radius)
+  search_radius_nm: number;
+  enroute_distance_max_nm: number | null;
 }
 
 /**
  * Legend mode types
  */
-export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance';
+export type LegendMode = 'airport-type' | 'procedure-precision' | 'runway-length' | 'country' | 'relevance' | 'notification';
 
 /**
  * Relevance bucket types (quartile-based)
@@ -86,6 +104,95 @@ export interface RelevanceBucketConfig {
   label: string;
   color: string;
 }
+
+// =============================================================================
+// Legend Configuration Types
+// =============================================================================
+
+/**
+ * Generic legend entry with match function.
+ * Used to define how airports are classified into legend buckets.
+ * Order matters - first match wins.
+ */
+export interface LegendEntry<TData = Airport> {
+  id: string;
+  label: string;
+  color: string;
+  /** Optional radius multiplier for marker size (default 1.0) */
+  radiusMultiplier?: number;
+  /** Match function - returns true if this entry applies to the data */
+  match: (data: TData) => boolean;
+}
+
+/**
+ * Legend configuration for a mode.
+ * Contains ordered entries that define classification logic.
+ */
+export interface LegendConfig<TData = Airport> {
+  mode: LegendMode;
+  /** Display type: 'color' for filled circles, 'line' for procedure lines */
+  displayType: 'color' | 'line';
+  /** Ordered entries - first match wins */
+  entries: LegendEntry<TData>[];
+  /** If true, markers are transparent and lines are colored (e.g., procedure-precision) */
+  useTransparentMarkers?: boolean;
+}
+
+/**
+ * Simplified display bucket for legend panel.
+ * Used when the full classification has many entries but the legend
+ * should show fewer, grouped categories.
+ */
+export interface LegendDisplayBucket {
+  id: string;
+  label: string;
+  color: string;
+}
+
+/**
+ * Notification bucket IDs for type-safe classification
+ */
+export type NotificationBucketId =
+  | 'h24'        // H24 operations - no notice required
+  | 'easy'       // Easy: <=12h notice or operating hours only
+  | 'moderate'   // Moderate: 13-24h notice or on-request
+  | 'hassle'     // Hassle: 25-48h notice or business day
+  | 'difficult'  // Difficult: >48h notice or not available
+  | 'unknown';   // No notification data
+
+/**
+ * Airport type bucket IDs
+ */
+export type AirportTypeBucketId =
+  | 'border-crossing'      // Point of entry (border crossing)
+  | 'with-procedures'      // Has instrument procedures
+  | 'without-procedures';  // No instrument procedures
+
+/**
+ * Runway length bucket IDs
+ */
+export type RunwayLengthBucketId =
+  | 'long'     // >8000 ft
+  | 'medium'   // 4000-8000 ft
+  | 'short'    // <4000 ft
+  | 'unknown'; // No runway data
+
+/**
+ * Country bucket IDs
+ */
+export type CountryBucketId =
+  | 'france'   // LF prefix
+  | 'uk'       // EG prefix
+  | 'germany'  // ED prefix
+  | 'other';   // All other countries
+
+/**
+ * Procedure precision bucket IDs (for procedure lines, not markers)
+ */
+export type ProcedurePrecisionBucketId =
+  | 'precision'      // ILS
+  | 'rnp'            // RNP/RNAV
+  | 'non-precision'; // VOR/NDB
 
 /**
  * Persona definition with weights
@@ -239,6 +346,16 @@ export interface MapView {
 }
 
 /**
+ * Bounding box for viewport-based airport loading
+ */
+export interface BoundingBox {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
+/**
  * UI state
  */
 export interface UIState {
@@ -246,6 +363,55 @@ export interface UIState {
   error: string | null;
   searchQuery: string;
   activeTab: 'details' | 'aip' | 'rules' | 'relevance';
+}
+
+/**
+ * Rules / country regulations state
+ *
+ * Note: we keep this fairly generic and close to the API / LLM payloads so that
+ * UI code can render from it without duplicating structures. The store owns:
+ * - full rules per country (as returned by the API)
+ * - which countries are currently active/visible
+ * - a "visual" filter coming from the LLM UI payload (e.g. tagsByCountry)
+ * - a free-text filter from the Rules search box
+ * - per-section expand/collapse state
+ */
+
+// Raw rules category (matches API structure closely)
+export interface RulesCategory {
+  name: string;
+  count?: number;
+  country?: string;
+  rules: any[];
+}
+
+// Raw rules payload per country (matches API)
+export interface CountryRules {
+  country: string;
+  total_rules?: number;
+  categories: RulesCategory[];
+}
+
+// Visual filters coming from LLM UI payload
+export interface RulesVisualFilter {
+  tagsByCountry: Record<string, string[]>;
+}
+
+export interface RulesState {
+  // All rules we have loaded, keyed by ISO country code
+  allRulesByCountry: Record<string, CountryRules>;
+
+  // Countries currently selected/visible in the Rules panel, in display order
+  activeCountries: string[];
+
+  // Visual filter from LLM (e.g. subset of tags per country for precise filtering)
+  visualFilter: RulesVisualFilter | null;
+
+  // Free-text filter from the Rules search box
+  textFilter: string;
+
+  // Expand/collapse state for individual sections (by sectionId)
+  sectionState: Record<string, boolean>;
 }
 
 /**
@@ -279,6 +445,9 @@ export interface AppState {
   
   // GA Friendliness state
   ga: GAState;
+
+  // Country rules / regulations state
+  rules: RulesState;
 }
 
 /**

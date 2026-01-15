@@ -1,11 +1,24 @@
 /**
  * Zustand store for application state management
  */
-import { create } from 'zustand';
+import { create, StateCreator } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { 
-  AppState, FilterConfig, LegendMode, Highlight, RouteState, LocateState, MapView, Airport,
-  GAConfig, AirportGAScore, AirportGASummary, GAState, QuartileThresholds
+  AppState,
+  FilterConfig,
+  LegendMode,
+  Highlight,
+  RouteState,
+  LocateState,
+  MapView,
+  Airport,
+  GAConfig,
+  AirportGAScore,
+  AirportGASummary,
+  GAState,
+  QuartileThresholds,
+  CountryRules,
+  RulesState
 } from './types';
 import { computeQuartileThresholds } from '../utils/relevance';
 
@@ -25,13 +38,16 @@ const initialState: AppState = {
     aip_field: null,
     aip_value: null,
     aip_operator: 'contains',
-    has_avgas: null,
-    has_jet_a: null,
+    fuel_type: null,
     max_runway_length_ft: null,
     min_runway_length_ft: null,
     max_landing_fee: null,
+    hotel: null,
+    restaurant: null,
     limit: 1000,
-    offset: 0
+    offset: 0,
+    search_radius_nm: 50,
+    enroute_distance_max_nm: null
   },
   
   visualization: {
@@ -47,8 +63,8 @@ const initialState: AppState = {
   selectedAirport: null,
   
   mapView: {
-    center: [50.0, 10.0],
-    zoom: 5
+    center: [47.67, 9.51],
+    zoom: 4
   },
   
   ui: {
@@ -67,6 +83,14 @@ const initialState: AppState = {
     summaries: new Map(),
     isLoading: false,
     computedQuartiles: null
+  },
+
+  rules: {
+    allRulesByCountry: {},
+    activeCountries: [],
+    visualFilter: null,
+    textFilter: '',
+    sectionState: {}
   }
 };
 
@@ -80,13 +104,12 @@ function filterAirports(airports: Airport[], filters: Partial<FilterConfig>): Ai
   console.log('filterAirports called:', {
     airportCount: airports.length,
     filters: filters,
-    sampleAirport: airports[0] ? { ident: airports[0].ident, iso_country: airports[0].iso_country, country: (airports[0] as any).country } : null
+    sampleAirport: airports[0] ? { ident: airports[0].ident, iso_country: airports[0].iso_country } : null
   });
 
   const result = airports.filter(airport => {
-    // Check country - handle both 'iso_country' (from API) and 'country' (from chatbot)
-    const airportCountry = airport.iso_country || (airport as any).country;
-    if (filters.country && airportCountry !== filters.country) {
+    // Check country filter
+    if (filters.country && airport.iso_country !== filters.country) {
       return false;
     }
     // Use truthy checks to handle undefined/null properties
@@ -114,7 +137,7 @@ function filterAirports(airports: Airport[], filters: Partial<FilterConfig>): Ai
     if (filters.point_of_entry === false && airport.point_of_entry === true) {
       return false;
     }
-    // TODO: Add more filters (has_avgas, has_jet_a, runway length, landing fee)
+    // TODO: Add more filters (fuel_type, runway length, landing fee)
     return true;
   });
 
@@ -153,13 +176,21 @@ interface StoreActions {
   setGALoading: (loading: boolean) => void;
   setGAComputedQuartiles: (quartiles: QuartileThresholds | null) => void;
   clearGAScores: () => void;
+
+  // Rules / regulations actions
+  setRulesForCountry: (countryCode: string, rules: CountryRules) => void;
+  setRulesSelection: (countries: string[], visualFilter: RulesState['visualFilter']) => void;
+  setRulesTextFilter: (text: string) => void;
+  setRuleSectionState: (sectionId: string, expanded: boolean) => void;
+  clearRules: () => void;
 }
 
 /**
  * Zustand store with actions
  */
-// Create store factory function
-const createStore = (set: any, get: any) => ({
+// Create store factory function with proper types
+type StoreState = AppState & StoreActions;
+const createStore: StateCreator<StoreState, [], [["zustand/devtools", never]]> = (set, get) => ({
       // Initialize state properly - Maps don't serialize to JSON
       airports: [],
       filteredAirports: [],
@@ -178,6 +209,9 @@ const createStore = (set: any, get: any) => ({
         ...initialState.ga,
         scores: new Map(),
         summaries: new Map()
+      },
+      rules: {
+        ...initialState.rules
       },
       
       // Set airports and auto-filter
@@ -506,6 +540,71 @@ const createStore = (set: any, get: any) => ({
             computedQuartiles: null
           }
         }));
+      },
+
+      // --- Rules / regulations actions ---
+
+      // Store full rules payload for a single country
+      setRulesForCountry: (countryCode, rules) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            allRulesByCountry: {
+              ...state.rules.allRulesByCountry,
+              [countryCode]: {
+                ...rules,
+                country: countryCode
+              }
+            }
+          }
+        }));
+      },
+
+      // Set which countries are active in the Rules panel and the current visual filter
+      setRulesSelection: (countries, visualFilter) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            activeCountries: countries,
+            visualFilter: visualFilter || null
+          }
+        }));
+      },
+
+      // Update free-text filter for rules
+      setRulesTextFilter: (text) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            textFilter: text
+          }
+        }));
+      },
+
+      // Persist expand/collapse state for a single rules section
+      setRuleSectionState: (sectionId, expanded) => {
+        set((state) => ({
+          rules: {
+            ...state.rules,
+            sectionState: {
+              ...state.rules.sectionState,
+              [sectionId]: expanded
+            }
+          }
+        }));
+      },
+
+      // Clear all rules state (used when chatbot resets rules panel)
+      clearRules: () => {
+        set({
+          rules: {
+            allRulesByCountry: {},
+            activeCountries: [],
+            visualFilter: null,
+            textFilter: '',
+            sectionState: {}
+          }
+        });
       }
 });
 

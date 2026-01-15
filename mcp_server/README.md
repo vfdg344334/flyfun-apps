@@ -30,14 +30,6 @@ The server provides the following tools:
 - Filter by procedure type (approach, departure, arrival)
 - Filter by runway
 
-### 6. Border Crossing Airports (`get_border_crossing_airports`)
-- List all airports that serve as border crossing points
-- Filter by country and customs availability
-
-### 7. Statistics (`get_airport_statistics`)
-- Get database statistics
-- Filter by country
-
 ## Setup
 
 ### Prerequisites

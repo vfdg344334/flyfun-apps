@@ -125,7 +125,8 @@ async def test_streaming_emits_ui_payload(streaming_agent_settings):
         assert "data" in ui_payload_event
         payload = ui_payload_event["data"]
         assert "kind" in payload
-        assert "mcp_raw" in payload
+        # Verify flattened fields are present
+        assert "visualization" in payload or "filters" in payload or "airports" in payload
 
 
 @pytest.mark.streaming

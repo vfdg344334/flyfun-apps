@@ -1,0 +1,26 @@
+# Caddyfile for MCP Server at mcp.flyfun.aero
+
+mcp.flyfun.aero {
+	header {
+		# HTTPS enforcement (1 year)
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Prevent MIME-type sniffing
+		X-Content-Type-Options "nosniff"
+		# Prevent embedding anywhere (API should not be framed)
+		Content-Security-Policy "frame-ancestors 'none'"
+		# Disable unnecessary browser features
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+	}
+
+	handle /euro_aip* {
+		uri replace /euro_aip /mcp
+		reverse_proxy localhost:8002 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		respond "Not Found" 403
+	}
+}

@@ -1,7 +1,7 @@
 """
 Main pipeline orchestrator for building GA friendliness database.
 
-Coordinates all components to build ga_meta.sqlite from review sources.
+Coordinates all components to build ga_persona.db from review sources.
 """
 
 import logging
@@ -11,7 +11,13 @@ from typing import Any, Dict, List, Optional, Set
 
 from .config import GAFriendlinessSettings, get_default_ontology, get_default_personas
 from .exceptions import BuildError, StorageError
-from .features import FeatureMapper, aggregate_fees_by_band
+from .features import (
+    FeatureMapper,
+    aggregate_fees_by_band,
+    compute_aip_ifr_score,
+    compute_aip_night_available,
+    parse_hospitality_text_to_int,
+)
 from .interfaces import ReviewSource, StorageInterface
 from .models import (
     AirportStats,
@@ -201,17 +207,82 @@ class GAFriendlinessBuilder:
                         # Get reviews for this airport
                         reviews = review_source.get_reviews_for_icao(icao)
                         
-                        if not reviews:
+                        # Check for fee data availability (even if no reviews)
+                        fee_data = None
+                        has_fee_data = False
+                        if hasattr(review_source, "get_fee_data"):
+                            fee_data = review_source.get_fee_data(icao)
+                            has_fee_data = fee_data is not None
+                        elif isinstance(review_source, AirfieldDirectorySource):
+                            airport_data = review_source.get_airport_data(icao)
+                            if airport_data and "aerops" in airport_data:
+                                # Parse fee data for comparison
+                                aerops = airport_data.get("aerops", {})
+                                if isinstance(aerops, dict) and "landing_fees" in aerops:
+                                    # Convert to fee_data format for comparison
+                                    fee_data = {
+                                        "currency": aerops.get("currency", "EUR"),
+                                        "fees_last_changed": aerops.get("fees_last_changed"),
+                                        "bands": aggregate_fees_by_band(aerops),
+                                    }
+                                    has_fee_data = True
+                        
+                        # Check if airport has any data to process
+                        has_data_to_process = (
+                            len(reviews) > 0  # Has reviews
+                            or has_fee_data  # Has fee data
+                            or airports_db is not None  # Can get AIP data
+                        )
+                        
+                        if not has_data_to_process:
                             self._metrics.skipped_airports += 1
+                            logger.debug(f"Skipping {icao}: no reviews, no fees, no AIP data source")
                             continue
                         
                         # Check for changes if incremental
+                        review_changes = False
+                        fee_changes = False
+                        
                         if incremental:
-                            if not self.storage.has_changes(icao, reviews, since):
+                            if reviews:
+                                review_changes = self.storage.has_changes(icao, reviews, since)
+                            
+                            if fee_data:
+                                fee_changes = self.storage.has_fee_changes(icao, fee_data)
+                            
+                            # If neither reviews nor fees changed, skip
+                            if not review_changes and not fee_changes:
                                 self._metrics.skipped_airports += 1
                                 continue
+                            
+                            # If only fees changed (and no reviews), update fees only
+                            if not review_changes and fee_changes:
+                                logger.info(f"Updating fees only for {icao} (no reviews or reviews unchanged)")
+                                if fee_data:
+                                    # Check if airport exists in DB, if not we need full processing
+                                    existing_stats = self.storage.get_airfield_stats(icao)
+                                    if existing_stats is not None:
+                                        self.storage.update_fees_only(icao, fee_data)
+                                        self._metrics.successful_airports += 1
+                                    else:
+                                        # New airport with fees only, do full processing
+                                        logger.info(f"Processing new airport {icao} with fees but no reviews")
+                                        self._process_airport(icao, reviews, review_source, airports_db)
+                                        self._metrics.successful_airports += 1
+                                        self._metrics.total_reviews += len(reviews)
+                                else:
+                                    # Should not happen, but handle gracefully
+                                    continue
+                                # Track progress for resume
+                                self.storage.set_last_successful_icao(icao)
+                                continue
                         
-                        # Process airport
+                        # Process airport (reviews changed, or full processing)
+                        # This handles: airports with reviews, airports with fees but no reviews,
+                        # and airports with AIP data but no reviews
+                        if not reviews:
+                            logger.info(f"Processing {icao} with fees/AIP data but no reviews")
+                        
                         self._process_airport(icao, reviews, review_source, airports_db)
                         
                         self._metrics.successful_airports += 1
@@ -312,35 +383,65 @@ class GAFriendlinessBuilder:
         if self._aggregator and extractions:
             distributions, context = self._aggregator.aggregate_tags(extractions)
         
-        # Get airport metadata from airports.db (IFR score, hotel, restaurant)
-        ifr_score = 0  # Default: IFR not available
-        ifr_available = False
-        hotel_info = None
-        restaurant_info = None
-        
+        # Get airport metadata from euro_aip (IFR score, hotel, restaurant)
+        aip_ifr_available = 0  # Default: IFR not available
+        aip_night_available = 0  # Default: not available
+        aip_hotel_info = None  # 0=unknown, 1=vicinity, 2=at_airport
+        aip_restaurant_info = None  # 0=unknown, 1=vicinity, 2=at_airport
+        aip_data = {}  # For AIP feature computation
+
         if airports_db:
             try:
-                metadata = airports_db.get_airport_metadata(icao)
-                ifr_score = metadata.get("ifr_score", 0)
-                ifr_available = metadata.get("ifr_permitted", False)
-                hotel_info = metadata.get("hotel_info")
-                restaurant_info = metadata.get("restaurant_info")
+                # Get euro_aip Airport object
+                airport = airports_db.get_airport(icao)
+                if airport:
+                    # Compute IFR score from procedures
+                    # Get IFR permitted field (std_field_id=207) if available
+                    ifr_permitted_text = None
+                    for entry in airport.aip_entries:
+                        if entry.std_field_id == 207:
+                            ifr_permitted_text = entry.value
+                            break
+
+                    aip_ifr_available = compute_aip_ifr_score(
+                        airport.procedures, ifr_permitted_text
+                    )
+                    aip_night_available = compute_aip_night_available()
+
+                    # Parse hospitality text fields
+                    # Hotel: std_field_id = 501
+                    # Restaurant: std_field_id = 502
+                    for entry in airport.aip_entries:
+                        if entry.std_field_id == 501:  # Hotels
+                            aip_hotel_info = parse_hospitality_text_to_int(entry.value)
+                        elif entry.std_field_id == 502:  # Restaurants
+                            aip_restaurant_info = parse_hospitality_text_to_int(entry.value)
+
+                    # Prepare AIP data for feature computation
+                    aip_data = {
+                        "aip_ifr_available": aip_ifr_available,
+                        "aip_hotel_info": aip_hotel_info,
+                        "aip_restaurant_info": aip_restaurant_info,
+                    }
             except Exception as e:
-                logger.warning(f"Failed to get airports.db metadata for {icao}: {e}")
-        
-        # Compute feature scores
-        feature_scores = self.feature_mapper.compute_feature_scores(
+                logger.warning(f"Failed to get euro_aip metadata for {icao}: {e}")
+
+        # Compute review-derived feature scores
+        review_feature_scores = self.feature_mapper.compute_review_feature_scores(
             icao=icao,
             distributions=distributions,
-            ifr_procedure_available=ifr_available,
         )
-        
-        # Compute persona scores
-        persona_scores = self.persona_manager.compute_scores_for_all_personas(feature_scores)
+
+        # Compute AIP-derived feature scores
+        aip_feature_scores = self.feature_mapper.compute_aip_feature_scores(
+            icao=icao,
+            aip_data=aip_data,
+        )
         
         # Get fee data if source supports it
         fee_bands: Dict[str, Optional[float]] = {}
         fee_currency = "EUR"  # Default
+        fee_last_updated = None
         
         if isinstance(source, AirportJsonDirectorySource):
             # AirportJsonDirectorySource has pre-aggregated fee data
@@ -348,6 +449,14 @@ class GAFriendlinessBuilder:
             if fee_data:
                 fee_bands = fee_data.get("bands", {})
                 fee_currency = fee_data.get("currency", "EUR")
+                fee_last_updated = fee_data.get("fees_last_changed")
+        elif hasattr(source, "get_fee_data"):
+            # AirfieldDirectoryAPISource also has get_fee_data method
+            fee_data = source.get_fee_data(icao)
+            if fee_data:
+                fee_bands = fee_data.get("bands", {})
+                fee_currency = fee_data.get("currency", "EUR")
+                fee_last_updated = fee_data.get("fees_last_changed")
         elif isinstance(source, AirfieldDirectorySource):
             airport_data = source.get_airport_data(icao)
             if airport_data and "aerops" in airport_data:
@@ -375,20 +484,21 @@ class GAFriendlinessBuilder:
             fee_band_2000_3999kg=fee_bands.get("fee_band_2000_3999kg"),
             fee_band_4000_plus_kg=fee_bands.get("fee_band_4000_plus_kg"),
             fee_currency=fee_currency,
-            mandatory_handling=False,
-            ifr_procedure_available=ifr_available,
-            ifr_score=ifr_score,
-            night_available=False,
-            hotel_info=hotel_info,
-            restaurant_info=restaurant_info,
-            ga_cost_score=feature_scores.ga_cost_score,
-            ga_review_score=feature_scores.ga_review_score,
-            ga_hassle_score=feature_scores.ga_hassle_score,
-            ga_ops_ifr_score=feature_scores.ga_ops_ifr_score,
-            ga_ops_vfr_score=feature_scores.ga_ops_vfr_score,
-            ga_access_score=feature_scores.ga_access_score,
-            ga_fun_score=feature_scores.ga_fun_score,
-            ga_hospitality_score=feature_scores.ga_hospitality_score,
+            fee_last_updated_utc=fee_last_updated,
+            aip_ifr_available=aip_ifr_available,
+            aip_night_available=aip_night_available,
+            aip_hotel_info=aip_hotel_info,
+            aip_restaurant_info=aip_restaurant_info,
+            review_cost_score=review_feature_scores.get("review_cost_score"),
+            review_hassle_score=review_feature_scores.get("review_hassle_score"),
+            review_review_score=review_feature_scores.get("review_review_score"),
+            review_ops_ifr_score=review_feature_scores.get("review_ops_ifr_score"),
+            review_ops_vfr_score=review_feature_scores.get("review_ops_vfr_score"),
+            review_access_score=review_feature_scores.get("review_access_score"),
+            review_fun_score=review_feature_scores.get("review_fun_score"),
+            review_hospitality_score=review_feature_scores.get("review_hospitality_score"),
+            aip_ops_ifr_score=aip_feature_scores.get("aip_ops_ifr_score"),
+            aip_hospitality_score=aip_feature_scores.get("aip_hospitality_score"),
             source_version=self.settings.source_version,
             scoring_version=self.settings.scoring_version,
         )
@@ -411,6 +521,155 @@ class GAFriendlinessBuilder:
         self.storage.update_last_processed_timestamp(
             icao, datetime.now(timezone.utc)
         )
+
+    def update_aip_only(
+        self,
+        airports_db: "AirportsDatabaseSource",
+        icaos: Optional[List[str]] = None,
+    ) -> BuildResult:
+        """
+        Update only AIP-derived fields without processing reviews.
+
+        This is much faster than a full build since it:
+        - Does NOT call the LLM extractor
+        - Only updates aip_* fields (ifr, night, hotel, restaurant)
+        - Also updates computed aip_* scores
+        - Works for airports not yet in ga_persona.db
+
+        Use this when the AIP data has changed but reviews haven't.
+
+        Args:
+            airports_db: AirportsDatabaseSource for AIP data
+            icaos: Optional list of specific ICAOs to process.
+                   If None, processes all airports in airports_db that have
+                   hotel or restaurant fields.
+
+        Returns:
+            BuildResult with metrics and status
+        """
+        self._metrics = BuildMetrics(start_time=datetime.now(timezone.utc))
+
+        try:
+            # Get list of airports to process
+            if icaos:
+                airports_to_process = icaos
+            else:
+                # Get all airports with hotel or restaurant AIP fields
+                airports_to_process = airports_db.get_airports_with_hospitality_fields()
+
+            airports_sorted = sorted(airports_to_process)
+            self._metrics.total_airports = len(airports_sorted)
+
+            logger.info(
+                f"AIP-only update started: {self._metrics.total_airports} airports"
+            )
+
+            inserted_count = 0
+            updated_count = 0
+
+            with self.storage:
+                for icao in airports_sorted:
+                    try:
+                        # Get AIP data for this airport
+                        airport = airports_db.get_airport(icao)
+                        if not airport:
+                            self._metrics.skipped_airports += 1
+                            continue
+
+                        # Extract AIP fields
+                        aip_ifr_available = 0
+                        aip_night_available = 0
+                        aip_hotel_info = None
+                        aip_restaurant_info = None
+
+                        # Get IFR permitted field (std_field_id=207)
+                        ifr_permitted_text = None
+                        for entry in airport.aip_entries:
+                            if entry.std_field_id == 207:
+                                ifr_permitted_text = entry.value
+                                break
+
+                        aip_ifr_available = compute_aip_ifr_score(
+                            airport.procedures, ifr_permitted_text
+                        )
+                        aip_night_available = compute_aip_night_available()
+
+                        # Parse hospitality fields
+                        for entry in airport.aip_entries:
+                            if entry.std_field_id == 501:  # Hotels
+                                aip_hotel_info = parse_hospitality_text_to_int(entry.value)
+                            elif entry.std_field_id == 502:  # Restaurants
+                                aip_restaurant_info = parse_hospitality_text_to_int(entry.value)
+
+                        # Compute AIP feature scores
+                        aip_data = {
+                            "aip_ifr_available": aip_ifr_available,
+                            "aip_hotel_info": aip_hotel_info,
+                            "aip_restaurant_info": aip_restaurant_info,
+                        }
+                        aip_feature_scores = self.feature_mapper.compute_aip_feature_scores(
+                            icao=icao,
+                            aip_data=aip_data,
+                        )
+
+                        # Upsert to database
+                        was_inserted = self.storage.upsert_aip_only(
+                            icao=icao,
+                            aip_ifr_available=aip_ifr_available,
+                            aip_night_available=aip_night_available,
+                            aip_hotel_info=aip_hotel_info,
+                            aip_restaurant_info=aip_restaurant_info,
+                            aip_ops_ifr_score=aip_feature_scores.get("aip_ops_ifr_score"),
+                            aip_hospitality_score=aip_feature_scores.get("aip_hospitality_score"),
+                        )
+
+                        if was_inserted:
+                            inserted_count += 1
+                        else:
+                            updated_count += 1
+
+                        self._metrics.successful_airports += 1
+
+                    except Exception as e:
+                        self._metrics.failed_airports += 1
+                        self._metrics.errors.append(f"{icao}: {str(e)}")
+                        logger.error(f"Airport {icao} AIP update failed: {e}")
+
+                # Store update metadata
+                now = datetime.now(timezone.utc).isoformat()
+                self.storage.write_meta_info("aip_only_update_timestamp", now)
+
+            self._metrics.end_time = datetime.now(timezone.utc)
+            self._metrics.duration_seconds = (
+                self._metrics.end_time - self._metrics.start_time
+            ).total_seconds()
+
+            logger.info(
+                f"AIP-only update completed: {updated_count} updated, "
+                f"{inserted_count} inserted, {self._metrics.failed_airports} failed, "
+                f"{self._metrics.duration_seconds:.1f}s"
+            )
+
+            return BuildResult(
+                success=self._metrics.failed_airports == 0,
+                metrics=self._metrics,
+                output_db_path=str(self.settings.ga_meta_db_path),
+            )
+
+        except Exception as e:
+            self._metrics.end_time = datetime.now(timezone.utc)
+            self._metrics.duration_seconds = (
+                self._metrics.end_time - self._metrics.start_time
+            ).total_seconds() if self._metrics.start_time else None
+            self._metrics.errors.append(f"AIP update failed: {str(e)}")
+
+            logger.error(f"AIP-only update failed: {e}")
+
+            return BuildResult(
+                success=False,
+                metrics=self._metrics,
+                output_db_path=str(self.settings.ga_meta_db_path),
+            )
 
     def _store_build_metadata(self) -> None:
         """Store build metadata in ga_meta_info."""

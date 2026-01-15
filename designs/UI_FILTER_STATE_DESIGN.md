@@ -35,7 +35,13 @@ This document describes the architecture and design of the FlyFun Airport Explor
 
 3. **Events** (For Cross-Component Communication): Custom DOM events for loose coupling
    - `trigger-search` event - Allows any component to trigger a search (handled in `main.ts`)
+   - `trigger-locate` event - Allows any component to trigger a locate search (handled in `main.ts`)
+   - `trigger-filter-refresh` event - Loads all airports matching current store filters (handled in `main.ts`)
    - `render-route` event - Allows route rendering from any component
+   - `reset-rules-panel` event - Clears rules panel state
+   - `show-country-rules` event - Displays country rules in Rules panel
+   - `airport-click` event - Triggers airport selection and details loading
+   - `display-airport-details` event - Displays airport details in right panel
 
 **Design Pattern: LLMIntegration Communication**
 
@@ -71,7 +77,7 @@ interface AppState {
   visualization: {
     legendMode: LegendMode;         // Current legend mode
     highlights: Map<string, Highlight>; // Active highlights
-    overlays: Map<string, any>;     // Map overlays
+    overlays: Map<string, Overlay>; // Map overlays
     showProcedureLines: boolean;    // Procedure lines visibility
     showRoute: boolean;             // Route visibility
   };
@@ -83,8 +89,10 @@ interface AppState {
     loading: boolean;              // Loading state
     error: string | null;          // Error message
     searchQuery: string;           // Search input value
-    activeTab: 'details' | 'aip' | 'rules'; // Active detail tab
+    activeTab: 'details' | 'aip' | 'rules' | 'relevance'; // Active detail tab
   };
+  ga: GAState;                      // GA Friendliness state
+  rules: RulesState;                // Rules/Regulations state
 }
 ```
 
@@ -92,6 +100,7 @@ interface AppState {
 
 All state modifications go through store actions:
 
+**Core Actions:**
 - `setAirports(airports)` - Set airports and auto-filter
 - `setFilters(filters)` - Update filters and re-filter airports
 - `setLegendMode(mode)` - Change legend mode
@@ -109,12 +118,44 @@ All state modifications go through store actions:
 - `clearFilters()` - Clear all filters
 - `resetState()` - Reset entire state
 
+**GA Friendliness Actions:**
+- `setGAConfig(config)` - Set GA config from API
+- `setGAConfigError(error)` - Set GA config error
+- `setGASelectedPersona(personaId)` - Set selected persona
+- `setGAScores(scores)` - Set GA scores (batch update) and compute quartiles
+- `setGASummary(icao, summary)` - Set GA summary for single airport
+- `setGALoading(loading)` - Set GA loading state
+- `setGAComputedQuartiles(quartiles)` - Set computed quartile thresholds
+- `clearGAScores()` - Clear GA scores
+
+**Rules/Regulations Actions:**
+- `setRulesForCountry(countryCode, rules)` - Store rules for a country
+- `setRulesSelection(countries, visualFilter)` - Set active countries and visual filter
+- `setRulesTextFilter(text)` - Update free-text filter
+- `setRuleSectionState(sectionId, expanded)` - Persist expand/collapse state
+- `clearRules()` - Clear all rules state
+
 #### Filtering Logic
 
-Client-side filtering is performed in `filterAirports()` function in `store.ts`. Filters include:
+**Backend Filtering (Authoritative):**
+
+All airport filtering is performed by `FilterEngine` (`shared/filtering/filter_engine.py`) on the backend. Both REST API endpoints and LangGraph tools use the same engine, ensuring consistent behavior.
+
+See `CHATBOT_WEBUI_DESIGN.md` → "Adding New Filters" for how to add new filters.
+
+**Client-Side Filtering (Display Only):**
+
+The `filterAirports()` function in `store.ts` provides basic client-side filtering for immediate UI feedback. This is NOT authoritative - the real filtering happens on the backend.
+
+Client-side filters (for immediate display):
 - Country filter
 - Boolean filters (has_procedures, has_aip_data, has_hard_runway, point_of_entry)
-- Additional filters are applied on the backend via API
+
+Backend-only filters (via API):
+- `fuel_type` (UI dropdown), `has_avgas`/`has_jet_a` (legacy boolean filters)
+- `hotel`, `restaurant`
+- `min_runway_length_ft`, `max_runway_length_ft`, `max_landing_fee`
+- `trip_distance`, `exclude_large_airports`
 
 ### 2. Visualization Engine (`ts/engines/visualization-engine.ts`)
 
@@ -140,6 +181,10 @@ Manages Leaflet map rendering and all map-related operations.
 - `setView(lat, lng, zoom)` - Set map view
 - `getMap()` - Get Leaflet map instance
 - `fitBounds()` - Fit map bounds to show all airports
+- `loadBulkProcedureLines(airports, apiAdapter)` - Load procedure lines in bulk for multiple airports
+- `clearProcedureLines()` - Clear all procedure lines
+- `getRelevanceColor(airport)` - Get color based on GA relevance score and quartiles (private)
+- `getNotificationColor(airport)` - Get color based on notification requirements (private)
 
 #### Legend Modes
 
@@ -147,6 +192,8 @@ Manages Leaflet map rendering and all map-related operations.
 - **`procedure-precision`**: Colors by procedure precision (ILS, RNAV, etc.)
 - **`runway-length`**: Colors by runway length
 - **`country`**: Colors by country
+- **`relevance`**: Colors by GA Friendliness relevance score (quartile-based, persona-specific)
+- **`notification`**: Colors by notification requirements (H24, hours notice, on request)
 
 ### 3. UI Manager (`ts/managers/ui-manager.ts`)
 
@@ -163,6 +210,7 @@ Handles all DOM interactions and updates UI based on state changes.
 
 #### Key Methods
 
+**Initialization & Core:**
 - `init()` - Initialize UI manager
 - `updateUI(state)` - Update UI based on state
 - `updateFilterControls(filters)` - Sync filter controls with state
@@ -171,9 +219,26 @@ Handles all DOM interactions and updates UI based on state changes.
 - `updateErrorState(error)` - Display error message
 - `updateAirportCount(count)` - Update airport count display
 - `applyFilters()` - Trigger API call with current filters
+- `syncFiltersToUI(filters)` - Public method for LLM to sync filter UI
+
+**Search & Route:**
 - `handleSearch(query)` - Handle search input (private)
 - `handleRouteSearch(routeAirports)` - Handle route search (private)
-- `syncFiltersToUI(filters)` - Public method for LLM to sync filter UI
+- `applyRouteSearch(route)` - Apply route search with current filters (private)
+- `applyLocateWithCenter(locate)` - Apply locate search with cached center (private)
+
+**AIP Filtering:**
+- `loadAIPFilters()` - Load AIP fields and presets from API
+- `wireUpAIPFilters()` - Wire up AIP filter control event listeners
+- `handleAIPFieldChange()` - Handle AIP field/operator/value changes
+- `applyAIPPreset(preset)` - Apply AIP filter preset
+- `clearAIPFilter()` - Clear AIP filter
+- `updateActiveAIPFilter(field, operator, value)` - Update active filter display
+
+**Persona/GA Management:**
+- `populatePersonaSelector()` - Populate persona selector dropdown from GA config
+- `updatePersonaSelectorVisibility(legendMode)` - Update persona selector visibility (now always visible)
+- `triggerGAScoresLoad()` - Trigger loading of GA scores for visible airports
 
 ### 4. API Adapter (`ts/adapters/api-adapter.ts`)
 
@@ -181,6 +246,7 @@ Handles all communication with the backend API using Fetch API.
 
 #### Endpoints
 
+**Airport Data:**
 - `getAirports(filters)` - Get airports with filters
 - `getAirportDetail(icao)` - Get airport details
 - `searchAirports(query, limit)` - Search airports
@@ -190,12 +256,45 @@ Handles all communication with the backend API using Fetch API.
 - `getAirportProcedures(icao)` - Get airport procedures
 - `getAirportRunways(icao)` - Get airport runways
 - `getAirportAIPEntries(icao)` - Get AIP entries
-- `getCountryRules(countryCode)` - Get country rules
+- `getBulkProcedureLines(airports, distanceNm)` - Get procedure lines for multiple airports
+
+**Filters & Metadata:**
 - `getAllFilters()` - Get available filters metadata
 - `getAIPFilterPresets()` - Get AIP filter presets
 - `getAvailableAIPFields()` - Get available AIP fields
 
-### 5. LLM Integration (`ts/adapters/llm-integration.ts`)
+**Rules/Regulations:**
+- `getCountryRules(countryCode)` - Get country rules
+
+**GA Friendliness:**
+- `getGAConfig()` - Get GA configuration (features, personas, buckets)
+- `getGAPersonas()` - Get list of available personas
+- `getGAScores(icaos, persona)` - Get GA scores for multiple airports (max 200)
+- `getGASummary(icao, persona)` - Get full GA summary for single airport
+- `getGAHealth()` - Check GA service health
+
+### 5. Geocode Cache (`ts/utils/geocode-cache.ts`)
+
+Caches geocode results (location label → coordinates) for consistent search behavior.
+
+#### Purpose
+
+When a locate search is performed (via chatbot or locate button), the search box displays the location label (e.g., "Brac, Croatia"). Without caching, the debounced search handler would text-search this label against airport names, find nothing, and overwrite the locate results.
+
+#### Key Methods
+
+- `set(searchText, lat, lon, label)` - Cache a geocode result
+- `get(searchText)` - Get cached result (case-insensitive, trimmed)
+- `has(searchText)` - Check if cached
+- `clear()` - Clear all entries
+
+#### Usage
+
+- **Population**: `trigger-locate` handler and `handleLocate()` populate the cache
+- **Lookup**: `handleSearch()` checks cache before doing text search
+- **Eviction**: LRU-like eviction when cache exceeds 256 entries
+
+### 6. LLM Integration (`ts/adapters/llm-integration.ts`)
 
 Handles chatbot visualizations and filter profile application.
 
@@ -203,10 +302,21 @@ Handles chatbot visualizations and filter profile application.
 
 The LLM can return these visualization types:
 
-1. **`markers`**: Display airports as markers
-   - Sets airports in store via `store.setAirports()`
-   - Applies filter profile if provided
+1. **`markers`**: Display airports as markers (two modes)
+
+   **Mode 1: With meaningful filters** (country, point_of_entry, fuel_type, etc.):
+   - Clears old LLM highlights
+   - Applies filter profile to store (updates UI filter controls)
+   - Adds blue highlights for the specific airports returned by the tool
+   - Dispatches `trigger-filter-refresh` event to load ALL airports matching filters
+   - Result: Map shows all airports matching filters, with LLM recommendations highlighted in blue
+
+   **Mode 2: No meaningful filters** (just airport list):
+   - Clears old LLM highlights
+   - Sets airports in store directly via `store.setAirports()`
+   - Adds blue highlights for all returned airports
    - Fits map bounds to show all airports
+   - Result: Map shows only the returned airports, all highlighted
 
 2. **`route_with_markers`**: Display route with airports
    - Clears old LLM highlights
@@ -219,12 +329,23 @@ The LLM can return these visualization types:
    - Sets airports in store
    - Sets locate state with point coordinates
    - Applies filter profile if provided
-   - Fits map bounds to show all airports
+   - Triggers locate search via `trigger-locate` event
+   - Shows all airports within radius with highlights on recommended airports
 
 4. **`marker_with_details`**: Focus on specific airport
    - Updates search query in store
    - Triggers search via `trigger-search` event (centers map, shows marker)
    - Triggers `airport-click` event (loads and displays details panel)
+
+#### Legend Suggestion
+
+LLMIntegration automatically switches the map legend based on query context via `applySuggestedLegend(tool, filters)`:
+
+- **Tool-based mapping**: `get_notification_for_airport` → `notification` legend
+- **Filter-based overrides** (take precedence):
+  - `max_hours_notice` filter → `notification` legend
+  - `has_procedures: true` → `procedure-precision` legend
+- See `CHATBOT_WEBUI_DESIGN.md` → "Tool-to-Legend Mapping" for full mapping tables
 
 ## Data Flow
 
@@ -286,6 +407,7 @@ When a user types a route (e.g., "EGKB LFPG") in the search input:
 
 **Key Details:**
 - Route detection: All parts must be 4-letter ICAO codes (regex: `/^[A-Za-z]{4}$/`)
+- Single-airport routes: Supported (for locate-style searches with distance radius)
 - Debouncing: 500ms delay prevents excessive API calls
 - Route state: Stores both ICAO codes and coordinates for route line rendering
 - Filter integration: Route search results are filtered by current filters
@@ -314,13 +436,14 @@ User types → Input event → store.setSearchQuery() → Store subscription →
 ### LLM Visualization Flow
 
 ```
-Chatbot sends visualization
+Chatbot sends ui_payload
+  → LLMIntegration.applySuggestedLegend(tool, filters) called (switches legend based on query context)
   → LLMIntegration.handleVisualization() called
   → Routes to appropriate handler (markers, route_with_markers, etc.)
   → Handler updates store (setAirports, setRoute, highlightPoint, etc.)
   → If filter_profile present, applyFilterProfile() called
   → Store subscription fires
-  → VisualizationEngine updates map
+  → VisualizationEngine updates map (with context-appropriate legend)
   → UIManager updates UI
 ```
 
@@ -331,6 +454,72 @@ Chatbot sends visualization
 4. Apply filter profile if provided
 5. Trigger route search via `trigger-search` event
 6. Route search shows all airports, highlights show chat airports
+
+## Geocode Cache
+
+### Overview
+
+The GeocodeCache (`ts/utils/geocode-cache.ts`) ensures consistent search behavior when the search box contains a location query from a previous locate search. Without this cache, the debounced search handler would text-search the location label (e.g., "Brac, Croatia") against airport names, find nothing, and overwrite the locate results.
+
+### Problem Solved
+
+```
+Without cache:
+1. Chatbot: "airports near Brac, Croatia"
+2. trigger-locate fires → loads 15 airports
+3. Search box shows "Brac, Croatia"
+4. Debounced search fires (500ms later)
+5. Text search "Brac, Croatia" → 0 matches
+6. Airports overwritten with empty/viewport results ❌
+
+With cache:
+1. Chatbot: "airports near Brac, Croatia"
+2. trigger-locate fires → caches "Brac, Croatia" → {lat, lon} → loads 15 airports
+3. Search box shows "Brac, Croatia"
+4. Debounced search fires (500ms later)
+5. Cache hit for "Brac, Croatia" → locate search with cached coords
+6. Same airports displayed ✅
+```
+
+### Implementation
+
+**Cache Structure:**
+```typescript
+interface GeocodeEntry {
+  lat: number;
+  lon: number;
+  label: string;
+  timestamp: number;
+}
+
+class GeocodeCache {
+  private cache = new Map<string, GeocodeEntry>();
+  private maxSize = 256;  // LRU-like eviction
+
+  set(searchText, lat, lon, label): void;
+  get(searchText): GeocodeEntry | undefined;
+  clear(): void;
+}
+```
+
+**Cache Population:**
+- `main.ts`: `trigger-locate` handler caches label → coords BEFORE loading airports
+- `ui-manager.ts`: `handleLocate()` caches query → coords after geocode API returns
+
+**Unified Search Logic (`ui-manager.ts:handleSearch`):**
+1. Empty search → viewport refresh
+2. **Check geocode cache** → if hit, do locate search with cached coords
+3. Check for ICAO route pattern → route search
+4. Text search → if results, show them
+5. No matches → show all airports in viewport (don't hide everything)
+
+### Key Design Decisions
+
+- **Cache key normalization**: `trim().toLowerCase()` for consistent lookups
+- **LRU eviction**: Oldest entries removed when cache exceeds 256 entries
+- **No airport storage**: Cache stores only coordinates; filter changes trigger re-fetch with current filters
+- **Singleton export**: `geocodeCache` instance shared across app
+- **Debug access**: Exposed on `window.geocodeCache` for debugging
 
 ## Filter Updates with Active Route
 
@@ -346,6 +535,173 @@ Filter checkbox toggled
 ```
 
 This ensures filters work correctly with route searches by re-running the API call with updated filters.
+
+## Distance Input Updates
+
+Distance values (`search_radius_nm` and `enroute_distance_max_nm`) are stored in the Zustand store as part of `FilterConfig`, following the single source of truth principle.
+
+When distance inputs are changed:
+
+```
+Distance input changed
+  → handleFilterChange({ search_radius_nm: value }) updates store
+  → Detects active route/locate state
+  → If route active (not chatbot selection): applyFilters() → applyRouteSearch()
+  → If locate active: applyFilters() → applyLocateWithCenter()
+  → Search functions read distance from store.filters.search_radius_nm
+  → Store updates → Map updates reactively
+```
+
+**Key Details:**
+- Distance values stored in `filters.search_radius_nm` (default: 50) and `filters.enroute_distance_max_nm` (default: null)
+- All search functions read distance from store, not DOM
+- UI inputs sync bidirectionally with store via `updateFilterControls()`
+- Uses `change` event (fires on blur or Enter) not `input` (which fires on every keystroke)
+- `clearFilters()` resets distance to defaults (50nm, null)
+
+## GA Friendliness State Management
+
+### Overview
+
+The GA (General Aviation) Friendliness system provides persona-based relevance scoring for airports. Scores are pre-computed for all personas and embedded in airport data, with quartile thresholds computed dynamically based on visible airports.
+
+### State Structure
+
+```typescript
+interface GAState {
+  config: GAConfig | null;              // GA configuration from API
+  configLoaded: boolean;                // Whether config has been loaded
+  configError: string | null;           // Error loading config
+  selectedPersona: string;               // Current persona ID (e.g., 'ifr_touring_sr22')
+  scores: Map<string, AirportGAScore>;  // GA scores per airport (ICAO -> score)
+  summaries: Map<string, AirportGASummary>; // Full GA summaries per airport
+  isLoading: boolean;                    // Loading state
+  computedQuartiles: QuartileThresholds | null; // Quartile thresholds for relevance coloring
+}
+```
+
+### Data Flow
+
+**Initialization:**
+```
+App starts → PersonaManager.init() → APIAdapter.getGAConfig() → store.setGAConfig()
+```
+
+**Persona Selection:**
+```
+User selects persona → store.setGASelectedPersona() → Quartiles reset → PersonaManager.computeQuartiles()
+```
+
+**Score Loading:**
+```
+Airports displayed → PersonaManager.loadScores(icaos) → APIAdapter.getGAScores() → store.setGAScores()
+→ Quartiles computed → store.setGAComputedQuartiles()
+```
+
+**Relevance Coloring:**
+```
+Legend mode = 'relevance' → VisualizationEngine.getRelevanceColor() → 
+Uses airport.ga.persona_scores[selectedPersona] → Compares to quartiles → Returns bucket color
+```
+
+### Key Concepts
+
+- **Personas**: Pre-defined GA pilot profiles with feature weights (e.g., IFR Touring SR22, VFR Day Trip)
+- **Quartiles**: Dynamic thresholds (Q1, Q2, Q3) computed from visible airport scores
+- **Relevance Buckets**: Four quartiles (top, second, third, bottom) plus "unknown" for airports without data
+- **Embedded Scores**: All persona scores are pre-computed and embedded in `airport.ga.persona_scores`
+
+## Rules/Regulations State Management
+
+### Overview
+
+The Rules system manages country-specific aviation regulations, with support for LLM-provided visual filters and free-text search.
+
+### State Structure
+
+```typescript
+interface RulesState {
+  allRulesByCountry: Record<string, CountryRules>; // All loaded rules, keyed by ISO country code
+  activeCountries: string[];                     // Currently selected countries (display order)
+  visualFilter: RulesVisualFilter | null;        // LLM-provided visual filter (tagsByCountry)
+  textFilter: string;                             // Free-text filter from Rules search box
+  sectionState: Record<string, boolean>;          // Expand/collapse state per section (sectionId -> expanded)
+}
+
+interface RulesVisualFilter {
+  tagsByCountry: Record<string, string[]>;  // Tags to filter by, per country
+}
+```
+
+### Data Flow
+
+**Loading Rules:**
+```
+LLM sends 'show-country-rules' event → main.ts loads rules → APIAdapter.getCountryRules() → 
+store.setRulesForCountry() → store.setRulesSelection() → Rules panel renders
+```
+
+**Visual Filtering (Tag-Based):**
+```
+LLM provides tagsByCountry → store.setRulesSelection(countries, visualFilter) →
+Rules panel filters rules at rule-level (show rules with ANY matching tag) →
+Rules displayed grouped by category, empty categories auto-hidden
+```
+
+**Text Filtering:**
+```
+User types in Rules search box → store.setRulesTextFilter() → Rules panel re-renders → 
+Filters rules by question, answer, tags, category name, country
+```
+
+**Section State:**
+```
+User expands/collapses section → store.setRuleSectionState() → State persisted in localStorage → 
+Restored on next render
+```
+
+### Key Concepts
+
+- **Visual Filter (Tag-Based)**: LLM provides `tagsByCountry` to filter rules by tags
+  - Filters at rule level (more precise than category-level filtering)
+  - Rules shown if they have ANY of the specified tags
+  - Rules displayed grouped by category, empty categories auto-hidden
+- **Text Filter**: Free-text search across question, answer, tags, category, and country
+- **Section State**: Expand/collapse state persisted per section ID
+- **Store-Driven Rendering**: Rules panel renders from centralized store state, not direct API calls
+
+## AIP Filtering System
+
+### Overview
+
+AIP (Aeronautical Information Publication) filtering allows users to filter airports by specific AIP field values using operators (contains, equals, not_empty, starts_with, ends_with).
+
+### Data Flow
+
+**Loading Metadata:**
+```
+UIManager.init() → loadAIPFilters() → 
+APIAdapter.getAvailableAIPFields() + getAIPFilterPresets() → 
+Populates field select and preset buttons
+```
+
+**Applying Filter:**
+```
+User selects field/operator/value → handleAIPFieldChange() → store.setFilters() → 
+Active filter displayed → API call includes AIP filter parameters
+```
+
+**Presets:**
+```
+User clicks preset button → applyAIPPreset() → Sets field/operator/value → handleAIPFieldChange()
+```
+
+### Key Concepts
+
+- **Presets**: Pre-defined common AIP filters (e.g., "Has Customs", "Has Fuel")
+- **Operators**: contains, equals, not_empty, starts_with, ends_with
+- **Active Filter Display**: Shows current AIP filter in UI when active
+- **Backend Filtering**: AIP filters are applied on backend, not client-side
 
 ## Common Patterns
 

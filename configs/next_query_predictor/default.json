@@ -1,0 +1,116 @@
+{
+  "templates": {
+    "find_airports_near_route": {
+      "filters": [
+        {
+          "filter": "has_avgas",
+          "query_template": "Show me airports with AVGAS along this route",
+          "tool_name": "find_airports_near_route",
+          "category": "route",
+          "priority": 4
+        },
+        {
+          "filter": "point_of_entry",
+          "query_template": "Which airports have customs facilities on this route?",
+          "tool_name": "find_airports_near_route",
+          "category": "route",
+          "priority": 5
+        }
+      ],
+      "entities": [
+        {
+          "entity_type": "icao_codes",
+          "query_template": "What are the procedures at {icao}?",
+          "tool_name": "get_airport_details",
+          "category": "details",
+          "priority": 3
+        },
+        {
+          "entity_type": "icao_codes",
+          "query_template": "Tell me more about {icao}",
+          "tool_name": "get_airport_details",
+          "category": "details",
+          "priority": 3
+        }
+      ],
+      "rule_categories": [
+        {"name": "International", "priority": 5, "max_questions": 1},
+        {"name": "VFR", "priority": 4, "max_questions": 1},
+        {"name": "Airspace", "priority": 4, "max_questions": 1},
+        {"name": "Flight Rules", "priority": 4, "max_questions": 1},
+        {"name": "IFR", "priority": 3, "max_questions": 1},
+        {"name": "Airfields", "priority": 3, "max_questions": 1}
+      ],
+      "fallback_queries": [
+        "What are the customs rules for countries along this route?",
+        "Do I need to file a flight plan for this route?"
+      ]
+    },
+    "find_airports_near_location": {
+      "filters": [
+        {
+          "filter": "has_hard_runway",
+          "query_template": "Show airports with hard runways near {location}",
+          "tool_name": "find_airports_near_location",
+          "category": "route",
+          "priority": 3
+        },
+        {
+          "filter": "has_avgas",
+          "query_template": "Show airports with AVGAS near {location}",
+          "tool_name": "find_airports_near_location",
+          "category": "route",
+          "priority": 4
+        }
+      ],
+      "entities": [
+        {
+          "entity_type": "countries",
+          "query_template": "What are the landing requirements for {country}?",
+          "tool_name": "answer_rules_question",
+          "category": "rules",
+          "priority": 4
+        }
+      ],
+      "rule_categories": [],
+      "fallback_queries": []
+    },
+    "search_airports": {
+      "filters": [
+        {
+          "filter": "point_of_entry",
+          "query_template": "Show only airports with customs facilities",
+          "tool_name": "search_airports",
+          "category": "route",
+          "priority": 3
+        }
+      ],
+      "entities": [
+        {
+          "entity_type": "countries",
+          "query_template": "What are the VFR rules for {country}?",
+          "tool_name": "answer_rules_question",
+          "category": "rules",
+          "priority": 4
+        }
+      ],
+      "rule_categories": [],
+      "fallback_queries": []
+    },
+    "get_airport_details": {
+      "filters": [],
+      "entities": [
+        {
+          "entity_type": "countries",
+          "query_template": "What are the customs rules for {country}?",
+          "tool_name": "answer_rules_question",
+          "category": "rules",
+          "priority": 3
+        }
+      ],
+      "rule_categories": [],
+      "fallback_queries": []
+    }
+  }
+}
+

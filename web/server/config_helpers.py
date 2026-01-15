@@ -3,12 +3,13 @@
 """
 Configuration helper functions for the Euro AIP Airport Explorer.
 
-This file contains ONLY logic - no configuration values.
-Configuration values are in security_config.py (environment-specific).
+This file wraps the centralized config functions from shared/aviation_agent/config.py
+with production safety validation.
 
 This separation allows:
 - config_helpers.py to be tracked by git and auto-update
 - security_config.py to be customized per environment without conflicts
+- Production safety validation while using centralized path resolution
 """
 
 import os
@@ -75,34 +76,46 @@ def _get_default_safe_path(env_var: str, default_name: str, fallback_dir: str = 
 def get_safe_db_path() -> str:
     """Get a safe database path with validation.
     
+    Uses centralized config function and adds production safety validation.
+    
     Returns:
         Path to airports database
     """
-    return _get_default_safe_path("AIRPORTS_DB", "airports.db")
+    from shared.aviation_agent.config import _default_airports_db
+    path = str(_default_airports_db())
+    return _validate_and_fix_path(path, "airports.db")
 
 
 def get_safe_rules_path() -> str:
     """Get a safe rules path with validation.
     
+    Uses centralized config function and adds production safety validation.
+    
     Returns:
         Path to rules.json file
     """
-    return _get_default_safe_path("RULES_JSON", "rules.json")
+    from shared.aviation_agent.config import _default_rules_json
+    path = str(_default_rules_json())
+    return _validate_and_fix_path(path, "rules.json")
 
 
 def get_safe_ga_meta_db_path() -> str | None:
     """Get a safe GA meta database path with validation.
     
+    Uses centralized config function and adds production safety validation.
+    
     Returns:
-        Path to ga_meta.sqlite or None if not configured/available
+        Path to GA persona database or None if not configured/available
     """
-    db_path = os.getenv("GA_META_DB")
+    from shared.aviation_agent.config import get_ga_meta_db_path
+    
+    db_path = get_ga_meta_db_path()
     
     if db_path is None:
         return None
     
     # Validate and fix path using shared logic
-    db_path = _validate_and_fix_path(db_path, "ga_meta.sqlite")
+    db_path = _validate_and_fix_path(db_path, "ga_persona.db")
     
     # Verify file exists
     if not os.path.exists(db_path):

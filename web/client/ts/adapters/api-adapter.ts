@@ -3,7 +3,7 @@
  * Uses Fetch API, transforms requests/responses to standard format
  */
 
-import type { Airport, FilterConfig, GAConfig, AirportGAScore, AirportGASummary, Persona } from '../store/types';
+import type { Airport, FilterConfig, GAConfig, AirportGAScore, AirportGASummary, Persona, BoundingBox } from '../store/types';
 
 /**
  * Standard API response format
@@ -67,8 +67,9 @@ export class APIAdapter {
     if (filters.has_aip_data === true) params.set('has_aip_data', 'true');
     if (filters.has_hard_runway === true) params.set('has_hard_runway', 'true');
     if (filters.point_of_entry === true) params.set('point_of_entry', 'true');
-    if (filters.has_avgas === true) params.set('has_avgas', 'true');
-    if (filters.has_jet_a === true) params.set('has_jet_a', 'true');
+    if (filters.hotel) params.set('hotel', filters.hotel);
+    if (filters.restaurant) params.set('restaurant', filters.restaurant);
+    if (filters.fuel_type) params.set('fuel_type', filters.fuel_type);
     if (filters.max_runway_length_ft) params.set('max_runway_length_ft', String(filters.max_runway_length_ft));
     if (filters.min_runway_length_ft) params.set('min_runway_length_ft', String(filters.min_runway_length_ft));
     if (filters.max_landing_fee) params.set('max_landing_fee', String(filters.max_landing_fee));
@@ -114,15 +115,34 @@ export class APIAdapter {
     const params = this.transformFiltersToParams(filters);
     const queryString = params.toString();
     const endpoint = `/api/airports/${queryString ? '?' + queryString : ''}`;
-    
+
     const data = await this.request<Airport[]>(endpoint);
-    
+
     return {
       data: Array.isArray(data) ? data : [],
       count: Array.isArray(data) ? data.length : 0
     };
   }
-  
+
+  /**
+   * Get airports within a bounding box (viewport-based loading)
+   */
+  async getAirportsByBounds(
+    bounds: BoundingBox,
+    filters: Partial<FilterConfig> = {}
+  ): Promise<APIResponse<Airport[]>> {
+    const params = this.transformFiltersToParams(filters);
+    params.set('bbox', `${bounds.north},${bounds.south},${bounds.east},${bounds.west}`);
+
+    const endpoint = `/api/airports/?${params.toString()}`;
+    const data = await this.request<Airport[]>(endpoint);
+
+    return {
+      data: Array.isArray(data) ? data : [],
+      count: Array.isArray(data) ? data.length : 0
+    };
+  }
+
   /**
    * Search airports by query
    */

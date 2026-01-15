@@ -256,6 +256,10 @@ struct OfflineMapView: UIViewRepresentable {
                 let colors: [UIColor] = [.blue, .systemGreen, .orange, .purple, .systemPink,
                                          .cyan, .systemMint, .systemIndigo, .systemTeal, .brown]
                 return colors[hash % colors.count]
+
+            case .notification:
+                // Notification data not available offline - show gray
+                return .gray
             }
         }
     }

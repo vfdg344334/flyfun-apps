@@ -6,6 +6,14 @@
 import { useStore } from '../store/store';
 import type { AppState, FilterConfig, LegendMode, Airport } from '../store/types';
 import { APIAdapter } from '../adapters/api-adapter';
+import { geocodeCache } from '../utils/geocode-cache';
+import {
+  NOTIFICATION_LEGEND_DISPLAY,
+  AIRPORT_TYPE_LEGEND_DISPLAY,
+  RUNWAY_LENGTH_LEGEND_DISPLAY,
+  COUNTRY_LEGEND_DISPLAY,
+  PROCEDURE_PRECISION_LEGEND_DISPLAY,
+} from '../config/legend-configs';
 
 /**
  * UI Manager class
@@ -509,21 +517,34 @@ export class UIManager {
     // Filter controls
     // Helper to handle filter changes - if route/locate active, re-run search
     const handleFilterChange = (filterUpdate: Partial<FilterConfig>) => {
+      console.log('🔵 handleFilterChange called:', filterUpdate);
+
       // Update filters first
       this.store.getState().setFilters(filterUpdate);
 
       // Check current state after filter update
       const state = this.store.getState();
+      console.log('🔵 handleFilterChange state:', {
+        hasRoute: !!state.route,
+        routeAirports: state.route?.airports,
+        hasLocate: !!state.locate,
+        locateCenter: state.locate?.center
+      });
 
       // If we have an active route or locate, re-run the search with new filters
-      if (state.route && state.route.airports && !state.route.isChatbotSelection) {
-        // Active route search - re-run with new filters
+      if (state.route && state.route.airports) {
+        // Active route search - re-run with new filters (including chatbot selections)
+        console.log('🔵 handleFilterChange: triggering applyFilters for route');
         this.applyFilters();
       } else if (state.locate && state.locate.center) {
         // Active locate search - re-run with new filters
+        console.log('🔵 handleFilterChange: triggering applyFilters for locate');
         this.applyFilters();
+      } else {
+        // Viewport mode - trigger a refresh with current viewport bounds
+        console.log('🔵 handleFilterChange: triggering viewport refresh');
+        window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
-      // Otherwise, just client-side filtering is fine (normal mode)
     };
 
     const countrySelect = document.getElementById('country-filter');
@@ -566,12 +587,60 @@ export class UIManager {
       });
     }
 
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter');
+    if (hotelFilter) {
+      hotelFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ hotel: value || null });
+      });
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter');
+    if (restaurantFilter) {
+      restaurantFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'at_airport' | 'vicinity' | '';
+        handleFilterChange({ restaurant: value || null });
+      });
+    }
+
+    // Fuel type filter
+    const fuelFilter = document.getElementById('fuel-filter');
+    if (fuelFilter) {
+      fuelFilter.addEventListener('change', (e) => {
+        const target = e.target as HTMLSelectElement;
+        const value = target.value as 'avgas' | 'jet_a' | '';
+        handleFilterChange({ fuel_type: value || null });
+      });
+    }
+
     const maxAirports = document.getElementById('max-airports-filter');
     if (maxAirports) {
       maxAirports.addEventListener('change', (e) => {
         const target = e.target as HTMLSelectElement;
         const limit = target.value ? parseInt(target.value, 10) : null;
         handleFilterChange({ limit: limit || 1000 });
+      });
+    }
+
+    // Distance inputs - update store and re-run search if route/locate is active
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance) {
+      routeDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = parseFloat(target.value) || 50;
+        handleFilterChange({ search_radius_nm: value });
+      });
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      enrouteDistance.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const value = target.value ? parseFloat(target.value) : null;
+        handleFilterChange({ enroute_distance_max_nm: value });
       });
     }
 
@@ -633,7 +702,14 @@ export class UIManager {
     const applyFiltersBtn = document.getElementById('apply-filters');
     if (applyFiltersBtn) {
       applyFiltersBtn.addEventListener('click', () => {
-        this.applyFilters();
+        const state = this.store.getState();
+        // If route or locate is active, use the standard applyFilters
+        if ((state.route && state.route.airports) || (state.locate && state.locate.center)) {
+          this.applyFilters();
+        } else {
+          // Use viewport-based loading when in normal browse mode
+          window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
+        }
       });
     }
 
@@ -698,6 +774,23 @@ export class UIManager {
       borderCrossing.checked = filters.point_of_entry === true;
     }
 
+    // Hospitality filters
+    const hotelFilter = document.getElementById('hotel-filter') as HTMLSelectElement;
+    if (hotelFilter) {
+      hotelFilter.value = filters.hotel || '';
+    }
+
+    const restaurantFilter = document.getElementById('restaurant-filter') as HTMLSelectElement;
+    if (restaurantFilter) {
+      restaurantFilter.value = filters.restaurant || '';
+    }
+
+    // Fuel type filter
+    const fuelFilter = document.getElementById('fuel-filter') as HTMLSelectElement;
+    if (fuelFilter) {
+      fuelFilter.value = filters.fuel_type || '';
+    }
+
     const maxAirports = document.getElementById('max-airports-filter') as HTMLSelectElement;
     if (maxAirports) {
       maxAirports.value = filters.limit ? String(filters.limit) : '';
@@ -727,6 +820,21 @@ export class UIManager {
       const activeFilterDiv = document.getElementById('active-aip-filter');
       if (activeFilterDiv) {
         activeFilterDiv.style.display = 'none';
+      }
+    }
+
+    // Update distance inputs
+    const routeDistance = document.getElementById('route-distance') as HTMLInputElement;
+    if (routeDistance && routeDistance.value !== String(filters.search_radius_nm)) {
+      routeDistance.value = String(filters.search_radius_nm);
+    }
+
+    const enrouteDistance = document.getElementById('enroute-distance') as HTMLInputElement;
+    if (enrouteDistance) {
+      const currentValue = enrouteDistance.value;
+      const newValue = filters.enroute_distance_max_nm ? String(filters.enroute_distance_max_nm) : '';
+      if (currentValue !== newValue) {
+        enrouteDistance.value = newValue;
       }
     }
   }
@@ -763,81 +871,43 @@ export class UIManager {
 
     let html = '';
 
+    // Helper to render color-based legend items
+    const renderColorLegend = (buckets: Array<{label: string; color: string}>) =>
+      buckets.map(bucket => `
+        <div class="legend-item">
+          <div class="legend-color" style="background-color: ${bucket.color};"></div>
+          <span>${bucket.label}</span>
+        </div>
+      `).join('');
+
+    // Helper to render line-based legend items (for procedure-precision)
+    const renderLineLegend = (buckets: Array<{label: string; color: string}>) =>
+      buckets.map(bucket => `
+        <div class="legend-item">
+          <div class="legend-line" style="background-color: ${bucket.color};"></div>
+          <span>${bucket.label}</span>
+        </div>
+      `).join('');
+
     switch (legendMode) {
       case 'airport-type':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Border Crossing</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Airport with Procedures</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>Airport without Procedures</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(AIRPORT_TYPE_LEGEND_DISPLAY);
         break;
 
       case 'procedure-precision':
-        html = `
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #ffff00;"></div>
-            <span>ILS (Precision)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #0000ff;"></div>
-            <span>RNP/RNAV (RNP)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line" style="background-color: #ffffff;"></div>
-            <span>VOR/NDB (Non-Precision)</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderLineLegend(PROCEDURE_PRECISION_LEGEND_DISPLAY);
         break;
 
       case 'runway-length':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Long Runway (>8000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Medium Runway (4000-8000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>Short Runway (<4000ft)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #6c757d;"></div>
-            <span>Unknown Length</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(RUNWAY_LENGTH_LEGEND_DISPLAY);
         break;
 
       case 'country':
-        html = `
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #007bff;"></div>
-            <span>France (LF)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #dc3545;"></div>
-            <span>United Kingdom (EG)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #28a745;"></div>
-            <span>Germany (ED)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background-color: #ffc107;"></div>
-            <span>Other Countries</span>
-          </div>
-        `;
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(COUNTRY_LEGEND_DISPLAY);
         break;
 
       case 'relevance': {
@@ -859,6 +929,11 @@ export class UIManager {
         `).join('');
         break;
       }
+
+      case 'notification':
+        // @see config/legend-configs.ts for configuration
+        html = renderColorLegend(NOTIFICATION_LEGEND_DISPLAY);
+        break;
     }
 
     legendContent.innerHTML = html;
@@ -972,20 +1047,20 @@ export class UIManager {
    */
   async applyFilters(): Promise<void> {
     const state = this.store.getState();
+    console.log('🔵 applyFilters called:', {
+      hasRoute: !!state.route,
+      routeAirports: state.route?.airports,
+      hasLocate: !!state.locate,
+      filters: state.filters
+    });
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
 
     try {
-      // Check if we have route state
-      if (state.route && state.route.isChatbotSelection && state.route.chatbotAirports) {
-        // Client-side filtering for chatbot airports
-        // Filters are already applied via store.setFilters()
-        this.store.getState().setLoading(false);
-        return;
-      }
-
+      // Route search mode - re-run with current filters
       if (state.route && state.route.airports) {
+        console.log('🔵 applyFilters: route search mode');
         // Route search mode
         await this.applyRouteSearch(state.route);
         return;
@@ -1017,22 +1092,14 @@ export class UIManager {
     if (!route.airports || route.airports.length < 1) return;
 
     const state = this.store.getState();
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
-
-    const enrouteInput = document.getElementById('enroute-distance') as HTMLInputElement;
-    const enrouteMaxNm = enrouteInput ? parseFloat(enrouteInput.value) || undefined : undefined;
+    // Read distance values from store (single source of truth)
+    const distanceNm = state.filters.search_radius_nm;
 
     try {
-      const filters: Partial<FilterConfig> = { ...state.filters };
-      if (enrouteMaxNm) {
-        filters.enroute_distance_max_nm = enrouteMaxNm;
-      }
-
       const response = await this.apiAdapter.searchAirportsNearRoute(
         route.airports,
         distanceNm,
-        filters
+        state.filters
       );
 
       // Extract airports from response
@@ -1067,8 +1134,8 @@ export class UIManager {
     if (!locate.center) return;
 
     const state = this.store.getState();
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || locate.radiusNm : locate.radiusNm;
+    // Read radius from store (single source of truth)
+    const radiusNm = state.filters.search_radius_nm;
 
     try {
       const response = await this.apiAdapter.locateAirportsByCenter(
@@ -1080,7 +1147,7 @@ export class UIManager {
       if (response.airports) {
         this.store.getState().setAirports(response.airports);
 
-        // Update locate state
+        // Update locate state with current radius
         this.store.getState().setLocate({
           ...locate,
           radiusNm
@@ -1097,36 +1164,91 @@ export class UIManager {
   }
 
   /**
-   * Handle search input
+   * Handle search input (user-initiated search from typing in search box)
+   *
+   * Unified search logic:
+   * 1. Empty search → show all airports (viewport refresh)
+   * 2. Check geocode cache → if hit, do locate search with cached coords
+   * 3. Check for ICAO route pattern → route search
+   * 4. Text search → if results, show them
+   * 5. No matches → show all airports (don't hide everything)
    */
   private async handleSearch(query: string): Promise<void> {
-    if (!query.trim()) {
-      // Clear search
-      this.store.getState().setAirports([]);
+    const trimmedQuery = query.trim();
+
+    // 1. Empty search: show all airports in viewport
+    if (!trimmedQuery) {
+      this.store.getState().setRoute(null);
+      this.store.getState().setLocate(null);
+      window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       return;
     }
 
-    // Check if this is a route search (4-letter ICAO codes)
-    const routeAirports = this.parseRouteFromQuery(query);
+    // 2. Check geocode cache first (for locate searches like "Brac, Croatia")
+    const cachedGeocode = geocodeCache.get(trimmedQuery);
+    if (cachedGeocode) {
+      console.log(`🔵 handleSearch: geocode cache hit for "${trimmedQuery}"`);
+      // Use cached coordinates for locate search
+      const state = this.store.getState();
+      const radiusNm = state.filters.search_radius_nm;
+
+      this.store.getState().setLoading(true);
+      try {
+        const response = await this.apiAdapter.locateAirportsByCenter(
+          { lat: cachedGeocode.lat, lon: cachedGeocode.lon, label: cachedGeocode.label },
+          radiusNm,
+          state.filters
+        );
+
+        if (response.airports) {
+          this.store.getState().setAirports(response.airports);
+          console.log(`✅ Geocode cache search: ${response.airports.length} airports within ${radiusNm}nm of "${cachedGeocode.label}"`);
+        }
+        this.store.getState().setLoading(false);
+      } catch (error: any) {
+        console.error('Error in geocode cache search:', error);
+        this.store.getState().setLoading(false);
+      }
+      return;
+    }
+
+    // Clear LLM highlights when user initiates a new search
+    // (LLM-initiated searches use trigger-search event which bypasses this)
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
+
+    // 3. Check if this is a route search (4-letter ICAO codes)
+    const routeAirports = this.parseRouteFromQuery(trimmedQuery);
 
     if (routeAirports && routeAirports.length > 0) {
       // Route search
       await this.handleRouteSearch(routeAirports);
-    } else {
-      // Text search
-      this.store.getState().setLoading(true);
-      this.store.getState().setError(null);
+      return;
+    }
 
-      try {
-        const response = await this.apiAdapter.searchAirports(query, 50);
+    // 4. Text search on airport names/ICAO codes
+    this.store.getState().setRoute(null);
+    this.store.getState().setLocate(null);
+
+    this.store.getState().setLoading(true);
+    this.store.getState().setError(null);
+
+    try {
+      const response = await this.apiAdapter.searchAirports(trimmedQuery, 50);
+
+      if (response.data.length > 0) {
+        // Text search found results
         this.store.getState().setAirports(response.data);
-        this.showSuccess(`Search results: ${response.data.length} airports found for "${query}"`);
-        this.store.getState().setLoading(false);
-      } catch (error: any) {
-        console.error('Error in search:', error);
-        this.store.getState().setError('Error searching airports: ' + (error.message || 'Unknown error'));
-        this.store.getState().setLoading(false);
+        this.showSuccess(`Search results: ${response.data.length} airports found for "${trimmedQuery}"`);
+      } else {
+        // 5. No matches: show all airports in viewport (don't hide everything)
+        console.log(`🔵 handleSearch: no text matches for "${trimmedQuery}", showing viewport airports`);
+        window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
       }
+      this.store.getState().setLoading(false);
+    } catch (error: any) {
+      console.error('Error in search:', error);
+      this.store.getState().setError('Error searching airports: ' + (error.message || 'Unknown error'));
+      this.store.getState().setLoading(false);
     }
   }
 
@@ -1150,14 +1272,16 @@ export class UIManager {
    * Handle route search
    */
   private async handleRouteSearch(routeAirports: string[]): Promise<void> {
-    const distanceInput = document.getElementById('route-distance') as HTMLInputElement;
-    const distanceNm = distanceInput ? parseFloat(distanceInput.value) || 50.0 : 50.0;
+    // Clear locate state when starting a new route search
+    this.store.getState().setLocate(null);
 
     this.store.getState().setLoading(true);
     this.store.getState().setError(null);
 
     try {
       const state = this.store.getState();
+      // Read distance from store (single source of truth)
+      const distanceNm = state.filters.search_radius_nm;
 
       // Get original route airport coordinates for route line
       const originalRouteAirports = await this.getRouteAirportCoordinates(routeAirports);
@@ -1221,14 +1345,13 @@ export class UIManager {
   }
 
   /**
-   * Handle locate
+   * Handle locate (user clicks Locate button)
    */
   private async handleLocate(): Promise<void> {
-    const searchInput = document.getElementById('search-input') as HTMLInputElement;
-    const radiusInput = document.getElementById('route-distance') as HTMLInputElement;
-
-    const query = searchInput ? searchInput.value.trim() : '';
-    const radiusNm = radiusInput ? parseFloat(radiusInput.value) || 50.0 : 50.0;
+    const state = this.store.getState();
+    // Read values from store (single source of truth)
+    const query = state.ui.searchQuery.trim();
+    const radiusNm = state.filters.search_radius_nm;
 
     if (!query) {
       this.store.getState().setError('Enter a place in the search box to locate near.');
@@ -1239,16 +1362,21 @@ export class UIManager {
     this.store.getState().setError(null);
 
     try {
-      const state = this.store.getState();
       const response = await this.apiAdapter.locateAirports(query, radiusNm, state.filters);
 
       if (response.airports) {
         this.store.getState().setAirports(response.airports);
 
         if (response.center) {
+          const centerLng = (response.center as any).lon || (response.center as any).lng || response.center.lat;
+          const centerLabel = response.center.label || query;
+
+          // Cache the geocode result for consistent search behavior
+          geocodeCache.set(query, response.center.lat, centerLng, centerLabel);
+
           this.store.getState().setLocate({
             query,
-            center: { lat: response.center.lat, lng: (response.center as any).lon || (response.center as any).lng || response.center.lat, label: response.center.label || '' },
+            center: { lat: response.center.lat, lng: centerLng, label: centerLabel },
             radiusNm
           });
         }
@@ -1267,11 +1395,17 @@ export class UIManager {
    * Clear filters
    */
   private clearFilters(): void {
+    // Clear LLM highlights when user clears filters
+    window.dispatchEvent(new CustomEvent('clear-llm-highlights'));
+
     this.store.getState().clearFilters();
     this.store.getState().setRoute(null);
     this.store.getState().setLocate(null);
     this.store.getState().setSearchQuery('');
-    this.applyFilters();
+
+    // Use viewport-based loading instead of full filter reload
+    // This keeps the current map view and loads airports within it
+    window.dispatchEvent(new CustomEvent('trigger-viewport-refresh'));
   }
 
   /**
@@ -1289,17 +1423,19 @@ export class UIManager {
     this.store.getState().setLoading(true);
 
     try {
-      const [detail, procedures, runways, aipEntries, rules] = await Promise.all([
+      const persona = useStore.getState().ga.selectedPersona;
+      const [detail, procedures, runways, aipEntries, rules, gaSummary] = await Promise.all([
         this.apiAdapter.getAirportDetail(airport.ident),
         this.apiAdapter.getAirportProcedures(airport.ident),
         this.apiAdapter.getAirportRunways(airport.ident),
         this.apiAdapter.getAirportAIPEntries(airport.ident),
-        airport.iso_country ? this.apiAdapter.getCountryRules(airport.iso_country) : Promise.resolve(null)
+        airport.iso_country ? this.apiAdapter.getCountryRules(airport.iso_country) : Promise.resolve(null),
+        this.apiAdapter.getGASummary(airport.ident, persona).catch(() => null)
       ]);
 
       // Dispatch event to display airport details
       const event = new CustomEvent('display-airport-details', {
-        detail: { detail, procedures, runways, aipEntries, rules }
+        detail: { detail, procedures, runways, aipEntries, rules, gaSummary }
       });
       window.dispatchEvent(event);
 
@@ -1365,6 +1501,23 @@ export class UIManager {
     if (filters.point_of_entry) {
       const checkbox = document.getElementById('border-crossing-only') as HTMLInputElement;
       if (checkbox) checkbox.checked = true;
+    }
+
+    // Hospitality filters
+    if (filters.hotel) {
+      const select = document.getElementById('hotel-filter') as HTMLSelectElement;
+      if (select) select.value = filters.hotel;
+    }
+
+    if (filters.restaurant) {
+      const select = document.getElementById('restaurant-filter') as HTMLSelectElement;
+      if (select) select.value = filters.restaurant;
+    }
+
+    // Fuel type filter
+    if (filters.fuel_type) {
+      const select = document.getElementById('fuel-filter') as HTMLSelectElement;
+      if (select) select.value = filters.fuel_type;
     }
 
     // Update store filters

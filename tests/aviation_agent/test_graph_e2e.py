@@ -9,13 +9,13 @@ def test_agent_runner_produces_ui_payload(
     planner_llm_stub,
     formatter_llm_stub,
 ):
-    # Disable routing for this test since we're testing the database path specifically
+    # Note: Routing behavior is controlled by behavior_config, not function params.
+    # The sample_messages fixture asks about IFR routing, which routes to database path.
     state = run_aviation_agent(
         sample_messages,
         settings=agent_settings,
         planner_llm=planner_llm_stub,
         formatter_llm=formatter_llm_stub,
-        enable_routing=False,
     )
 
     plan = state.get("plan")
