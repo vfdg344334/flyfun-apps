@@ -196,6 +196,9 @@ struct ChatSettingsView: View {
     /// Callback to show chat (replaces settings in sidebar)
     var onShowChat: (() -> Void)?
 
+    /// Callback to show offline maps (replaces settings in sidebar)
+    var onShowOfflineMaps: (() -> Void)?
+
     var body: some View {
         List {
             // Offline Mode Section
@@ -204,8 +207,8 @@ struct ChatSettingsView: View {
                     Label("Offline Mode", systemImage: "airplane.circle")
                 }
 
-                NavigationLink {
-                    OfflineMapsView()
+                Button {
+                    onShowOfflineMaps?()
                 } label: {
                     Label("Manage Offline Maps", systemImage: "square.and.arrow.down")
                 }

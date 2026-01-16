@@ -18,15 +18,25 @@ struct ContentView: View {
     @State private var showingInspector = false
     @State private var showingChat = false
     @State private var showingChatSettings = false
+    @State private var showingOfflineMaps = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            // SIDEBAR: Search/Filters, Chat, or Chat Settings
+            // SIDEBAR: Search/Filters, Chat, Settings, or Offline Maps
             if showingChat {
-                if showingChatSettings {
-                    ChatSettingsView(onShowChat: {
-                        withAnimation { showingChatSettings = false }
+                if showingOfflineMaps {
+                    OfflineMapsView(onBack: {
+                        withAnimation { showingOfflineMaps = false }
                     })
+                } else if showingChatSettings {
+                    ChatSettingsView(
+                        onShowChat: {
+                            withAnimation { showingChatSettings = false }
+                        },
+                        onShowOfflineMaps: {
+                            withAnimation { showingOfflineMaps = true }
+                        }
+                    )
                 } else {
                     ChatView(onShowSettings: {
                         withAnimation { showingChatSettings = true }

@@ -5,7 +5,10 @@ struct OfflineMapsView: View {
     @StateObject private var tileManager = OfflineTileManager.shared
     @State private var selectedRegion: MapRegion?
     @State private var showingDeleteConfirmation = false
-    
+
+    /// Callback to go back (to settings)
+    var onBack: (() -> Void)?
+
     var body: some View {
         List {
             // Storage section
@@ -87,6 +90,19 @@ struct OfflineMapsView: View {
             }
         }
         .navigationTitle("Offline Maps")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // Back to settings
+                Button {
+                    onBack?()
+                } label: {
+                    Image(systemName: "gear")
+                }
+            }
+        }
         .confirmationDialog("Clear All Maps?", isPresented: $showingDeleteConfirmation) {
             Button("Clear All", role: .destructive) {
                 tileManager.clearAllTiles()
