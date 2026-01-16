@@ -187,16 +187,32 @@ app/FlyFunEuroAIP/
 │       ├── Offline/
 │       └── NotificationService.swift
 ├── UserInterface/
+│   ├── ContentView.swift           # Root - branches by size class
 │   └── Views/
-│       ├── Map/
-│       ├── Chat/
-│       ├── Airport/
-│       └── Settings/
+│       ├── Shared/                 # Cross-platform components
+│       │   ├── FilterBindings.swift
+│       │   └── FloatingActionButton.swift
+│       ├── iPad/                   # iPad-specific layouts
+│       │   └── iPadLayoutView.swift
+│       ├── iPhone/                 # iPhone-specific layouts
+│       │   ├── iPhoneLayoutView.swift
+│       │   ├── iPhoneSearchBar.swift
+│       │   ├── iPhoneFilterOverlay.swift
+│       │   ├── iPhoneFloatingButtons.swift
+│       │   └── iPhoneChatOverlay.swift
+│       ├── Sidebar/                # iPad sidebar views
+│       ├── Chat/                   # Chat views (shared)
+│       ├── Map/                    # Map views (shared)
+│       ├── Airport/                # Airport details (shared)
+│       └── Settings/               # Settings views
 └── Assets.xcassets/
 ```
 
+> See [IOS_APP_UI.md](IOS_APP_UI.md) for layout philosophy and component details.
+
 ## Related Documents
 
+- [IOS_APP_UI.md](IOS_APP_UI.md) - Layout philosophy, iPhone vs iPad, shared components
 - [IOS_APP_DATA.md](IOS_APP_DATA.md) - Repository pattern, data sources
 - [IOS_APP_MAP.md](IOS_APP_MAP.md) - Map views, legends, markers
 - [IOS_APP_CHAT.md](IOS_APP_CHAT.md) - Chat system, AI, tools

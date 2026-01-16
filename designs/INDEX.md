@@ -100,6 +100,10 @@ Key exports: `NotificationParser`, `NotificationScorer`, `NotificationBatchProce
 Core architecture patterns: RZFlight model reuse, composed AppState, domain structure, environment injection. **Read first** before any iOS work.
 → Full doc: IOS_APP_ARCHITECTURE.md
 
+### iOS App UI Layout
+Layout philosophy: iPhone (map-centric overlays) vs iPad (NavigationSplitView), view folder structure, shared components (FilterBindings, FloatingActionButton), naming conventions.
+→ Full doc: IOS_APP_UI.md
+
 ### iOS App Data Layer
 Repository pattern, LocalAirportDataSource (KnownAirports), FilterConfig, region-based loading for map performance.
 → Full doc: IOS_APP_DATA.md
