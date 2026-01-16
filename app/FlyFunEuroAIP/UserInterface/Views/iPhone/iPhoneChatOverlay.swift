@@ -14,6 +14,8 @@ struct iPhoneChatOverlay: View {
     @Binding var isPresented: Bool
 
     @GestureState private var dragOffset: CGFloat = 0
+    @State private var showingSettings = false
+    @State private var showingOfflineMaps = false
 
     private let minHeight: CGFloat = 200
     private let defaultHeight: CGFloat = 350
@@ -42,9 +44,26 @@ struct iPhoneChatOverlay: View {
                                 }
                         )
 
-                    // Chat content
-                    ChatContent(compactWelcome: true)
-                        .frame(height: currentHeight - 40)
+                    // Content: Chat, Settings, or Offline Maps
+                    Group {
+                        if showingOfflineMaps {
+                            OfflineMapsView(onBack: {
+                                withAnimation { showingOfflineMaps = false }
+                            })
+                        } else if showingSettings {
+                            ChatSettingsView(
+                                onShowChat: {
+                                    withAnimation { showingSettings = false }
+                                },
+                                onShowOfflineMaps: {
+                                    withAnimation { showingOfflineMaps = true }
+                                }
+                            )
+                        } else {
+                            ChatContent(compactWelcome: true)
+                        }
+                    }
+                    .frame(height: currentHeight - 40)
                 }
                 .frame(height: currentHeight)
                 .background(
@@ -75,19 +94,19 @@ struct iPhoneChatOverlay: View {
 
                 Spacer()
 
-                Text("Chat Assistant")
+                Text(showingOfflineMaps ? "Offline Maps" : (showingSettings ? "Settings" : "Chat Assistant"))
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
 
                 Spacer()
 
-                // Settings button
+                // Settings toggle
                 Button {
-                    // Could show settings sheet
+                    withAnimation { showingSettings.toggle() }
                 } label: {
-                    Image(systemName: "gear")
+                    Image(systemName: showingSettings ? "bubble.left.and.bubble.right" : "gear")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(showingSettings ? .blue : .secondary)
                 }
             }
             .padding(.horizontal)
@@ -100,23 +119,28 @@ struct iPhoneChatOverlay: View {
     // MARK: - Snap Logic
 
     private func snapToHeight(_ targetHeight: CGFloat, maxHeight: CGFloat) {
-        // Snap points: dismiss (< 150), min (200), mid (50%), max (85%)
+        // Snap points: dismiss, min (200), mid (50%), max (85%)
+        // Use zone boundaries at 1/3 and 2/3 between snap points
         let midHeight = maxHeight * 0.5
 
-        if targetHeight < 150 {
+        // Zone boundaries
+        let dismissThreshold: CGFloat = 150
+        let minToMidBoundary = minHeight + (midHeight - minHeight) / 2  // Halfway between min and mid
+        let midToMaxBoundary = midHeight + (maxHeight - midHeight) / 2  // Halfway between mid and max
+
+        if targetHeight < dismissThreshold {
             // Dismiss
             isPresented = false
             height = defaultHeight // Reset for next time
-        } else if targetHeight < minHeight + 50 {
+        } else if targetHeight < minToMidBoundary {
+            // Snap to min
             height = minHeight
-        } else if targetHeight > maxHeight - 50 {
-            height = maxHeight
-        } else if targetHeight < midHeight - 50 {
-            height = minHeight
-        } else if targetHeight > midHeight + 50 {
-            height = maxHeight
-        } else {
+        } else if targetHeight < midToMaxBoundary {
+            // Snap to mid
             height = midHeight
+        } else {
+            // Snap to max
+            height = maxHeight
         }
     }
 }
