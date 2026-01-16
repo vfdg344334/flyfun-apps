@@ -9,92 +9,15 @@ import SwiftUI
 
 struct ChatView: View {
     @Environment(\.appState) private var state
-    @FocusState private var isInputFocused: Bool
 
     /// Callback to show settings (replaces chat in sidebar)
     var onShowSettings: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Messages list
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        // Welcome message if empty
-                        if let chat = state?.chat, chat.messages.isEmpty {
-                            WelcomeView()
-                                .padding(.top, 40)
-                        }
-                        
-                        // Messages
-                        if let messages = state?.chat.messages {
-                            ForEach(messages) { message in
-                                ChatBubble(message: message)
-                                    .id(message.id)
-                            }
-                        }
-                        
-                        // Thinking indicator
-                        if let chat = state?.chat {
-                            if chat.isStreaming {
-                                ThinkingIndicator(
-                                    thinking: chat.currentThinking,
-                                    toolCall: chat.currentToolCall
-                                )
-                                .id("thinking")
-                            }
-                        }
-                    }
-                    .padding()
-                }
-                .onChange(of: state?.chat.messages.count) { _, _ in
-                    // Scroll to bottom when new messages arrive
-                    withAnimation {
-                        if let lastMessage = state?.chat.messages.last {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: state?.chat.isStreaming) { _, isStreaming in
-                    if isStreaming == true {
-                        withAnimation {
-                            proxy.scrollTo("thinking", anchor: .bottom)
-                        }
-                    }
-                }
-            }
-            
-            Divider()
-
-            // Suggested queries (show after response, hide during streaming)
-            if let queries = state?.chat.suggestedQueries,
-               !queries.isEmpty,
-               !(state?.chat.isStreaming ?? false) {
-                SuggestedQueriesView(queries: queries) { query in
-                    Task {
-                        await state?.chat.useSuggestion(query)
-                    }
-                }
-                .padding(.top, 8)
-            }
-
-            // Input bar
-            ChatInputBar(
-                text: Binding(
-                    get: { state?.chat.input ?? "" },
-                    set: { state?.chat.input = $0 }
-                ),
-                isStreaming: state?.chat.isStreaming ?? false,
-                onSend: {
-                    Task {
-                        await state?.chat.send()
-                    }
-                }
-            )
-            .focused($isInputFocused)
-        }
-        // Only show navigation title/toolbar when in a NavigationStack (not in overlay)
-        .navigationTitle("Assistant")
+        // Use shared ChatContent for the actual chat UI
+        ChatContent(compactWelcome: false)
+            // Only show navigation title/toolbar when in a NavigationStack (not in overlay)
+            .navigationTitle("Assistant")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

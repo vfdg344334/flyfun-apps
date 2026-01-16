@@ -2,10 +2,9 @@
 //  ContentView.swift
 //  FlyFunEuroAIP
 //
-//  Modern SwiftUI root view using NavigationSplitView (iOS 17+)
-//  - Single view for all device sizes (iPad/Mac/iPhone)
-//  - .searchable() for native search
-//  - .inspector() for airport details (automatic adaptation)
+//  Root view that branches between iPhone and iPad layouts.
+//  - iPhone (compact): Map-centric with overlays
+//  - iPad (regular): NavigationSplitView with sidebar
 //
 
 import SwiftUI
@@ -13,6 +12,22 @@ import MapKit
 import RZFlight
 
 struct ContentView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    var body: some View {
+        if sizeClass == .compact {
+            // iPhone: Map-centric layout with overlays
+            IPhoneLayoutView()
+        } else {
+            // iPad/Mac: NavigationSplitView layout
+            IPadLayoutView()
+        }
+    }
+}
+
+// MARK: - iPad Layout (NavigationSplitView)
+
+struct IPadLayoutView: View {
     @Environment(\.appState) private var state
     @State private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
     @State private var showingInspector = false
