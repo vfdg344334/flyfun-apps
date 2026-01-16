@@ -1,5 +1,5 @@
 //
-//  IPhoneChatOverlay.swift
+//  iPhoneChatOverlay.swift
 //  FlyFunEuroAIP
 //
 //  Resizable bottom chat overlay for iPhone.
@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct IPhoneChatOverlay: View {
+struct iPhoneChatOverlay: View {
     @Environment(\.appState) private var state
     @Binding var height: CGFloat
     @Binding var isPresented: Bool
@@ -128,7 +128,7 @@ struct IPhoneChatOverlay: View {
         Color.blue.opacity(0.3)
             .ignoresSafeArea()
 
-        IPhoneChatOverlay(
+        iPhoneChatOverlay(
             height: .constant(350),
             isPresented: .constant(true)
         )

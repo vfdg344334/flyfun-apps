@@ -1,13 +1,14 @@
 //
-//  IPhoneFloatingButtons.swift
+//  iPhoneFloatingButtons.swift
 //  FlyFunEuroAIP
 //
 //  Bottom-right floating action buttons for iPhone.
+//  Uses shared FloatingActionButton component.
 //
 
 import SwiftUI
 
-struct IPhoneFloatingButtons: View {
+struct iPhoneFloatingButtons: View {
     @Environment(\.appState) private var state
     @Binding var showingChat: Bool
 
@@ -22,19 +23,25 @@ struct IPhoneFloatingButtons: View {
                     }
                 }
             } label: {
-                IPhoneFloatingButton(icon: "paintpalette", color: .purple)
+                FloatingActionButton(
+                    icon: "paintpalette",
+                    isActive: true,
+                    activeColor: .purple,
+                    size: 50
+                ) { }
+                .allowsHitTesting(false)
             }
 
             // Chat toggle
-            Button {
+            FloatingActionButton(
+                icon: showingChat ? "xmark" : "bubble.left.and.bubble.right",
+                isActive: !showingChat,
+                activeColor: showingChat ? .gray : .green,
+                size: 50
+            ) {
                 withAnimation(.spring(response: 0.3)) {
                     showingChat.toggle()
                 }
-            } label: {
-                IPhoneFloatingButton(
-                    icon: showingChat ? "xmark" : "bubble.left.and.bubble.right",
-                    color: showingChat ? .gray : .green
-                )
             }
         }
     }
@@ -47,22 +54,6 @@ struct IPhoneFloatingButtons: View {
     }
 }
 
-// MARK: - Floating Button Style
-
-struct IPhoneFloatingButton: View {
-    let icon: String
-    let color: Color
-
-    var body: some View {
-        Image(systemName: icon)
-            .font(.title3)
-            .foregroundStyle(.white)
-            .frame(width: 50, height: 50)
-            .background(color, in: Circle())
-            .shadow(color: .black.opacity(0.25), radius: 6, x: 0, y: 3)
-    }
-}
-
 // MARK: - Preview
 
 #Preview {
@@ -72,7 +63,7 @@ struct IPhoneFloatingButton: View {
             Spacer()
             HStack {
                 Spacer()
-                IPhoneFloatingButtons(showingChat: .constant(false))
+                iPhoneFloatingButtons(showingChat: .constant(false))
                     .padding()
             }
         }

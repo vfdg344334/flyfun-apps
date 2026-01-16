@@ -1,5 +1,5 @@
 //
-//  IPhoneLayoutView.swift
+//  iPhoneLayoutView.swift
 //  FlyFunEuroAIP
 //
 //  iPhone-specific layout with map always visible as background.
@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct IPhoneLayoutView: View {
+struct iPhoneLayoutView: View {
     @Environment(\.appState) private var state
     @State private var showingFilters = false
     @State private var showingChat = false
@@ -24,14 +24,14 @@ struct IPhoneLayoutView: View {
             // Layer 2: Top search bar (when not in chat mode)
             if !showingChat {
                 VStack {
-                    IPhoneSearchBar(showingFilters: $showingFilters)
+                    iPhoneSearchBar(showingFilters: $showingFilters)
                     Spacer()
                 }
             }
 
             // Layer 3: Filter overlay (when expanded)
             if showingFilters {
-                IPhoneFilterOverlay(isPresented: $showingFilters)
+                iPhoneFilterOverlay(isPresented: $showingFilters)
             }
 
             // Layer 4: Bottom-right floating buttons
@@ -39,7 +39,7 @@ struct IPhoneLayoutView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    IPhoneFloatingButtons(showingChat: $showingChat)
+                    iPhoneFloatingButtons(showingChat: $showingChat)
                         .padding(.bottom, showingChat ? chatSheetHeight + 16 : 16)
                 }
             }
@@ -47,7 +47,7 @@ struct IPhoneLayoutView: View {
 
             // Layer 5: Chat overlay (resizable from bottom)
             if showingChat {
-                IPhoneChatOverlay(
+                iPhoneChatOverlay(
                     height: $chatSheetHeight,
                     isPresented: $showingChat
                 )
@@ -66,6 +66,6 @@ struct IPhoneLayoutView: View {
 // MARK: - Preview
 
 #Preview("iPhone Layout") {
-    IPhoneLayoutView()
+    iPhoneLayoutView()
         .environment(\.horizontalSizeClass, .compact)
 }

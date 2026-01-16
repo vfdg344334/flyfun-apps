@@ -1,5 +1,5 @@
 //
-//  IPhoneSearchBar.swift
+//  iPhoneSearchBar.swift
 //  FlyFunEuroAIP
 //
 //  Top search bar for iPhone with embedded filter button.
@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-struct IPhoneSearchBar: View {
+struct iPhoneSearchBar: View {
     @Environment(\.appState) private var state
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
@@ -96,7 +96,7 @@ struct IPhoneSearchBar: View {
     ZStack {
         Color.gray.opacity(0.3)
         VStack {
-            IPhoneSearchBar(showingFilters: .constant(false))
+            iPhoneSearchBar(showingFilters: .constant(false))
             Spacer()
         }
     }
