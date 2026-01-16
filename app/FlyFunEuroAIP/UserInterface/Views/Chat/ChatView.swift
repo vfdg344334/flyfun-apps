@@ -11,6 +11,9 @@ struct ChatView: View {
     @Environment(\.appState) private var state
     @FocusState private var isInputFocused: Bool
 
+    /// Callback to show settings (replaces chat in sidebar)
+    var onShowSettings: (() -> Void)?
+
     var body: some View {
         VStack(spacing: 0) {
             // Messages list
@@ -107,9 +110,9 @@ struct ChatView: View {
             }
 
             ToolbarItem(placement: .topBarTrailing) {
-                // Settings - opens chat settings in sidebar
-                NavigationLink {
-                    ChatSettingsView()
+                // Settings - replaces chat with settings in sidebar
+                Button {
+                    onShowSettings?()
                 } label: {
                     Image(systemName: "gear")
                 }
@@ -190,6 +193,9 @@ struct ExampleQueryButton: View {
 struct ChatSettingsView: View {
     @Environment(\.appState) private var state
 
+    /// Callback to show chat (replaces settings in sidebar)
+    var onShowChat: (() -> Void)?
+
     var body: some View {
         List {
             // Offline Mode Section
@@ -223,6 +229,16 @@ struct ChatSettingsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // Back to chat
+                Button {
+                    onShowChat?()
+                } label: {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                }
+            }
+        }
     }
 
     private var offlineModeBinding: Binding<Bool> {

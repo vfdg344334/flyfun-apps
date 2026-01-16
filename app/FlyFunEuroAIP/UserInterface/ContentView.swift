@@ -17,13 +17,21 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
     @State private var showingInspector = false
     @State private var showingChat = false
+    @State private var showingChatSettings = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            // SIDEBAR: Search + Filters (or Chat)
+            // SIDEBAR: Search/Filters, Chat, or Chat Settings
             if showingChat {
-                ChatView()
-                    .navigationTitle("Chat")
+                if showingChatSettings {
+                    ChatSettingsView(onShowChat: {
+                        withAnimation { showingChatSettings = false }
+                    })
+                } else {
+                    ChatView(onShowSettings: {
+                        withAnimation { showingChatSettings = true }
+                    })
+                }
             } else {
                 SearchFilterSidebar()
             }
