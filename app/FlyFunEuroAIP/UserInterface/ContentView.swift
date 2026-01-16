@@ -22,13 +22,8 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             // SIDEBAR: Search + Filters (or Chat)
             if showingChat {
-                ChatView(onShowMap: {
-                    withAnimation {
-                        showingChat = false
-                        columnVisibility = .detailOnly
-                    }
-                })
-                .navigationTitle("Chat")
+                ChatView()
+                    .navigationTitle("Chat")
             } else {
                 SearchFilterSidebar()
             }

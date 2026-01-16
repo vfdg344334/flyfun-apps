@@ -11,9 +11,6 @@ struct ChatView: View {
     @Environment(\.appState) private var state
     @FocusState private var isInputFocused: Bool
 
-    /// Callback to show the map (close sidebar/chat)
-    var onShowMap: (() -> Void)?
-
     var body: some View {
         VStack(spacing: 0) {
             // Messages list
@@ -100,37 +97,21 @@ struct ChatView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                // Offline mode toggle with menu for offline maps
-                Menu {
-                    Button {
-                        state?.chat.setOfflineMode(!(state?.chat.isOfflineMode ?? false))
-                    } label: {
-                        Label(
-                            state?.chat.isOfflineMode == true ? "Switch to Online" : "Switch to Offline",
-                            systemImage: state?.chat.isOfflineMode == true ? "cloud.fill" : "airplane.circle.fill"
-                        )
-                    }
-
-                    NavigationLink {
-                        OfflineMapsView()
-                    } label: {
-                        Label("Manage Offline Maps", systemImage: "square.and.arrow.down")
-                    }
-                } label: {
-                    Label(
-                        state?.chat.isOfflineMode == true ? "Offline" : "Online",
-                        systemImage: state?.chat.isOfflineMode == true ? "airplane.circle.fill" : "cloud.fill"
-                    )
-                    .foregroundStyle(state?.chat.isOfflineMode == true ? .orange : .blue)
-                }
+                // Offline mode indicator
+                Label(
+                    state?.chat.isOfflineMode == true ? "Offline" : "Online",
+                    systemImage: state?.chat.isOfflineMode == true ? "airplane.circle.fill" : "cloud.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(state?.chat.isOfflineMode == true ? .orange : .blue)
             }
 
             ToolbarItem(placement: .topBarTrailing) {
-                // Show map button - returns to map view
-                Button {
-                    onShowMap?()
+                // Settings - opens chat settings in sidebar
+                NavigationLink {
+                    ChatSettingsView()
                 } label: {
-                    Image(systemName: "map")
+                    Image(systemName: "gear")
                 }
             }
 
@@ -204,11 +185,65 @@ struct ExampleQueryButton: View {
     }
 }
 
+// MARK: - Chat Settings View
+
+struct ChatSettingsView: View {
+    @Environment(\.appState) private var state
+
+    var body: some View {
+        List {
+            // Offline Mode Section
+            Section {
+                Toggle(isOn: offlineModeBinding) {
+                    Label("Offline Mode", systemImage: "airplane.circle")
+                }
+
+                NavigationLink {
+                    OfflineMapsView()
+                } label: {
+                    Label("Manage Offline Maps", systemImage: "square.and.arrow.down")
+                }
+            } header: {
+                Text("Offline")
+            } footer: {
+                Text("Offline mode uses on-device AI and cached map tiles. Download maps for areas you plan to visit.")
+            }
+
+            // Chat History Section
+            Section("Chat") {
+                Button(role: .destructive) {
+                    state?.chat.clear()
+                } label: {
+                    Label("Clear Chat History", systemImage: "trash")
+                }
+                .disabled(state?.chat.messages.isEmpty ?? true)
+            }
+        }
+        .navigationTitle("Settings")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+
+    private var offlineModeBinding: Binding<Bool> {
+        Binding(
+            get: { state?.chat.isOfflineMode ?? false },
+            set: { state?.chat.setOfflineMode($0) }
+        )
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
     NavigationStack {
         ChatView()
+    }
+}
+
+#Preview("Chat Settings") {
+    NavigationStack {
+        ChatSettingsView()
     }
 }
 
