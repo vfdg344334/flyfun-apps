@@ -60,6 +60,7 @@ ENV/.swiftpm
 # iOS/Swift files
 Pods
 xcuserdata
+Local.xcconfig
 
 # Documentation and temporary files
 *_STATUS.md

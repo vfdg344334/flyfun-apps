@@ -1,0 +1,10 @@
+// Local.xcconfig - Developer-specific settings (not committed to git)
+//
+// Copy this file to Local.xcconfig and fill in your values:
+//   cp Local.xcconfig.sample Local.xcconfig
+//
+// This file is gitignored to keep team-specific settings out of the repo.
+
+// Your Apple Developer Team ID
+// Find it at: https://developer.apple.com/account -> Membership Details
+DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE

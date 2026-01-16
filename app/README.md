@@ -163,6 +163,21 @@ pod install
 open FlyFunEuroAIP.xcworkspace
 ```
 
+### Code Signing Setup
+
+Copy the sample config and add your Apple Developer Team ID:
+
+```bash
+cp Local.xcconfig.sample Local.xcconfig
+```
+
+Edit `Local.xcconfig` and set your Team ID:
+```
+DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE
+```
+
+Find your Team ID at [Apple Developer Account](https://developer.apple.com/account) → Membership Details.
+
 ### Model Setup
 
 1. Download `gemma-3n-e2b.task` model file
