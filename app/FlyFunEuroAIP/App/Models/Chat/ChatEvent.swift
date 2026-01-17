@@ -154,10 +154,23 @@ extension ChatEvent {
                 }
                 return .unknown(event: event, data: data)
                 
-            case "message":
-                if let dict = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                   let content = dict["content"] as? String {
-                    return .message(content: content)
+            case "message", "content", "answer", "response", "text_chunk":
+                // Support multiple event names and JSON field names for text content
+                if let dict = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                    // Try multiple field names for the text content
+                    if let content = dict["content"] as? String {
+                        return .message(content: content)
+                    } else if let text = dict["text"] as? String {
+                        return .message(content: text)
+                    } else if let response = dict["response"] as? String {
+                        return .message(content: response)
+                    } else if let chunk = dict["chunk"] as? String {
+                        return .message(content: chunk)
+                    }
+                }
+                // Maybe it's just raw text, not JSON
+                if !data.hasPrefix("{") && !data.hasPrefix("[") && !data.isEmpty {
+                    return .message(content: data)
                 }
                 return .unknown(event: event, data: data)
                 

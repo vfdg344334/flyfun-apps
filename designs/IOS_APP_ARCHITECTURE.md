@@ -210,6 +210,64 @@ app/FlyFunEuroAIP/
 
 > See [IOS_APP_UI.md](IOS_APP_UI.md) for layout philosophy and component details.
 
+## Secrets Management
+
+The app uses a JSON-based secrets management system to externalize sensitive configuration without committing it to version control.
+
+### File Structure
+
+```
+app/FlyFunEuroAIP/
+├── secrets.json.sample    # ✅ Committed - template with placeholder values
+├── secrets.json           # ❌ Gitignored - actual secrets
+└── App/Services/
+    └── SecretsManager.swift  # Loads and provides secrets
+```
+
+### secrets.json.sample (Committed)
+
+```json
+{
+    "api_base_url": "https://your-api-server.com/api",
+    "auth_url": "https://your-auth-server.com",
+    "model_download_url": "https://your-server.com/api/models/download/model.task",
+    "model_api_key": "YOUR_API_KEY"
+}
+```
+
+### SecretsManager Usage
+
+```swift
+// Access secrets anywhere in the app
+let apiURL = SecretsManager.shared.apiBaseURL          // String
+let authURL = SecretsManager.shared.authURLValue       // URL?
+let modelKey = SecretsManager.shared.modelAPIKey       // String
+```
+
+### Loading Priority
+
+1. **secrets.json** - Production/development secrets (gitignored)
+2. **secrets.json.sample** - Fallback for CI/new developers
+3. **Hardcoded defaults** - Last resort fallback
+
+### Setup for New Developers
+
+```bash
+# Copy sample to create local secrets file
+cp app/FlyFunEuroAIP/secrets.json.sample app/FlyFunEuroAIP/secrets.json
+
+# Edit with actual values
+# The file is gitignored and won't be committed
+```
+
+### .gitignore Configuration
+
+```gitignore
+# Secrets - gitignored
+secrets.*
+!secrets.*.sample
+```
+
 ## Related Documents
 
 - [IOS_APP_UI.md](IOS_APP_UI.md) - Layout philosophy, iPhone vs iPad, shared components
@@ -217,3 +275,4 @@ app/FlyFunEuroAIP/
 - [IOS_APP_MAP.md](IOS_APP_MAP.md) - Map views, legends, markers
 - [IOS_APP_CHAT.md](IOS_APP_CHAT.md) - Chat system, AI, tools
 - [IOS_APP_OFFLINE.md](IOS_APP_OFFLINE.md) - Offline mode details
+

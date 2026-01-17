@@ -9,6 +9,28 @@ An iOS aviation planning assistant for European general aviation pilots.
 - **Rules & Regulations**: Access country-specific aviation rules
 - **Border Crossing**: Find airports with customs/immigration facilities
 - **AI Chat Assistant**: Natural language queries about airports and procedures
+- **Apple Sign-In**: Mandatory authentication with Sign in with Apple
+- **Online/Offline Mode**: Full functionality with on-device AI or cloud API
+
+## Authentication
+
+The app requires **Sign in with Apple** for authentication. Users must sign in before accessing the app.
+
+### Flow
+1. App launches → `LandingSignInView` displayed
+2. User taps "Sign in with Apple"
+3. Apple handles authentication (Face ID/Touch ID)
+4. App exchanges token with backend
+5. User info stored in Keychain
+6. Main app view displayed
+
+### Sign Out
+Sign out is available in: **Filters Panel → Sign Out** (red button at bottom)
+
+### Key Files
+- `AuthenticationService.swift` - Authentication logic & Keychain storage
+- `LandingSignInView.swift` - Sign-in screen with branding
+- `AccountView.swift` - User account management
 
 ## Offline Mode
 
@@ -22,11 +44,13 @@ The app supports full offline functionality using on-device AI inference.
 
 ### Model
 
-**[Gemma 3n E2B](https://www.kaggle.com/models/google/gemma-3n/transformers/gemma-3n-e2b-it)** (gemma-3n-e2b.task)
-- Optimized for mobile devices
-- ~600MB model file
+**Qwen 2.5 1.5B Instruct** (Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task)
+- Optimised for mobile devices
+- ~1.5GB model file (quantized to 8-bit)
 - Supports tool calling for structured queries
-- Downloaded separately and placed in app container
+- Minimum RAM: 3GB
+
+**Download:** Contact maintainer for model download URL and API key.
 
 ### Offline Tools
 
@@ -48,6 +72,55 @@ The offline mode supports these tools via `LocalToolDispatcher`:
 - **airports.db** - Airport data (via RZFlight library)
 - **ga_notifications.db** - GA notification requirements (hours notice, operating hours)
 - **rules.json** - Country-specific aviation rules
+- **european_cities.db** - European city geocoding data (from GeoNames)
+
+### Offline Geocoding
+
+The app includes offline geocoding capability for resolving city/town names to coordinates.
+
+#### Architecture
+
+```
+Services/Offline/
+└── OfflineGeocoder.swift    # SQLite-based city geocoding
+```
+
+#### Data Source
+
+**european_cities.db** - SQLite database derived from [GeoNames](https://www.geonames.org/)
+- Contains European cities with population > 1,000
+- Fields: `name`, `latitude`, `longitude`, `country_code`, `population`, `alternate_names`
+
+#### How It Works
+
+1. **Exact match** (case-insensitive) - Fastest, prioritizes exact city name
+2. **Prefix match** - Fallback for partial names (e.g., "Lond" → "London")
+3. **Alternate names** - Fallback for localized spellings (e.g., "München" → "Munich")
+
+Results are sorted by population (largest first) to prioritize major cities.
+
+#### Usage
+
+The `OfflineGeocoder` is used by `LocalToolDispatcher.findAirportsNearLocation()`:
+
+```swift
+// Query: "Find airports near London"
+if let result = OfflineGeocoder.shared.geocode(query: "London") {
+    // result.coordinate = (51.5074, -0.1278)
+    // result.countryCode = "GB"
+    // Now search airports within radius of these coordinates
+}
+```
+
+#### SQLite String Binding
+
+Uses `NSString.utf8String` for proper memory management with SQLite C API:
+
+```swift
+let nsStr = queryString as NSString
+let cStr = nsStr.utf8String!
+sqlite3_bind_text(stmt, 1, cStr, -1, nil)
+```
 
 ### Offline Maps
 

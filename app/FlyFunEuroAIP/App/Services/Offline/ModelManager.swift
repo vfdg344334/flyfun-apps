@@ -18,12 +18,21 @@ final class ModelManager: ObservableObject {
     
     // MARK: - Configuration
     
-    static let modelFilename = "gemma-3n-e2b.task"
-    static let modelSizeBytes: Int64 = 1_500_000_000  // ~1.4 GB for Gemma 3n E2B
+    static let modelFilename = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task"
+    static let modelSizeBytes: Int64 = 1_500_000_000  // ~1.5 GB for Qwen 2.5 Instruct
     static let modelDir = "models"
     
+    // Download configuration - loaded from secrets.json
+    static var downloadURL: URL {
+        SecretsManager.shared.modelDownloadURLValue ?? URL(string: "http://localhost:8000/api/models/download/model.task")!
+    }
+    static let apiKeyHeader = "X-Model-API-Key"
+    static var apiKey: String {
+        SecretsManager.shared.modelAPIKey
+    }
+    
     // Device requirements
-    static let minRAMMB: UInt64 = 4096  // 4 GB minimum
+    static let minRAMMB: UInt64 = 3072  // 3 GB minimum (model is ~1.5GB)
     static let recommendedRAMMB: UInt64 = 6144  // 6 GB recommended
     
     // MARK: - Published State
@@ -34,6 +43,7 @@ final class ModelManager: ObservableObject {
     
     private var deviceCapability: DeviceCapability?
     private var externalModelPath: String?
+    private var currentDownloadTask: URLSessionDownloadTask?
     
     // MARK: - Init
     
@@ -78,7 +88,7 @@ final class ModelManager: ObservableObject {
         }
     }
     
-    /// Get the model file path
+    /// Get the model file path - finds any .task file in the models directory
     var modelFile: URL {
         let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let modelDir = documentsDir.appendingPathComponent(Self.modelDir)
@@ -86,7 +96,32 @@ final class ModelManager: ObservableObject {
         // Create directory if needed
         try? FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
         
+        // Look for any existing .task file in the directory
+        if let existingModel = findExistingModelFile(in: modelDir) {
+            return existingModel
+        }
+        
+        // Default to the configured filename for new downloads
         return modelDir.appendingPathComponent(Self.modelFilename)
+    }
+    
+    /// Find any existing .task model file in the directory
+    private func findExistingModelFile(in directory: URL) -> URL? {
+        let fileManager = FileManager.default
+        guard let files = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return nil
+        }
+        
+        // Find .task files that are large enough to be a model
+        for file in files where file.pathExtension == "task" {
+            if let attributes = try? fileManager.attributesOfItem(atPath: file.path),
+               let fileSize = attributes[.size] as? Int64,
+               fileSize > 100_000_000 { // At least 100MB
+                Logger.app.info("Found existing model file: \(file.lastPathComponent) (\(fileSize / 1_000_000) MB)")
+                return file
+            }
+        }
+        return nil
     }
     
     /// Get model path as string - returns external path if set and exists
@@ -107,14 +142,20 @@ final class ModelManager: ObservableObject {
         }
         
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: modelFile.path) else {
-            return false
-        }
+        let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let modelDir = documentsDir.appendingPathComponent(Self.modelDir)
         
-        // Check file size (allow some tolerance)
-        if let attributes = try? fileManager.attributesOfItem(atPath: modelFile.path),
-           let fileSize = attributes[.size] as? Int64 {
-            return fileSize > Self.modelSizeBytes / 2  // At least half the expected size
+        // Look for any .task file in the models directory
+        if let existingModel = findExistingModelFile(in: modelDir) {
+            // Check file size (allow some tolerance)
+            if let attributes = try? fileManager.attributesOfItem(atPath: existingModel.path),
+               let fileSize = attributes[.size] as? Int64 {
+                let isAvailable = fileSize > 100_000_000  // At least 100MB for any model
+                if isAvailable {
+                    Logger.app.info("Model available: \(existingModel.lastPathComponent) (\(fileSize / 1_000_000) MB)")
+                }
+                return isAvailable
+            }
         }
         return false
     }
@@ -166,7 +207,7 @@ final class ModelManager: ObservableObject {
     /// Download the model from the given URL with progress updates
     func downloadModel(from url: URL) -> AsyncThrowingStream<DownloadProgress, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            Task { @MainActor in
                 Logger.app.info("Starting model download from: \(url.absoluteString)")
                 
                 let capability = checkDeviceCapability()
@@ -179,34 +220,112 @@ final class ModelManager: ObservableObject {
                 modelState = .downloading(progress: 0, downloadedBytes: 0, totalBytes: Self.modelSizeBytes)
                 continuation.yield(.started)
                 
-                do {
-                    let (tempURL, response) = try await URLSession.shared.download(from: url, delegate: nil)
-                    
-                    guard let httpResponse = response as? HTTPURLResponse,
-                          httpResponse.statusCode == 200 else {
-                        let error = "Download failed: HTTP error"
-                        modelState = .error(error)
-                        continuation.finish(throwing: ModelError.downloadFailed(error))
-                        return
+                // Create authenticated request with X-Model-API-Key header
+                var request = URLRequest(url: url)
+                request.setValue(Self.apiKey, forHTTPHeaderField: Self.apiKeyHeader)
+                
+                // Create delegate for progress tracking
+                let delegate = DownloadDelegate(
+                    onProgress: { [weak self] downloaded, total in
+                        guard let self = self else { return }
+                        let progress = total > 0 ? Float(downloaded) / Float(total) : 0
+                        DispatchQueue.main.async {
+                            self.modelState = .downloading(progress: progress, downloadedBytes: downloaded, totalBytes: total)
+                            continuation.yield(.inProgress(progress: progress, downloadedBytes: downloaded, totalBytes: total))
+                        }
+                    },
+                    onComplete: { [weak self] tempURL in
+                        guard let self = self else { return }
+                        
+                        // CRITICAL: Must copy file IMMEDIATELY before returning from delegate
+                        // The temp file will be deleted as soon as this callback returns
+                        let fileManager = FileManager.default
+                        let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+                        let modelDir = documentsDir.appendingPathComponent(Self.modelDir)
+                        
+                        do {
+                            // Create directory synchronously
+                            try fileManager.createDirectory(at: modelDir, withIntermediateDirectories: true, attributes: nil)
+                            
+                            let finalPath = modelDir.appendingPathComponent(Self.modelFilename)
+                            
+                            // Remove existing file if present
+                            if fileManager.fileExists(atPath: finalPath.path) {
+                                try fileManager.removeItem(at: finalPath)
+                            }
+                            
+                            // Copy immediately (synchronously) before temp file is deleted
+                            try fileManager.copyItem(at: tempURL, to: finalPath)
+                            
+                            Logger.app.info("Model file copied successfully to: \(finalPath.path)")
+                            
+                            // Update UI state asynchronously
+                            Task { @MainActor in
+                                self.modelState = .ready
+                                continuation.yield(.completed(finalPath))
+                                continuation.finish()
+                            }
+                        } catch {
+                            Logger.app.error("Failed to copy model file: \(error.localizedDescription)")
+                            Task { @MainActor in
+                                self.modelState = .error(error.localizedDescription)
+                                continuation.finish(throwing: error)
+                            }
+                        }
+                    },
+                    onError: { [weak self] error in
+                        guard let self = self else { return }
+                        Task { @MainActor in
+                            Logger.app.error("Download error: \(error.localizedDescription)")
+                            self.modelState = .error(error.localizedDescription)
+                            continuation.finish(throwing: error)
+                        }
                     }
-                    
-                    // Move temp file to final location
-                    let fileManager = FileManager.default
-                    if fileManager.fileExists(atPath: modelFile.path) {
-                        try fileManager.removeItem(at: modelFile)
-                    }
-                    try fileManager.moveItem(at: tempURL, to: modelFile)
-                    
-                    Logger.app.info("Model download complete: \(self.modelFile.path)")
-                    modelState = .ready
-                    continuation.yield(.completed(modelFile))
-                    continuation.finish()
-                    
-                } catch {
-                    Logger.app.error("Download error: \(error.localizedDescription)")
-                    modelState = .error(error.localizedDescription)
-                    continuation.finish(throwing: error)
-                }
+                )
+                
+                // Create URLSession with delegate
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+                let task = session.downloadTask(with: request)
+                self.currentDownloadTask = task
+                task.resume()  
+            }
+        }
+    }
+    
+    /// Cancel the current download
+    func cancelDownload() {
+        currentDownloadTask?.cancel()
+        currentDownloadTask = nil
+        modelState = .notDownloaded
+        Logger.app.info("Download cancelled")
+    }
+    
+    // MARK: - Download Delegate
+    
+    private class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
+        let onProgress: (Int64, Int64) -> Void
+        let onComplete: (URL) -> Void
+        let onError: (Error) -> Void
+        
+        init(onProgress: @escaping (Int64, Int64) -> Void, 
+             onComplete: @escaping (URL) -> Void,
+             onError: @escaping (Error) -> Void) {
+            self.onProgress = onProgress
+            self.onComplete = onComplete
+            self.onError = onError
+        }
+        
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+            onComplete(location)
+        }
+        
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+            onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        }
+        
+        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            if let error = error {
+                onError(error)
             }
         }
     }

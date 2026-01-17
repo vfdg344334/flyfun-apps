@@ -501,41 +501,65 @@ final class AirportDomain {
         }
     }
     
-    // MARK: - GA Filtering (Hotel/Restaurant/Fees)
+    // MARK: - Filter Application
 
-    /// Apply GA-specific filters that require GAFriendlinessService
-    /// Called after repository returns airports to filter by hospitality/fees
+    /// Apply all filters to the loaded airports
+    /// Called after repository returns airports to filter them based on FilterConfig
     private func applyGAFilters(_ airports: [RZFlight.Airport]) -> [RZFlight.Airport] {
         var result = airports
 
-        guard let service = gaFriendlinessService else {
-            // No GA service - skip GA filters
-            return result
+        // MARK: - Geographic Filters
+        
+        // Country filter
+        if let country = filters.country {
+            result = result.inCountry(country)
         }
 
-        // Hotel filter
-        if let hotelFilter = filters.hotel {
-            let filter = hotelFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
-            let validICAOs = service.airportsWithHotel(filter)
-            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        // MARK: - Border Crossing / Point of Entry
+        
+        if filters.pointOfEntry == true {
+            result = result.filter { borderCrossingICAOs.contains($0.icao.uppercased()) }
         }
 
-        // Restaurant filter
-        if let restaurantFilter = filters.restaurant {
-            let filter = restaurantFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
-            let validICAOs = service.airportsWithRestaurant(filter)
-            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        // MARK: - Runway Filters
+        
+        // Min runway length filter
+        if let minLength = filters.minRunwayLengthFt {
+            result = result.withRunwayLength(minimumFeet: minLength)
         }
-
-        // Landing fee filter
-        if let maxFee = filters.maxLandingFee {
-            let validICAOs = service.airportsWithMaxLandingFee(maxFee)
-            result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+        
+        // Max runway length filter (combined with min if both present)
+        if let maxLength = filters.maxRunwayLengthFt {
+            if let minLength = filters.minRunwayLengthFt {
+                result = result.withRunwayLength(minimumFeet: minLength, maximumFeet: maxLength)
+            } else {
+                result = result.filter { airport in
+                    guard let maxRunway = airport.runways.map({ $0.length_ft }).max() else {
+                        return true
+                    }
+                    return maxRunway <= maxLength
+                }
+            }
         }
-
+        
+        // Hard runway filter (includes abbreviations: ASP, CON, ASPH, CONC, PEM)
+        if filters.hasHardRunway == true {
+            let hardSurfacePatterns = ["asphalt", "concrete", "paved", "hard", "asp", "con", "asph", "conc", "pem", "bit"]
+            result = result.filter { airport in
+                airport.runways.contains { runway in
+                    let surfaceLower = runway.surface.lowercased()
+                    return hardSurfacePatterns.contains { surfaceLower.hasPrefix($0) || surfaceLower.contains($0) }
+                }
+            }
+        }
+        
+        // Lighted runway filter
+        if filters.hasLightedRunway == true {
+            result = result.withLightedRunways()
+        }
+        
         // Exclude large airports filter
         if filters.excludeLargeAirports == true {
-            // Large airports typically have runways > 8000ft
             result = result.filter { airport in
                 guard let maxRunway = airport.runways.map({ $0.length_ft }).max() else {
                     return true // Keep airports with no runway data
@@ -544,13 +568,73 @@ final class AirportDomain {
             }
         }
 
-        // Fuel filters (use RZFlight extensions)
+        // MARK: - Procedure/Approach Filters
+        
+        // Has procedures filter
+        if filters.hasProcedures == true {
+            result = result.withProcedures()
+        }
+        
+        // Has ILS approach filter
+        if filters.hasILS == true {
+            result = result.filter { airport in
+                airport.approaches.contains { $0.approachType == .ils }
+            }
+        }
+        
+        // Has RNAV approach filter
+        if filters.hasRNAV == true {
+            result = result.filter { airport in
+                airport.approaches.contains { $0.approachType == .rnav || $0.approachType == .rnp }
+            }
+        }
+        
+        // Has precision approach filter
+        if filters.hasPrecisionApproach == true {
+            result = result.withPrecisionApproaches()
+        }
+
+        // MARK: - Fuel Filters
+        
         if filters.hasAvgas == true {
             result = result.withAvgas()
         }
 
         if filters.hasJetA == true {
             result = result.withJetA()
+        }
+
+        // MARK: - AIP Field Filter
+        
+        // Filter by specific AIP field presence
+        if let aipField = filters.aipField {
+            result = result.filter { airport in
+                airport.aipEntry(for: aipField, useStandardized: true) != nil
+            }
+        }
+
+        // MARK: - GA Service-dependent Filters (hotel, restaurant, landing fee)
+        
+        if let service = gaFriendlinessService {
+            // Hotel filter
+            if let hotelFilter = filters.hotel {
+                let filter = hotelFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
+                let validICAOs = service.airportsWithHotel(filter)
+                result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+            }
+
+            // Restaurant filter
+            if let restaurantFilter = filters.restaurant {
+                let filter = restaurantFilter == "atAirport" ? HospitalityFilter.atAirport : HospitalityFilter.vicinity
+                let validICAOs = service.airportsWithRestaurant(filter)
+                result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+            }
+
+            // Landing fee filter
+            if let maxFee = filters.maxLandingFee {
+                let validICAOs = service.airportsWithMaxLandingFee(maxFee)
+                result = result.filter { validICAOs.contains($0.icao.uppercased()) }
+            }
         }
 
         return result

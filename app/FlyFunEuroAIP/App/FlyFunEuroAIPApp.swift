@@ -20,13 +20,20 @@ struct FlyFunEuroAIPApp: App {
     @State private var appState: AppState?
     @State private var isInitialized = false
     @State private var initError: AppError?
+    @State private var authService = AuthenticationService()
     
     var body: some Scene {
         WindowGroup {
             Group {
-                if let appState = appState {
-            ContentView()
+                if !authService.isAuthenticated {
+                    // Show sign-in as landing page
+                    LandingSignInView()
+                        .environment(authService)
+                } else if let appState = appState {
+                    // Authenticated - show main content
+                    ContentView()
                         .environment(\.appState, appState)
+                        .environment(authService)
                         .task {
                             await appState.onAppear()
                         }
@@ -34,11 +41,13 @@ struct FlyFunEuroAIPApp: App {
                     ErrorView(error: error) {
                         Task { await initialize() }
                     }
+                    .environment(authService)
                 } else {
                     LoadingView()
                         .task {
                             await initialize()
                         }
+                        .environment(authService)
                 }
             }
         }
@@ -149,6 +158,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, MXMetricManagerSubscriber {
         // Subscribe to MetricKit for crash reporting
         MXMetricManager.shared.add(self)
         Logger.app.info("MetricKit subscriber added")
+        
+        // Clean up any stale Live Activities from Dynamic Island
+        if #available(iOS 16.1, *) {
+            LiveActivityManager.shared.endAllActivities()
+        }
+        
         return true
     }
     

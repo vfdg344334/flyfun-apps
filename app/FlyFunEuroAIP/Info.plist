@@ -15,5 +15,11 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>FlyFun needs your location to show nearby airports and help you navigate.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>FlyFun needs your location to show nearby airports and provide navigation assistance.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 </dict>
 </plist>

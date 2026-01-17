@@ -10,3 +10,14 @@ secret.json
 venv
 
 *.db
+
+# Build artifacts
+DerivedData/
+build/
+build.log
+*.xcarchive
+
+# Export files
+ExportOptions.plist
+*.ipa
+

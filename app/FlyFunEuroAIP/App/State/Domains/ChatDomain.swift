@@ -108,7 +108,18 @@ final class ChatDomain {
             
             // Ensure we have a final message
             if !accumulatedContent.isEmpty {
-                finishStreaming()
+                finishStreaming(withContent: accumulatedContent)
+            } else if !toolsUsed.isEmpty {
+                // Backend didn't send text content, but tools were executed
+                // Build a helpful fallback message
+                let toolsList = toolsUsed.map { formatToolName($0) }.joined(separator: ", ")
+                let fallbackContent = """
+                ✅ I've executed the following: \(toolsList).
+                
+                Check the map to see the results. The visualization shows the airports/route based on your query.
+                """
+                updateLastAssistantMessage(fallbackContent)
+                finishStreaming(withContent: fallbackContent)
             }
             
         } catch {
@@ -149,8 +160,9 @@ final class ChatDomain {
             }
             
         case .message(let content):
-            // Replace content (not append) since offline service sends full accumulated content
-            accumulatedContent = content
+            // Append content for streaming (online API sends chunks)
+            // Offline service sends complete content in one message, so append still works
+            accumulatedContent += content
             updateLastAssistantMessage(accumulatedContent)
             
         case .uiPayload(let payload):
@@ -180,8 +192,8 @@ final class ChatDomain {
             Logger.app.error("Chat error event: \(message)")
             error = message
             
-        case .unknown(let event, _):
-            Logger.app.warning("Unknown chat event: \(event)")
+        case .unknown(let event, let data):
+            Logger.app.warning("Unknown chat event: \(event) with data: \(data.prefix(200))")
         }
     }
     
@@ -254,18 +266,43 @@ final class ChatDomain {
     }
     
     /// Finish streaming for the last message
-    func finishStreaming() {
-        guard let lastIndex = messages.lastIndex(where: { $0.role == .assistant }) else { return }
+    func finishStreaming(withContent finalContent: String? = nil) {
+        guard let lastIndex = messages.lastIndex(where: { $0.role == .assistant }) else {
+            Logger.app.warning("finishStreaming: No assistant message found")
+            return
+        }
         let message = messages[lastIndex]
+        
+        // Use provided content or fall back to existing message content
+        let contentToUse = finalContent ?? message.content
+        Logger.app.info("finishStreaming: content length = \(contentToUse.count) chars")
+        
         // Create final message with tools used
         messages[lastIndex] = ChatMessage(
+            id: message.id,  // Preserve the same ID
             role: message.role,
-            content: message.content,
+            content: contentToUse,
             isStreaming: false,
             toolsUsed: toolsUsed
         )
         isStreaming = false
         Logger.app.info("Finished streaming. Tools used: \(toolsUsed)")
+    }
+    
+    /// Format a tool name for display
+    private func formatToolName(_ toolName: String) -> String {
+        switch toolName {
+        case "find_airports_near_route": return "Route Search"
+        case "find_airports_near_location": return "Nearby Airports"
+        case "get_border_crossing_airports": return "Border Crossing Airports"
+        case "search_airports": return "Airport Search"
+        case "get_airport_details": return "Airport Details"
+        case "find_airports_by_notification": return "Notification Search"
+        case "list_rules_for_country": return "Country Rules"
+        case "compare_rules_between_countries": return "Rules Comparison"
+        default:
+            return toolName.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }
 

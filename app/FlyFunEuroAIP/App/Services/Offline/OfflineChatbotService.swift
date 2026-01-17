@@ -30,22 +30,34 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
     ## Available Tools
     Use JSON format to call tools: {"name": "tool_name", "arguments": {...}}
 
-    - search_airports: Search airports by ICAO code, name, or city
-      Parameters: {"query": "search term", "limit": 10}
+    - search_airports: Search airports by ICAO code, name, or country ONLY
+      Parameters: {"query": "LFPG" or "Charles de Gaulle" or "France", "limit": 10}
+      NOTE: Do NOT use for "near" or location-based queries
     
     - get_airport_details: Get detailed information about a specific airport
       Parameters: {"icao": "LFPG"}
     
     - find_airports_near_route: Find airports along a flight route
-      Parameters: {"from": "LFPG", "to": "EGLL", "max_distance_nm": 50}
+      Parameters: {"from": "London" or "EGLL", "to": "Paris" or "LFPG", "max_distance_nm": 50}
+      NOTE: Accepts city names OR ICAO codes
     
-    - find_airports_near_location: Find airports near a city or airport, optionally filter by notification
-      Parameters: {"location_query": "EDRR", "max_distance_nm": 50, "max_hours_notice": 24}
+    - find_airports_near_location: Find airports near a city or airport with optional filters
+      Parameters: {
+        "location_query": "London",
+        "max_distance_nm": 50,
+        "has_procedures": true,  // Has IFR/ILS approach procedures
+        "has_hard_runway": true, // Has paved runway
+        "has_ils": true,         // Has ILS approach
+        "point_of_entry": true,  // Is customs/border crossing
+        "has_avgas": true,       // Has AVGAS fuel
+        "has_jet_a": true,       // Has Jet A fuel
+        "country": "GB"          // Filter by country
+      }
     
     - get_border_crossing_airports: Get customs/border crossing airports
       Parameters: {"country": "FR"}
     
-    - find_airports_by_notification: Find airports ONLY by notification (no location), filter by country
+    - find_airports_by_notification: Find airports by notification hours only
       Parameters: {"max_hours": 24, "country": "DE"}
     
     - list_rules_for_country: Get aviation rules for a country
@@ -56,19 +68,31 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
 
     **CRITICAL - Tool Selection:**
     
+    **ILS/PROCEDURES/FEATURES near a location - Use find_airports_near_location with filters:**
+    - "Airports with ILS near London" → {"name": "find_airports_near_location", "arguments": {"location_query": "London", "has_procedures": true}}
+    - "Airports with procedures near Paris" → {"name": "find_airports_near_location", "arguments": {"location_query": "Paris", "has_procedures": true}}
+    - "Airports with hard runway near Rome" → {"name": "find_airports_near_location", "arguments": {"location_query": "Rome", "has_hard_runway": true}}
+    - "Customs airports near Berlin" → {"name": "find_airports_near_location", "arguments": {"location_query": "Berlin", "point_of_entry": true}}
+    - "Airports with AVGAS near London" → {"name": "find_airports_near_location", "arguments": {"location_query": "London", "has_avgas": true}}
+    - "Airports with Jet A fuel near Paris" → {"name": "find_airports_near_location", "arguments": {"location_query": "Paris", "has_jet_a": true}}
+    
     **LOCATION + NOTIFICATION - Use find_airports_near_location:**
-    When user mentions a LOCATION (airport ICAO or city) WITH notification/hours:
     - "Airports near EDRR with less than 24h notice" → {"name": "find_airports_near_location", "arguments": {"location_query": "EDRR", "max_hours_notice": 24}}
-    - "Airports near Paris with 24h notice" → {"name": "find_airports_near_location", "arguments": {"location_query": "Paris", "max_hours_notice": 24}}
     
     **NOTIFICATION ONLY (no location) - Use find_airports_by_notification:**
     - "Airports with less than 24h notice in Germany" → {"name": "find_airports_by_notification", "arguments": {"max_hours": 24, "country": "DE"}}
     
-    **ROUTE QUERIES - Use find_airports_near_route:**
+    **ROUTE QUERIES - Use find_airports_near_route (accepts city names or ICAO codes):**
+    - "Plan a route from Bromley to Nice" → {"name": "find_airports_near_route", "arguments": {"from": "Bromley", "to": "Nice"}}
+    - "Airports between London and Paris" → {"name": "find_airports_near_route", "arguments": {"from": "London", "to": "Paris"}}
     - "Airports between EGLL and LFPG" → {"name": "find_airports_near_route", "arguments": {"from": "EGLL", "to": "LFPG"}}
     
-    **LOCATION ONLY - Use find_airports_near_location:**
+    **LOCATION ONLY (no filters) - Use find_airports_near_location:**
     - "Airports near Paris" → {"name": "find_airports_near_location", "arguments": {"location_query": "Paris"}}
+
+    **NAME/CODE SEARCH ONLY - Use search_airports:**
+    - "Tell me about EGLL" → {"name": "search_airports", "arguments": {"query": "EGLL"}}
+    - "Airports in Germany" → {"name": "search_airports", "arguments": {"query": "Germany"}}
 
     After receiving tool results, provide a helpful answer based on the data.
     Be concise and practical. Focus on information relevant to GA pilots.
@@ -323,29 +347,41 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
             visualization["center"] = ["latitude": lat, "longitude": lon]
         }
         
-        // For route queries, add route data
-        if toolCall.name == "find_airports_near_route",
-           let from = toolCall.arguments["from"] as? String,
-           let to = toolCall.arguments["to"] as? String {
-            // Find departure and destination in results
-            let fromAirport = airports.first { ($0["icao"] as? String) == from }
-            let toAirport = airports.first { ($0["icao"] as? String) == to }
+        // For route queries, add route data by parsing DEPARTURE/DESTINATION from output
+        if toolCall.name == "find_airports_near_route" {
+            // Parse DEPARTURE and DESTINATION from result text
+            let (departureAirport, destinationAirport) = parseRouteEndpoints(from: result.value)
             
-            var routeDict: [String: Any] = [
-                "departure": from,
-                "destination": to
-            ]
+            var routeDict: [String: Any] = [:]
             
-            if let fromLat = fromAirport?["latitude"] as? Double,
-               let fromLon = fromAirport?["longitude"] as? Double {
-                routeDict["from"] = ["icao": from, "lat": fromLat, "lon": fromLon]
-            }
-            if let toLat = toAirport?["latitude"] as? Double,
-               let toLon = toAirport?["longitude"] as? Double {
-                routeDict["to"] = ["icao": to, "lat": toLat, "lon": toLon]
+            if let dep = departureAirport {
+                routeDict["departure"] = dep["icao"]
+                if let lat = dep["latitude"] as? Double, let lon = dep["longitude"] as? Double {
+                    routeDict["from"] = ["icao": dep["icao"] ?? "", "lat": lat, "lon": lon]
+                }
             }
             
-            visualization["route"] = routeDict
+            if let dest = destinationAirport {
+                routeDict["destination"] = dest["icao"]
+                if let lat = dest["latitude"] as? Double, let lon = dest["longitude"] as? Double {
+                    routeDict["to"] = ["icao": dest["icao"] ?? "", "lat": lat, "lon": lon]
+                }
+            }
+            
+            // Add route coordinates for the polyline
+            if let depLat = departureAirport?["latitude"] as? Double,
+               let depLon = departureAirport?["longitude"] as? Double,
+               let destLat = destinationAirport?["latitude"] as? Double,
+               let destLon = destinationAirport?["longitude"] as? Double {
+                routeDict["coordinates"] = [
+                    ["latitude": depLat, "longitude": depLon],
+                    ["latitude": destLat, "longitude": destLon]
+                ]
+            }
+            
+            if !routeDict.isEmpty {
+                visualization["route"] = routeDict
+            }
         }
         
         // Build final payload
@@ -357,17 +393,96 @@ final class OfflineChatbotService: ChatbotService, @unchecked Sendable {
         return ChatVisualizationPayload(from: vizDict)
     }
     
+    /// Parse DEPARTURE and DESTINATION airports from route result text
+    private func parseRouteEndpoints(from text: String) -> (departure: [String: Any]?, destination: [String: Any]?) {
+        var departure: [String: Any]?
+        var destination: [String: Any]?
+        
+        let lines = text.components(separatedBy: "\n")
+        let pattern = "^(DEPARTURE|DESTINATION):\\s+([A-Z]{4})\\s+\\(([^)]+)\\)\\s+-\\s+(-?\\d+\\.\\d+)°?,\\s*(-?\\d+\\.\\d+)°?"
+        
+        for line in lines {
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+                
+                guard let typeRange = Range(match.range(at: 1), in: line),
+                      let icaoRange = Range(match.range(at: 2), in: line),
+                      let nameRange = Range(match.range(at: 3), in: line),
+                      let latRange = Range(match.range(at: 4), in: line),
+                      let lonRange = Range(match.range(at: 5), in: line) else { continue }
+                
+                let type = String(line[typeRange])
+                let icao = String(line[icaoRange])
+                let name = String(line[nameRange])
+                let lat = Double(line[latRange]) ?? 0
+                let lon = Double(line[lonRange]) ?? 0
+                
+                let airport: [String: Any] = [
+                    "icao": icao,
+                    "name": name,
+                    "latitude": lat,
+                    "longitude": lon
+                ]
+                
+                if type == "DEPARTURE" {
+                    departure = airport
+                } else if type == "DESTINATION" {
+                    destination = airport
+                }
+            }
+        }
+        
+        return (departure, destination)
+    }
+    
     /// Parse airport data from tool result text
     /// Extracts ICAO codes and coordinates from the formatted output
     private func parseAirportsFromResult(_ resultText: String) -> [[String: Any]] {
         var airports: [[String: Any]] = []
         
-        // Parse lines like: "EDDB (Berlin Brandenburg) - 52.3667°, 13.5033° - ..."
-        // or: "1. EDDB (Berlin)"
+        // Parse lines in two formats:
+        // 1. Old format: "EDDB (Berlin Brandenburg) - 52.3667°, 13.5033° - ..."
+        // 2. New format: "- ICAO: EGLC (51.5053°, -0.0553°)"
         let lines = resultText.components(separatedBy: "\n")
         
+        var currentAirportName: String?
+        
         for line in lines {
-            // Look for ICAO codes (4 uppercase letters)
+            // Check for numbered airport name: "1. London City Airport"
+            if let regex = try? NSRegularExpression(pattern: "^\\d+\\.\\s+(.+)$"),
+               let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+               let nameRange = Range(match.range(at: 1), in: line) {
+                currentAirportName = String(line[nameRange])
+                continue
+            }
+            
+            // Check for ICAO line with coordinates: "- ICAO: EGLC (51.5053°, -0.0553°)"
+            if line.contains("ICAO:") {
+                let icaoPattern = "ICAO:\\s*([A-Z]{4})\\s*\\((-?\\d+\\.\\d+)°?,\\s*(-?\\d+\\.\\d+)°?\\)"
+                if let regex = try? NSRegularExpression(pattern: icaoPattern),
+                   let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    
+                    guard let icaoRange = Range(match.range(at: 1), in: line),
+                          let latRange = Range(match.range(at: 2), in: line),
+                          let lonRange = Range(match.range(at: 3), in: line) else { continue }
+                    
+                    let icao = String(line[icaoRange])
+                    if let lat = Double(line[latRange]),
+                       let lon = Double(line[lonRange]) {
+                        let airport: [String: Any] = [
+                            "icao": icao,
+                            "name": currentAirportName ?? icao,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "style": "result"
+                        ]
+                        airports.append(airport)
+                    }
+                }
+                continue
+            }
+            
+            // Fallback: Old format "ICAO (Name) - lat°, lon°"
             let pattern = "([A-Z]{4})\\s*\\(([^)]+)\\)"
             if let regex = try? NSRegularExpression(pattern: pattern),
                let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {

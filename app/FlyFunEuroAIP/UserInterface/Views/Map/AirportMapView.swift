@@ -97,6 +97,10 @@ struct AirportMapView: View {
                 .padding(.top, 8)
             }
         }
+        .onAppear {
+            // Request location permission when map appears
+            state?.locationManager.requestPermission()
+        }
     }
     
     // MARK: - Offline Map Content
@@ -169,6 +173,9 @@ struct AirportMapView: View {
                     .foregroundStyle(highlightColor(highlight.color).opacity(0.2))
                     .stroke(highlightColor(highlight.color), lineWidth: 2)
             }
+            
+            // User location (blue dot) - required for MapUserLocationButton
+            UserAnnotation()
         }
         .mapStyle(.standard(elevation: .realistic))
         .mapControls {

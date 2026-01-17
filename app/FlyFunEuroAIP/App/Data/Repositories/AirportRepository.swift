@@ -90,7 +90,7 @@ final class AirportRepository: AirportRepositoryProtocol {
     // MARK: - Configuration
     
     /// Base URL for the API (configurable)
-    static var apiBaseURL: String = "https://maps.flyfun.aero"
+    static var apiBaseURL: String = "https://maps.flyfun.aero/api"
     
     // MARK: - Init
     

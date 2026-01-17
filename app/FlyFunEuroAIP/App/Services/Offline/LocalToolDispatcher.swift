@@ -175,7 +175,26 @@ final class LocalToolDispatcher {
         
         let limit = (args["limit"] as? Int) ?? 10
         
-        let airports = try await dataSource.searchAirports(query: query, limit: limit)
+        // First try direct airport search (ICAO, name, city)
+        var airports = try await dataSource.searchAirports(query: query, limit: limit)
+        
+        // If no direct matches, try geocoding the query and find airports nearby
+        if airports.isEmpty {
+            if let geocodeResult = OfflineGeocoder.shared.geocode(query: query) {
+                Logger.app.info("search_airports: Geocoded '\(query)' to \(geocodeResult.name) (\(geocodeResult.countryCode)): \(geocodeResult.coordinate.latitude), \(geocodeResult.coordinate.longitude)")
+                
+                // Search airports within 50nm of the geocoded location
+                airports = try await dataSource.airportsNearLocation(
+                    center: geocodeResult.coordinate,
+                    radiusNm: 50,
+                    filters: FilterConfig()
+                )
+            }
+        }
+        
+        if airports.isEmpty {
+            return .success("No airports found.")
+        }
         
         return .success(formatAirportsAsText(airports))
     }
@@ -201,29 +220,96 @@ final class LocalToolDispatcher {
             return .error("Airport data source not available")
         }
         
-        guard let from = (args["from"] as? String)?.uppercased() else {
+        guard let fromQuery = (args["from"] as? String) else {
             return .error("Missing 'from' argument")
         }
-        guard let to = (args["to"] as? String)?.uppercased() else {
+        guard let toQuery = (args["to"] as? String) else {
             return .error("Missing 'to' argument")
         }
         
         let maxDistanceNm = (args["max_distance_nm"] as? Int) ?? 50
         
+        // Resolve 'from' location - try ICAO, geocoder, then airport search
+        let fromResolved = await resolveLocation(fromQuery, dataSource: dataSource)
+        guard let fromIcao = fromResolved.icao else {
+            return .error("Could not find departure location: \(fromQuery)")
+        }
+        
+        // Resolve 'to' location - try ICAO, geocoder, then airport search
+        let toResolved = await resolveLocation(toQuery, dataSource: dataSource)
+        guard let toIcao = toResolved.icao else {
+            return .error("Could not find destination location: \(toQuery)")
+        }
+        
+        Logger.app.info("Route resolved: \(fromQuery) -> \(fromIcao), \(toQuery) -> \(toIcao)")
+        
+        // Get departure and destination airport details for coordinates
+        let fromAirport = try? await dataSource.airportDetail(icao: fromIcao)
+        let toAirport = try? await dataSource.airportDetail(icao: toIcao)
+        
         let result = try await dataSource.airportsNearRoute(
-            from: from,
-            to: to,
+            from: fromIcao,
+            to: toIcao,
             distanceNm: maxDistanceNm,
             filters: FilterConfig()
         )
         
-        var output = "Airports along route \(from) → \(to) (within \(maxDistanceNm) nm):\n"
+        var output = "Airports along route \(fromResolved.name) (\(fromIcao)) → \(toResolved.name) (\(toIcao)) (within \(maxDistanceNm) nm):\n"
+        
+        // Include departure airport with coordinates (for route line plotting)
+        if let from = fromAirport {
+            output += "DEPARTURE: \(from.icao) (\(from.name)) - \(String(format: "%.4f", from.coord.latitude))°, \(String(format: "%.4f", from.coord.longitude))°\n"
+        }
+        
+        // Include destination airport with coordinates (for route line plotting)
+        if let to = toAirport {
+            output += "DESTINATION: \(to.icao) (\(to.name)) - \(String(format: "%.4f", to.coord.latitude))°, \(String(format: "%.4f", to.coord.longitude))°\n"
+        }
+        
+        output += "\n"
+        
         for airport in result.airports.prefix(20) {
             output += "- \(airport.icao) (\(airport.name)) - \(String(format: "%.4f", airport.coord.latitude))°, \(String(format: "%.4f", airport.coord.longitude))°\n"
         }
         
         return .success(output)
     }
+    
+    /// Resolve a location query to an ICAO code and name
+    /// Uses 3-step resolution: ICAO lookup, OfflineGeocoder, airport name search
+    private func resolveLocation(_ query: String, dataSource: LocalAirportDataSource) async -> (icao: String?, name: String) {
+        let upperQuery = query.uppercased()
+        
+        // Step 1: Check if it's an ICAO code (4 letters)
+        if upperQuery.count == 4, upperQuery.allSatisfy({ $0.isLetter }) {
+            if let airport = try? await dataSource.airportDetail(icao: upperQuery) {
+                return (airport.icao, airport.name)
+            }
+        }
+        
+        // Step 2: Try OfflineGeocoder for cities/towns
+        if let geocodeResult = OfflineGeocoder.shared.geocode(query: query) {
+            // Find nearest airport to the geocoded city
+            if let airports = try? await dataSource.airportsNearLocation(
+                center: geocodeResult.coordinate,
+                radiusNm: 30,
+                filters: FilterConfig()
+            ), let nearest = airports.first {
+                Logger.app.info("Geocoded '\(query)' to \(geocodeResult.name), nearest airport: \(nearest.icao)")
+                return (nearest.icao, geocodeResult.name)
+            }
+        }
+        
+        // Step 3: Fall back to airport name search
+        if let searchResults = try? await dataSource.searchAirports(query: query, limit: 1),
+           let airport = searchResults.first {
+            Logger.app.info("Found airport for '\(query)': \(airport.icao)")
+            return (airport.icao, airport.name)
+        }
+        
+        return (nil, query)
+    }
+
     
     private func findAirportsNearLocation(_ args: [String: Any]) async throws -> ToolResult {
         guard let dataSource = airportDataSource else {
@@ -239,59 +325,153 @@ final class LocalToolDispatcher {
         let maxDistanceNm = (args["max_distance_nm"] as? Int) ?? 50
         let maxHoursNotice = (args["max_hours_notice"] as? Int) ?? (args["max_hours"] as? Int)
         
+        // Parse filter arguments from LLM
+        var filters = FilterConfig()
+        
+        // Check both direct args and nested "filters" dict
+        let filterArgs = (args["filters"] as? [String: Any]) ?? args
+        
+        if let hasProcedures = filterArgs["has_procedures"] as? Bool, hasProcedures {
+            filters.hasProcedures = true
+        }
+        if let hasHardRunway = filterArgs["has_hard_runway"] as? Bool, hasHardRunway {
+            filters.hasHardRunway = true
+        }
+        if let hasILS = filterArgs["has_ils"] as? Bool, hasILS {
+            filters.hasILS = true
+        }
+        if let hasRNAV = filterArgs["has_rnav"] as? Bool, hasRNAV {
+            filters.hasRNAV = true
+        }
+        if let pointOfEntry = filterArgs["point_of_entry"] as? Bool, pointOfEntry {
+            filters.pointOfEntry = true
+        }
+        if let country = filterArgs["country"] as? String {
+            filters.country = country.uppercased()
+        }
+        if let minRunway = filterArgs["min_runway_length_ft"] as? Int {
+            filters.minRunwayLengthFt = minRunway
+        }
+        if let maxRunway = filterArgs["max_runway_length_ft"] as? Int {
+            filters.maxRunwayLengthFt = maxRunway
+        }
+        // Fuel filters
+        if let hasAvgas = filterArgs["has_avgas"] as? Bool, hasAvgas {
+            filters.hasAvgas = true
+        }
+        if let hasJetA = filterArgs["has_jet_a"] as? Bool, hasJetA {
+            filters.hasJetA = true
+        }
+        
+        // Log active filters for debugging
+        if filters.hasActiveFilters {
+            Logger.app.info("find_airports_near_location filters: \(filters.description)")
+        }
+        
         // First find the center point - try direct ICAO lookup for 4-letter codes
-        var centerAirport: RZFlight.Airport?
+        var centerCoord: CLLocationCoordinate2D?
+        var centerName = locationQuery
         let query = locationQuery.uppercased()
         
+        // Step 1: Check if it's an ICAO code (4 letters)
         if query.count == 4, query.allSatisfy({ $0.isLetter }) {
             // Looks like an ICAO code - try direct lookup first
-            centerAirport = try await dataSource.airportDetail(icao: query)
+            if let airport = try await dataSource.airportDetail(icao: query) {
+                centerCoord = airport.coord
+                centerName = airport.name
+                Logger.app.info("Found ICAO: \(query) -> \(airport.name)")
+            }
         }
         
-        // Fall back to search if direct lookup failed
-        if centerAirport == nil {
+        // Step 2: Try OfflineGeocoder for cities/towns (prioritize exact city matches)
+        if centerCoord == nil {
+            if let geocodeResult = OfflineGeocoder.shared.geocode(query: locationQuery) {
+                centerCoord = geocodeResult.coordinate
+                centerName = geocodeResult.name
+                Logger.app.info("Geocoded '\(locationQuery)' to \(geocodeResult.name) (\(geocodeResult.countryCode)): \(geocodeResult.coordinate.latitude), \(geocodeResult.coordinate.longitude)")
+            }
+        }
+        
+        // Step 3: Fall back to airport name search if city not found
+        if centerCoord == nil {
             let searchResults = try await dataSource.searchAirports(query: locationQuery, limit: 1)
-            centerAirport = searchResults.first
+            if let airport = searchResults.first {
+                centerCoord = airport.coord
+                centerName = airport.name
+                Logger.app.info("Found airport: \(airport.icao) for query '\(locationQuery)'")
+            }
         }
         
-        guard let center = centerAirport else {
+        guard let center = centerCoord else {
             return .error("Could not find location: \(locationQuery)")
         }
         
         let airports = try await dataSource.airportsNearLocation(
-            center: center.coord,
+            center: center,
             radiusNm: maxDistanceNm,
-            filters: FilterConfig()
+            filters: filters
         )
         
         // Get notification details for filtering and display
         var notificationDetails: [String: NotificationInfo] = [:]
         if let db = notificationsDb {
+            // Get notification records filtered by maxHours
             notificationDetails = getNotificationDetails(db: db, maxHours: maxHoursNotice)
         }
         
-        // If notification filter is requested, filter using notifications database
+        // If notification filter is requested, only include airports that HAVE notification data
+        // and satisfy the max hours requirement
         var filteredAirports = airports
         if maxHoursNotice != nil {
             filteredAirports = airports.filter { notificationDetails[$0.icao] != nil }
         }
         
-        var output = "Airports near \(locationQuery) (within \(maxDistanceNm) nm)"
+        var output = "Airports near \(centerName) (within \(maxDistanceNm) nm)"
         if let maxHours = maxHoursNotice {
             output += " with max \(maxHours)h notice"
         }
-        output += ":\n"
+        if filters.hasActiveFilters {
+            output += " (\(filters.description))"
+        }
+        output += ":\n\n"
         
         if filteredAirports.isEmpty {
             output += "No airports found matching the criteria.\n"
         } else {
-            for airport in filteredAirports.prefix(20) {
-                // Include coordinates for map visualization parsing
-                output += "- \(airport.icao) (\(airport.name)) - \(String(format: "%.4f", airport.coord.latitude))°, \(String(format: "%.4f", airport.coord.longitude))°"
-                if let info = notificationDetails[airport.icao] {
-                    output += " - \(info.hours)h notice"
+            // Sort by distance from center
+            let sortedAirports = filteredAirports.sorted { a, b in
+                center.distance(to: a.coord) < center.distance(to: b.coord)
+            }
+            
+            for (index, airport) in sortedAirports.prefix(10).enumerated() {
+                let distanceMeters = center.distance(to: airport.coord)
+                let distanceNm = distanceMeters / 1852.0
+                
+                // Find longest runway
+                let longestRunway = airport.runways.max(by: { $0.length_ft < $1.length_ft })
+                let runwayLength = longestRunway?.length_ft ?? 0
+                
+                // Numbered list format matching web version
+                // Include coordinates for map visualization parsing (format: ICAO (lat°, lon°))
+                output += "\(index + 1). \(airport.name)\n"
+                output += "- ICAO: \(airport.icao) (\(String(format: "%.4f", airport.coord.latitude))°, \(String(format: "%.4f", airport.coord.longitude))°)\n"
+                if !airport.city.isEmpty {
+                    output += "- Municipality: \(airport.city)\n"
+                }
+                output += "- Distance from \(centerName): \(String(format: "%.2f", distanceNm)) NM\n"
+                if runwayLength > 0 {
+                    // Format with comma separator for thousands
+                    let formatter = NumberFormatter()
+                    formatter.numberStyle = .decimal
+                    let formattedLength = formatter.string(from: NSNumber(value: runwayLength)) ?? "\(runwayLength)"
+                    output += "- Longest Runway Length: \(formattedLength) ft\n"
+                }
+                // Show notification requirements when notification filter is active
+                if maxHoursNotice != nil, let info = notificationDetails[airport.icao] {
                     if let summary = info.summary, !summary.isEmpty {
-                        output += ", \(summary)"
+                        output += "- Notification Requirements: \(summary)\n"
+                    } else {
+                        output += "- Notification Requirements: \(info.hours)h notice\n"
                     }
                 }
                 output += "\n"
@@ -308,11 +488,26 @@ final class LocalToolDispatcher {
     }
     
     /// Get notification details for airports (optionally filtered by max hours)
+    /// Returns airports that have meaningful notification records (hours_notice > 0 OR has summary)
     private func getNotificationDetails(db: OpaquePointer, maxHours: Int?) -> [String: NotificationInfo] {
         var result: [String: NotificationInfo] = [:]
-        var sql = "SELECT icao, hours_notice, summary FROM ga_notification_requirements WHERE hours_notice IS NOT NULL AND hours_notice > 0"
+        
+        // Include airports that have actual notification data:
+        // - Must have hours_notice > 0 OR a non-empty summary
+        // - If maxHours is set: also filter by hours_notice IS NULL OR hours_notice <= maxHours
+        // Note: TRIM only removes spaces, so we use REPLACE to remove newlines (char(10), char(13)) first
+        var sql: String
         if maxHours != nil {
-            sql += " AND hours_notice <= ?"
+            sql = """
+                SELECT icao, hours_notice, summary FROM ga_notification_requirements 
+                WHERE (hours_notice > 0 OR (summary IS NOT NULL AND TRIM(REPLACE(REPLACE(summary, char(10), ''), char(13), '')) != ''))
+                AND (hours_notice IS NULL OR hours_notice <= ?)
+            """
+        } else {
+            sql = """
+                SELECT icao, hours_notice, summary FROM ga_notification_requirements 
+                WHERE hours_notice > 0 OR (summary IS NOT NULL AND TRIM(REPLACE(REPLACE(summary, char(10), ''), char(13), '')) != '')
+            """
         }
         
         var statement: OpaquePointer?
@@ -327,7 +522,8 @@ final class LocalToolDispatcher {
         
         while sqlite3_step(statement) == SQLITE_ROW {
             let icao = String(cString: sqlite3_column_text(statement, 0))
-            let hours = Int(sqlite3_column_int(statement, 1))
+            let hours = sqlite3_column_type(statement, 1) != SQLITE_NULL
+                ? Int(sqlite3_column_int(statement, 1)) : 0
             let summary = sqlite3_column_type(statement, 2) != SQLITE_NULL
                 ? String(cString: sqlite3_column_text(statement, 2)) : nil
             result[icao] = NotificationInfo(hours: hours, summary: summary)
@@ -369,7 +565,8 @@ final class LocalToolDispatcher {
         output += ":\n"
         
         for airport in airports {
-            output += "- \(airport.icao): \(airport.name) (\(airport.city), \(airport.country))\n"
+            // Include coordinates so they can be plotted on the map
+            output += "- \(airport.icao) (\(airport.name)) - \(airport.coord.latitude)°, \(airport.coord.longitude)° - \(airport.city), \(airport.country)\n"
         }
         
         return .success(output)

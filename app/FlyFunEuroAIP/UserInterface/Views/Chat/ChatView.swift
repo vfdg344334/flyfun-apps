@@ -115,6 +115,9 @@ struct ExampleQueryButton: View {
 
 struct ChatSettingsView: View {
     @Environment(\.appState) private var state
+    @Environment(AuthenticationService.self) private var authService
+    @StateObject private var modelManager = ModelManager()
+    @State private var showModelDownload = false
 
     /// Callback to show chat (replaces settings in sidebar)
     var onShowChat: (() -> Void)?
@@ -130,6 +133,23 @@ struct ChatSettingsView: View {
                     Label("Offline Mode", systemImage: "airplane.circle")
                 }
 
+                // Model status row
+                HStack {
+                    Label("AI Model", systemImage: "cube.box")
+                    Spacer()
+                    if modelManager.isModelAvailable {
+                        Label("Ready", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Button("Download") {
+                            showModelDownload = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+
                 Button {
                     onShowOfflineMaps?()
                 } label: {
@@ -138,7 +158,11 @@ struct ChatSettingsView: View {
             } header: {
                 Text("Offline")
             } footer: {
-                Text("Offline mode uses on-device AI and cached map tiles. Download maps for areas you plan to visit.")
+                if modelManager.isModelAvailable {
+                    Text("Offline mode uses on-device AI and cached map tiles. Download maps for areas you plan to visit.")
+                } else {
+                    Text("Download the AI model (~1.5 GB) to enable offline chat. Maps can be downloaded separately.")
+                }
             }
 
             // Chat History Section
@@ -149,6 +173,34 @@ struct ChatSettingsView: View {
                     Label("Clear Chat History", systemImage: "trash")
                 }
                 .disabled(state?.chat.messages.isEmpty ?? true)
+            }
+
+            // Account Section
+            Section("Account") {
+                if authService.isAuthenticated {
+                    if let user = authService.currentUser {
+                        HStack {
+                            Label("Signed in as", systemImage: "person.circle.fill")
+                            Spacer()
+                            Text(user.displayName)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    Button(role: .destructive) {
+                        authService.signOut()
+                    } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } else {
+                    HStack {
+                        Label("Not signed in", systemImage: "person.circle")
+                        Spacer()
+                        Text("Sign in from home screen")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .navigationTitle("Settings")
@@ -165,12 +217,23 @@ struct ChatSettingsView: View {
                 }
             }
         }
+        .sheet(isPresented: $showModelDownload) {
+            ModelDownloadView()
+        }
     }
 
     private var offlineModeBinding: Binding<Bool> {
         Binding(
             get: { state?.chat.isOfflineMode ?? false },
-            set: { state?.chat.setOfflineMode($0) }
+            set: { newValue in
+                // If enabling offline mode and no model, show download prompt
+                if newValue && !modelManager.isModelAvailable {
+                    showModelDownload = true
+                    // Don't actually enable offline mode yet
+                } else {
+                    state?.chat.setOfflineMode(newValue)
+                }
+            }
         )
     }
 }

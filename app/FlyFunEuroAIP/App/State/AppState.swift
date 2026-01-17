@@ -46,6 +46,9 @@ final class AppState {
     /// GA friendliness service for hotel/restaurant/fee data
     let gaFriendlinessService: GAFriendlinessService?
 
+    /// Location manager for user location and map centering
+    let locationManager: LocationManager
+
     // MARK: - Dependencies (kept for reference)
     private let repository: AirportRepositoryProtocol
     
@@ -69,6 +72,9 @@ final class AppState {
 
         // Initialize GA friendliness service from bundled DB
         self.gaFriendlinessService = GAFriendlinessService.createFromBundle()
+
+        // Initialize location manager for user location features
+        self.locationManager = LocationManager()
 
         // Wire up cross-domain communication
         setupCrossDomainWiring()

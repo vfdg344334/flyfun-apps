@@ -30,7 +30,7 @@ final class LocalAirportDataSource: AirportRepositoryProtocol, @unchecked Sendab
             throw AppError.databaseOpenFailed(path: databasePath)
         }
         self.db = db
-        self.knownAirports = KnownAirports(db: db, where: "LENGTH(icao_code) = 4 and ISO_COUNTRY != 'RU'")
+        self.knownAirports = KnownAirports(db: db)
         
         // Bulk load all extended data upfront for efficient legend rendering
         // This is faster than loading per-airport: 4 queries vs ~16,000
@@ -100,9 +100,21 @@ final class LocalAirportDataSource: AirportRepositoryProtocol, @unchecked Sendab
         
         // Filter by actual distance (KDTree returns approximate nearest, verify with haversine)
         let radiusMeters = Double(radiusNm) * 1852.0
-        let filtered = nearbyAirports.filter { airport in
+        
+        // IMPORTANT: The KDTree contains copies of airports WITHOUT extended data.
+        // We need to look up each airport by ICAO to get the version from the `known` dict
+        // which HAS procedures/runways loaded via loadAllExtendedData().
+        var filtered: [RZFlight.Airport] = []
+        for airport in nearbyAirports {
             let distance = center.distance(to: airport.coord)
-            return distance <= radiusMeters
+            if distance <= radiusMeters {
+                // Look up airport with extended data
+                if let airportWithData = knownAirports.airport(icao: airport.icao, ensureRunway: false) {
+                    filtered.append(airportWithData)
+                } else {
+                    filtered.append(airport)
+                }
+            }
         }
         
         // Apply additional filters
