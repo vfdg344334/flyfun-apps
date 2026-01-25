@@ -73,38 +73,153 @@ struct NotamDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(notam.id)
-                    .font(.title2.monospaced().bold())
+            HStack(alignment: .top, spacing: 12) {
+                // Left side: NOTAM info
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(notam.id)
+                            .font(.title2.monospaced().bold())
+
+                        if let category = notam.category {
+                            CategoryChip(category: category)
+                        }
+                    }
+
+                    HStack {
+                        Label(notam.location, systemImage: "mappin")
+                        if let fir = notam.fir {
+                            Text("FIR: \(fir)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.subheadline)
+
+                    if let from = notam.effectiveFrom {
+                        Label(formatDate(from), systemImage: "calendar")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if notam.isPermanent {
+                        Label("PERMANENT", systemImage: "infinity")
+                            .font(.caption.bold())
+                            .foregroundStyle(.orange)
+                    }
+
+                    // Altitude constraints
+                    if notam.lowerLimit != nil || notam.upperLimit != nil {
+                        altitudeLabel
+                    }
+                }
 
                 Spacer()
 
-                if let category = notam.category {
-                    CategoryChip(category: category)
+                // Right side: Mini map if geolocated
+                if notam.coordinate != nil {
+                    headerMiniMap
                 }
-            }
-
-            HStack {
-                Label(notam.location, systemImage: "mappin")
-                if let fir = notam.fir {
-                    Text("FIR: \(fir)")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.subheadline)
-
-            if let from = notam.effectiveFrom {
-                Label(formatDate(from), systemImage: "calendar")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if notam.isPermanent {
-                Label("PERMANENT", systemImage: "infinity")
-                    .font(.caption.bold())
-                    .foregroundStyle(.orange)
             }
         }
+    }
+
+    // MARK: - Altitude Label
+
+    private var altitudeLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.caption)
+            if let lower = notam.lowerLimit, let upper = notam.upperLimit {
+                Text("\(formatAltitude(lower)) - \(formatAltitude(upper))")
+            } else if let lower = notam.lowerLimit {
+                Text("From \(formatAltitude(lower))")
+            } else if let upper = notam.upperLimit {
+                Text("Up to \(formatAltitude(upper))")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    /// Format altitude in feet to readable string (SFC, FL, or ft)
+    private func formatAltitude(_ feet: Int) -> String {
+        if feet == 0 {
+            return "SFC"
+        } else if feet >= 99999 {
+            return "UNL"
+        } else if feet >= 1000 && feet % 100 == 0 {
+            return "FL\(feet / 100)"
+        } else {
+            return "\(feet) ft"
+        }
+    }
+
+    // MARK: - Header Mini Map
+
+    private var headerMiniMap: some View {
+        Map(initialPosition: .region(headerMapRegion)) {
+            // Flight route polyline
+            if !routeCoordinates.isEmpty {
+                MapPolyline(coordinates: routeCoordinates)
+                    .stroke(.blue, lineWidth: 2)
+            }
+
+            // NOTAM affected area
+            if let coordinate = notam.coordinate {
+                if let radius = notam.radiusNm {
+                    MapCircle(center: coordinate, radius: radius * 1852)
+                        .foregroundStyle(.red.opacity(0.2))
+                        .stroke(.red, lineWidth: 1)
+                }
+
+                // NOTAM marker
+                Annotation("", coordinate: coordinate) {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 8, height: 8)
+                }
+            }
+        }
+        .frame(width: 120, height: 100)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Map region for header mini map - focused on NOTAM with route context
+    private var headerMapRegion: MKCoordinateRegion {
+        guard let notamCoord = notam.coordinate else {
+            return MKCoordinateRegion()
+        }
+
+        var minLat = notamCoord.latitude
+        var maxLat = notamCoord.latitude
+        var minLon = notamCoord.longitude
+        var maxLon = notamCoord.longitude
+
+        // Include route if available
+        for coord in routeCoordinates {
+            minLat = min(minLat, coord.latitude)
+            maxLat = max(maxLat, coord.latitude)
+            minLon = min(minLon, coord.longitude)
+            maxLon = max(maxLon, coord.longitude)
+        }
+
+        // Add padding
+        let latPadding = (maxLat - minLat) * 0.15
+        let lonPadding = (maxLon - minLon) * 0.15
+
+        // Minimum span for NOTAM visibility
+        let notamRadiusMeters = (notam.radiusNm ?? 10) * 1852 * 2
+        let minSpanDegrees = notamRadiusMeters / 111000
+
+        let latSpan = max((maxLat - minLat) + latPadding * 2, minSpanDegrees)
+        let lonSpan = max((maxLon - minLon) + lonPadding * 2, minSpanDegrees)
+
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            ),
+            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+        )
     }
 
     // MARK: - Status Buttons
