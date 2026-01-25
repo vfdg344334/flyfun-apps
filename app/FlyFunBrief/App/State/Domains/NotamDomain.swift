@@ -99,6 +99,18 @@ struct VisibilityFilter: Equatable {
     var showRead: Bool = true
 }
 
+/// Time filter - filter NOTAMs by validity at flight time
+struct TimeFilter: Equatable {
+    /// Whether time filtering is enabled
+    var isEnabled: Bool = false
+
+    /// Buffer time before departure (minutes)
+    var preFlightBufferMinutes: Int = 60
+
+    /// Buffer time after arrival (minutes)
+    var postFlightBufferMinutes: Int = 60
+}
+
 /// Domain for NOTAM list management
 @Observable
 @MainActor
@@ -155,6 +167,9 @@ final class NotamDomain {
     /// Visibility filter
     var visibilityFilter = VisibilityFilter()
 
+    /// Time filter - filter by validity at flight time
+    var timeFilter = TimeFilter()
+
     /// Airport coordinates for route filtering (populated from briefing or external source)
     var airportCoordinates: [String: CLLocationCoordinate2D] = [:]
 
@@ -167,6 +182,7 @@ final class NotamDomain {
         statusFilter != .all ||
         !visibilityFilter.showRead ||
         visibilityFilter.showIgnored ||
+        timeFilter.isEnabled ||
         !searchQuery.isEmpty
     }
 
@@ -252,7 +268,19 @@ final class NotamDomain {
             notams = notams.filter { routeFilteredIds.contains($0.notamId) }
         }
 
-        // 3. Apply category filter
+        // 3. Apply time filter (filter by validity at flight time)
+        if timeFilter.isEnabled, let route = currentRoute, let depTime = route.departureTime {
+            let preBuffer = TimeInterval(timeFilter.preFlightBufferMinutes * 60)
+            let postBuffer = TimeInterval(timeFilter.postFlightBufferMinutes * 60)
+            let windowStart = depTime.addingTimeInterval(-preBuffer)
+            let windowEnd = (route.arrivalTime ?? depTime).addingTimeInterval(postBuffer)
+
+            notams = notams.filter { enriched in
+                enriched.isActive(during: windowStart, to: windowEnd)
+            }
+        }
+
+        // 4. Apply category filter
         if !categoryFilter.allEnabled {
             let enabled = categoryFilter.enabledCategories
             notams = notams.filter { enriched in
@@ -261,7 +289,7 @@ final class NotamDomain {
             }
         }
 
-        // 4. Apply text search
+        // 5. Apply text search
         if !searchQuery.isEmpty {
             let searchLower = searchQuery.lowercased()
             notams = notams.filter { enriched in
@@ -271,7 +299,7 @@ final class NotamDomain {
             }
         }
 
-        // 5. Apply status filter
+        // 6. Apply status filter
         switch statusFilter {
         case .all:
             break
@@ -283,7 +311,7 @@ final class NotamDomain {
             notams = notams.filter { $0.status == .followUp }
         }
 
-        // 6. Apply visibility filter (local ignore status)
+        // 7. Apply visibility filter (local ignore status)
         if !visibilityFilter.showIgnored {
             notams = notams.filter { $0.status != .ignore }
         }
@@ -506,6 +534,7 @@ final class NotamDomain {
         categoryFilter = CategoryFilter()
         statusFilter = .all
         visibilityFilter = VisibilityFilter()
+        timeFilter = TimeFilter()
         searchQuery = ""
 
         // Re-populate route from briefing if available

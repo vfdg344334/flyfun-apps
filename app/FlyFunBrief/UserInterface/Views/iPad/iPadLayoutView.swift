@@ -13,16 +13,24 @@ struct iPadLayoutView: View {
     @Environment(\.appState) private var appState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    /// Whether we're showing the filter/flight info sidebar vs the main navigation
+    private var showingNotamContext: Bool {
+        appState?.navigation.selectedTab == .notams && appState?.briefing.currentBriefing != nil
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            // Sidebar: Flight list or NOTAM list based on context
-            sidebarContent
-                .navigationTitle(sidebarTitle)
+            // Sidebar: Navigation or Filter Panel based on context
+            if showingNotamContext {
+                notamContextSidebar
+            } else {
+                navigationSidebar
+            }
         } content: {
-            // Content: Context-dependent (flight detail, briefing list, etc.)
+            // Content: NOTAM list, flight list, etc.
             contentColumn
         } detail: {
-            // Detail: Selected NOTAM or placeholder
+            // Detail: Selected NOTAM or flight details
             detailContent
         }
         .toolbar {
@@ -34,40 +42,16 @@ struct iPadLayoutView: View {
                 }
                 .disabled(appState?.flights.selectedFlight == nil)
             }
-
-            ToolbarItem(placement: .secondaryAction) {
-                filterMenu
-            }
         }
         .sheet(item: sheetBinding) { sheet in
             sheetContent(for: sheet)
         }
     }
 
-    // MARK: - Sidebar Title
-
-    private var sidebarTitle: String {
-        switch appState?.navigation.selectedTab {
-        case .flights:
-            return "Flights"
-        case .notams:
-            if let route = appState?.briefing.currentBriefing?.route {
-                return "\(route.departure) \u{2192} \(route.destination)"
-            }
-            return "NOTAMs"
-        case .ignored:
-            return "Ignored"
-        case .settings:
-            return "Settings"
-        case .none:
-            return "FlyFunBrief"
-        }
-    }
-
-    // MARK: - Sidebar Content
+    // MARK: - Navigation Sidebar (Tab Selection)
 
     @ViewBuilder
-    private var sidebarContent: some View {
+    private var navigationSidebar: some View {
         List(selection: Binding(
             get: { appState?.navigation.selectedTab },
             set: { if let tab = $0 { appState?.navigation.selectedTab = tab } }
@@ -87,6 +71,188 @@ struct iPadLayoutView: View {
             }
         }
         .listStyle(.sidebar)
+        .navigationTitle("FlyFunBrief")
+    }
+
+    // MARK: - NOTAM Context Sidebar (Flight Info + Filters)
+
+    @ViewBuilder
+    private var notamContextSidebar: some View {
+        List {
+            // Back button section
+            Section {
+                Button {
+                    // Go back to navigation mode by clearing briefing or switching tab
+                    appState?.navigation.selectedTab = .flights
+                } label: {
+                    Label("Back to Flights", systemImage: "chevron.left")
+                }
+            }
+
+            // Flight info section
+            if let route = appState?.briefing.currentBriefing?.route {
+                Section("Flight") {
+                    flightInfoRow(route: route)
+                }
+            }
+
+            // Filter sections
+            Section("Status Filter") {
+                statusFilterPicker
+            }
+
+            Section("Categories") {
+                categoryToggles
+            }
+
+            Section("Route Corridor") {
+                routeFilterControls
+            }
+
+            Section("Time Filter") {
+                timeFilterControls
+            }
+
+            Section("Visibility") {
+                visibilityToggles
+            }
+
+            Section("Grouping") {
+                groupingPicker
+            }
+
+            // Reset filters
+            if appState?.notams.hasActiveFilters == true {
+                Section {
+                    Button(role: .destructive) {
+                        appState?.notams.resetFilters()
+                    } label: {
+                        Label("Reset All Filters", systemImage: "xmark.circle")
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle(sidebarTitle)
+    }
+
+    // MARK: - Flight Info Row
+
+    @ViewBuilder
+    private func flightInfoRow(route: Route) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Route
+            HStack {
+                Text(route.departure)
+                    .font(.headline.monospaced())
+                Image(systemName: "arrow.right")
+                    .foregroundStyle(.secondary)
+                Text(route.destination)
+                    .font(.headline.monospaced())
+            }
+
+            // Departure time
+            if let depTime = route.departureTime {
+                Label(formatDateTime(depTime), systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Waypoints
+            if !route.waypoints.isEmpty {
+                Text(route.waypoints.joined(separator: " "))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+
+            // NOTAM count
+            let notamCount = appState?.notams.filteredNotams.count ?? 0
+            let totalCount = appState?.notams.allNotams.count ?? 0
+            if notamCount != totalCount {
+                Text("\(notamCount) of \(totalCount) NOTAMs shown")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            } else {
+                Text("\(totalCount) NOTAMs")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Filter Controls
+
+    private var statusFilterPicker: some View {
+        Picker("Status", selection: statusFilterBinding) {
+            ForEach(StatusFilter.allCases) { status in
+                Text(status.rawValue).tag(status)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    @ViewBuilder
+    private var categoryToggles: some View {
+        Toggle("Runway", isOn: categoryBinding(\.showRunway))
+        Toggle("Navigation", isOn: categoryBinding(\.showNavigation))
+        Toggle("Airspace", isOn: categoryBinding(\.showAirspace))
+        Toggle("Obstacles", isOn: categoryBinding(\.showObstacle))
+        Toggle("Procedures", isOn: categoryBinding(\.showProcedure))
+        Toggle("Lighting", isOn: categoryBinding(\.showLighting))
+        Toggle("Services", isOn: categoryBinding(\.showServices))
+        Toggle("Other", isOn: categoryBinding(\.showOther))
+    }
+
+    @ViewBuilder
+    private var routeFilterControls: some View {
+        Toggle("Filter by Route", isOn: routeEnabledBinding)
+
+        if appState?.notams.routeFilter.isEnabled == true {
+            Picker("Corridor Width", selection: corridorWidthBinding) {
+                Text("10 nm").tag(10.0)
+                Text("25 nm").tag(25.0)
+                Text("50 nm").tag(50.0)
+                Text("100 nm").tag(100.0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var timeFilterControls: some View {
+        Toggle("Active at Flight Time", isOn: timeFilterEnabledBinding)
+
+        if appState?.notams.timeFilter.isEnabled == true,
+           let route = appState?.briefing.currentBriefing?.route,
+           let depTime = route.departureTime {
+            Text("Departure: \(formatDateTime(depTime))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var visibilityToggles: some View {
+        Toggle("Show Read", isOn: showReadBinding)
+        Toggle("Show Ignored", isOn: showIgnoredBinding)
+    }
+
+    private var groupingPicker: some View {
+        Picker("Group By", selection: groupingBinding) {
+            ForEach(NotamGrouping.allCases) { grouping in
+                Text(grouping.rawValue).tag(grouping)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    // MARK: - Sidebar Title
+
+    private var sidebarTitle: String {
+        if let route = appState?.briefing.currentBriefing?.route {
+            return "\(route.departure) → \(route.destination)"
+        }
+        return "NOTAMs"
     }
 
     // MARK: - Content Column
@@ -145,62 +311,68 @@ struct iPadLayoutView: View {
         }
     }
 
-    // MARK: - Filter Menu
-
-    private var filterMenu: some View {
-        Menu {
-            Section("Status") {
-                ForEach(StatusFilter.allCases) { status in
-                    Button {
-                        appState?.notams.statusFilter = status
-                    } label: {
-                        if appState?.notams.statusFilter == status {
-                            Label(status.rawValue, systemImage: "checkmark")
-                        } else {
-                            Text(status.rawValue)
-                        }
-                    }
-                }
-            }
-
-            Section("Group By") {
-                ForEach(NotamGrouping.allCases) { grouping in
-                    Button {
-                        appState?.notams.grouping = grouping
-                    } label: {
-                        if appState?.notams.grouping == grouping {
-                            Label(grouping.rawValue, systemImage: "checkmark")
-                        } else {
-                            Text(grouping.rawValue)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            Button {
-                appState?.navigation.showFilterOptions()
-            } label: {
-                Label("More Filters...", systemImage: "slider.horizontal.3")
-            }
-        } label: {
-            Label("Filter", systemImage: filterIconName)
-        }
-    }
-
-    private var filterIconName: String {
-        appState?.notams.hasActiveFilters == true
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
-    }
-
     // MARK: - Bindings
 
     private var sheetBinding: Binding<AppSheet?> {
         Binding(
             get: { appState?.navigation.presentedSheet },
             set: { appState?.navigation.presentedSheet = $0 }
+        )
+    }
+
+    private var statusFilterBinding: Binding<StatusFilter> {
+        Binding(
+            get: { appState?.notams.statusFilter ?? .all },
+            set: { appState?.notams.statusFilter = $0 }
+        )
+    }
+
+    private func categoryBinding(_ keyPath: WritableKeyPath<CategoryFilter, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { appState?.notams.categoryFilter[keyPath: keyPath] ?? true },
+            set: { appState?.notams.categoryFilter[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private var routeEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.routeFilter.isEnabled ?? false },
+            set: { appState?.notams.routeFilter.isEnabled = $0 }
+        )
+    }
+
+    private var corridorWidthBinding: Binding<Double> {
+        Binding(
+            get: { appState?.notams.routeFilter.corridorWidthNm ?? 25 },
+            set: { appState?.notams.routeFilter.corridorWidthNm = $0 }
+        )
+    }
+
+    private var timeFilterEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.timeFilter.isEnabled ?? false },
+            set: { appState?.notams.timeFilter.isEnabled = $0 }
+        )
+    }
+
+    private var showReadBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.visibilityFilter.showRead ?? true },
+            set: { appState?.notams.visibilityFilter.showRead = $0 }
+        )
+    }
+
+    private var showIgnoredBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.visibilityFilter.showIgnored ?? false },
+            set: { appState?.notams.visibilityFilter.showIgnored = $0 }
+        )
+    }
+
+    private var groupingBinding: Binding<NotamGrouping> {
+        Binding(
+            get: { appState?.notams.grouping ?? .airport },
+            set: { appState?.notams.grouping = $0 }
         )
     }
 
@@ -231,6 +403,15 @@ struct iPadLayoutView: View {
         case .flightPicker:
             FlightPickerView()
         }
+    }
+
+    // MARK: - Helpers
+
+    private func formatDateTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd MMM HH:mm 'UTC'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: date)
     }
 }
 

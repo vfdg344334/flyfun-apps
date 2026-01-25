@@ -144,6 +144,53 @@ struct NotamDetailView: View {
 
     // MARK: - Map Section
 
+    /// Calculate the map region to show both the NOTAM and the flight route
+    private var mapRegion: MKCoordinateRegion {
+        guard let notamCoord = notam.coordinate else {
+            return MKCoordinateRegion()
+        }
+
+        // Start with the NOTAM coordinate
+        var minLat = notamCoord.latitude
+        var maxLat = notamCoord.latitude
+        var minLon = notamCoord.longitude
+        var maxLon = notamCoord.longitude
+
+        // Expand to include route if available
+        if let route = appState?.briefing.currentBriefing?.route {
+            for coord in route.allCoordinates {
+                minLat = min(minLat, coord.latitude)
+                maxLat = max(maxLat, coord.latitude)
+                minLon = min(minLon, coord.longitude)
+                maxLon = max(maxLon, coord.longitude)
+            }
+        }
+
+        // Add padding (10%)
+        let latPadding = (maxLat - minLat) * 0.15
+        let lonPadding = (maxLon - minLon) * 0.15
+
+        // Ensure minimum span for NOTAM radius
+        let notamRadiusMeters = (notam.radiusNm ?? 10) * 1852 * 2
+        let minSpanDegrees = notamRadiusMeters / 111000 // ~111km per degree
+
+        let latSpan = max((maxLat - minLat) + latPadding * 2, minSpanDegrees)
+        let lonSpan = max((maxLon - minLon) + lonPadding * 2, minSpanDegrees)
+
+        let centerLat = (minLat + maxLat) / 2
+        let centerLon = (minLon + maxLon) / 2
+
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon),
+            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+        )
+    }
+
+    /// Route coordinates for the polyline
+    private var routeCoordinates: [CLLocationCoordinate2D] {
+        appState?.briefing.currentBriefing?.route?.allCoordinates ?? []
+    }
+
     @ViewBuilder
     private var mapSection: some View {
         if let coordinate = notam.coordinate {
@@ -151,19 +198,46 @@ struct NotamDetailView: View {
                 Text("Location")
                     .font(.headline)
 
-                Map(initialPosition: .region(MKCoordinateRegion(
-                    center: coordinate,
-                    latitudinalMeters: (notam.radiusNm ?? 10) * 1852 * 2,
-                    longitudinalMeters: (notam.radiusNm ?? 10) * 1852 * 2
-                ))) {
-                    Marker(notam.location, coordinate: coordinate)
-                        .tint(.red)
+                Map(initialPosition: .region(mapRegion)) {
+                    // Flight route polyline (if available)
+                    if !routeCoordinates.isEmpty {
+                        MapPolyline(coordinates: routeCoordinates)
+                            .stroke(.blue, lineWidth: 3)
 
+                        // Departure marker
+                        if let dep = routeCoordinates.first,
+                           let depName = appState?.briefing.currentBriefing?.route?.departure {
+                            Annotation(depName, coordinate: dep) {
+                                Image(systemName: "airplane.departure")
+                                    .foregroundStyle(.blue)
+                                    .padding(4)
+                                    .background(.white, in: Circle())
+                            }
+                        }
+
+                        // Destination marker
+                        if let dest = routeCoordinates.last,
+                           let destName = appState?.briefing.currentBriefing?.route?.destination,
+                           routeCoordinates.count > 1 {
+                            Annotation(destName, coordinate: dest) {
+                                Image(systemName: "airplane.arrival")
+                                    .foregroundStyle(.blue)
+                                    .padding(4)
+                                    .background(.white, in: Circle())
+                            }
+                        }
+                    }
+
+                    // NOTAM affected area circle
                     if let radius = notam.radiusNm {
                         MapCircle(center: coordinate, radius: radius * 1852)
-                            .foregroundStyle(.red.opacity(0.1))
+                            .foregroundStyle(.red.opacity(0.15))
                             .stroke(.red, lineWidth: 2)
                     }
+
+                    // NOTAM location marker
+                    Marker(notam.location, coordinate: coordinate)
+                        .tint(.red)
                 }
                 .frame(height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 12))

@@ -90,6 +90,11 @@ struct EnrichedNotam: Identifiable {
     /// Whether active now
     var isActiveNow: Bool { notam.isActiveNow }
 
+    /// Check if active during a time window
+    func isActive(during start: Date, to end: Date) -> Bool {
+        notam.isActive(during: start, to: end)
+    }
+
     /// Has user note attached
     var hasNote: Bool {
         guard let note = textNote else { return false }
