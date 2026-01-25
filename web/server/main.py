@@ -144,6 +144,7 @@ async def lifespan(app: FastAPI):
         procedures.set_model(_tool_context.model)
         filters.set_model(_tool_context.model)
         statistics.set_model(_tool_context.model)
+        briefing.set_model(_tool_context.model)
 
         # Extract and distribute rules manager from ToolContext
         if _tool_context.rules_manager:

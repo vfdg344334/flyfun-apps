@@ -26,8 +26,41 @@ def serialize_datetime(dt: datetime) -> str:
 
 from euro_aip.briefing import ForeFlightSource, CategorizationPipeline
 from euro_aip.briefing.categorization import parse_q_code
+from euro_aip.models.euro_aip_model import EuroAipModel
 
 logger = logging.getLogger(__name__)
+
+# Global model reference (set by main.py during startup)
+model: Optional[EuroAipModel] = None
+
+def set_model(m: EuroAipModel):
+    """Set the global model reference for geocoding."""
+    global model
+    model = m
+    logger.info(f"Briefing API: model set with {m.airports.count()} airports")
+
+def geocode_route(route) -> None:
+    """Geocode route departure/destination using airport coordinates."""
+    if route is None:
+        return
+
+    if model is None:
+        logger.warning("No model available for geocoding")
+        return
+
+    # Geocode departure
+    if route.departure and not route.departure_coords:
+        airport = model.airports.get(route.departure)
+        if airport and airport.latitude_deg is not None:
+            route.departure_coords = (airport.latitude_deg, airport.longitude_deg)
+            logger.info(f"Geocoded departure {route.departure}: {route.departure_coords}")
+
+    # Geocode destination
+    if route.destination and not route.destination_coords:
+        airport = model.airports.get(route.destination)
+        if airport and airport.latitude_deg is not None:
+            route.destination_coords = (airport.latitude_deg, airport.longitude_deg)
+            logger.info(f"Geocoded destination {route.destination}: {route.destination_coords}")
 
 router = APIRouter()
 
@@ -306,6 +339,9 @@ async def parse_briefing(
         # Parse using appropriate source handler
         source_handler = SOURCES[source]()
         briefing = source_handler.parse(temp_path)
+
+        # Geocode route with airport coordinates
+        geocode_route(briefing.route)
 
         # Apply categorization pipeline
         pipeline = CategorizationPipeline()

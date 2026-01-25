@@ -187,9 +187,57 @@ struct NotamDetailView: View {
 
     // MARK: - Map Section
 
-    /// Route coordinates for the polyline
-    private var routeCoordinates: [CLLocationCoordinate2D] {
-        appState?.briefing.currentBriefing?.route?.allCoordinates ?? []
+    /// Current flight from app state
+    private var flight: CDFlight? {
+        appState?.flights.selectedFlight
+    }
+
+    /// Briefing route (for comparison)
+    private var briefingRoute: Route? {
+        appState?.briefing.currentBriefing?.route
+    }
+
+    /// Check if briefing route matches flight route
+    private var routeMismatchWarning: String? {
+        guard let flight = flight,
+              let briefingRoute = briefingRoute else { return nil }
+
+        let flightOrigin = flight.origin?.uppercased()
+        let flightDest = flight.destination?.uppercased()
+        let briefingOrigin = briefingRoute.departure.uppercased()
+        let briefingDest = briefingRoute.destination.uppercased()
+
+        if flightOrigin != briefingOrigin || flightDest != briefingDest {
+            return "Briefing route (\(briefingOrigin)-\(briefingDest)) differs from flight (\(flightOrigin ?? "?")-\(flightDest ?? "?"))"
+        }
+        return nil
+    }
+
+    /// Route coordinates - uses briefing route (geocoded by server)
+    /// CDFlight waypoints are used for display names if available
+    private var flightRouteCoordinates: [CLLocationCoordinate2D] {
+        // Use briefing route coordinates (geocoded on server)
+        briefingRoute?.allCoordinates ?? []
+    }
+
+    /// Route waypoint names and coordinates for display
+    /// Combines CDFlight waypoint names with briefing route coordinates
+    private var flightWaypoints: [(name: String, coordinate: CLLocationCoordinate2D)] {
+        // Use briefing waypoint coords if available
+        guard let waypointCoords = briefingRoute?.waypointCoords else { return [] }
+        return waypointCoords.map { wp in
+            (name: wp.name, coordinate: wp.coordinate)
+        }
+    }
+
+    /// Origin coordinate from briefing
+    private var originCoordinate: CLLocationCoordinate2D? {
+        briefingRoute?.departureCoordinate
+    }
+
+    /// Destination coordinate from briefing
+    private var destinationCoordinate: CLLocationCoordinate2D? {
+        briefingRoute?.destinationCoordinate
     }
 
     @ViewBuilder
@@ -234,33 +282,49 @@ struct NotamDetailView: View {
                     }
                 }
 
+                // Route mismatch warning
+                if let warning = routeMismatchWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
                 Map(position: $mapPosition) {
-                    // Flight route polyline (if available)
-                    if !routeCoordinates.isEmpty {
-                        MapPolyline(coordinates: routeCoordinates)
+                    // Flight route polyline
+                    if !flightRouteCoordinates.isEmpty {
+                        MapPolyline(coordinates: flightRouteCoordinates)
                             .stroke(.blue, lineWidth: 3)
+                    }
 
-                        // Departure marker
-                        if let dep = routeCoordinates.first,
-                           let depName = appState?.briefing.currentBriefing?.route?.departure {
-                            Annotation(depName, coordinate: dep) {
-                                Image(systemName: "airplane.departure")
-                                    .foregroundStyle(.blue)
-                                    .padding(4)
-                                    .background(.white, in: Circle())
-                            }
+                    // Departure marker - prefer CDFlight name, use briefing coords
+                    if let depCoord = originCoordinate {
+                        let depName = flight?.origin ?? briefingRoute?.departure ?? "DEP"
+                        Annotation(depName, coordinate: depCoord) {
+                            Image(systemName: "airplane.departure")
+                                .foregroundStyle(.blue)
+                                .padding(4)
+                                .background(.white, in: Circle())
                         }
+                    }
 
-                        // Destination marker
-                        if let dest = routeCoordinates.last,
-                           let destName = appState?.briefing.currentBriefing?.route?.destination,
-                           routeCoordinates.count > 1 {
-                            Annotation(destName, coordinate: dest) {
-                                Image(systemName: "airplane.arrival")
-                                    .foregroundStyle(.blue)
-                                    .padding(4)
-                                    .background(.white, in: Circle())
-                            }
+                    // Waypoint markers (semi-transparent circles)
+                    ForEach(flightWaypoints, id: \.name) { waypoint in
+                        Annotation(waypoint.name, coordinate: waypoint.coordinate) {
+                            Circle()
+                                .fill(.blue.opacity(0.3))
+                                .stroke(.blue, lineWidth: 1)
+                                .frame(width: 12, height: 12)
+                        }
+                    }
+
+                    // Destination marker - prefer CDFlight name, use briefing coords
+                    if let destCoord = destinationCoordinate {
+                        let destName = flight?.destination ?? briefingRoute?.destination ?? "ARR"
+                        Annotation(destName, coordinate: destCoord) {
+                            Image(systemName: "airplane.arrival")
+                                .foregroundStyle(.blue)
+                                .padding(4)
+                                .background(.white, in: Circle())
                         }
                     }
 
@@ -312,8 +376,8 @@ struct NotamDetailView: View {
         var minLon = notamCoord.longitude
         var maxLon = notamCoord.longitude
 
-        // Include route if available
-        for coord in routeCoordinates {
+        // Include flight route if available
+        for coord in flightRouteCoordinates {
             minLat = min(minLat, coord.latitude)
             maxLat = max(maxLat, coord.latitude)
             minLon = min(minLon, coord.longitude)
