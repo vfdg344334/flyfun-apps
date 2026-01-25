@@ -13,18 +13,29 @@ struct iPhoneLayoutView: View {
     @Environment(\.appState) private var appState
 
     var body: some View {
+        Group {
+            if appState?.navigation.isViewingFlight == true {
+                // Flight view mode - show NOTAM list with navigation
+                FlightNotamView()
+            } else {
+                // Tab navigation mode
+                tabNavigationView
+            }
+        }
+        .sheet(item: sheetBinding) { sheet in
+            sheetContent(for: sheet)
+        }
+    }
+
+    // MARK: - Tab Navigation View
+
+    private var tabNavigationView: some View {
         TabView(selection: tabBinding) {
             FlightsTab()
                 .tabItem {
                     Label("Flights", systemImage: "airplane")
                 }
                 .tag(AppTab.flights)
-
-            NotamListTab()
-                .tabItem {
-                    Label("NOTAMs", systemImage: "list.bullet.rectangle")
-                }
-                .tag(AppTab.notams)
 
             IgnoredTab()
                 .tabItem {
@@ -37,9 +48,6 @@ struct iPhoneLayoutView: View {
                     Label("Settings", systemImage: "gearshape")
                 }
                 .tag(AppTab.settings)
-        }
-        .sheet(item: sheetBinding) { sheet in
-            sheetContent(for: sheet)
         }
     }
 
@@ -100,51 +108,108 @@ struct FlightsTab: View {
     }
 }
 
-// MARK: - NOTAM List Tab
+// MARK: - Flight NOTAM View (when viewing a flight)
 
-struct NotamListTab: View {
+struct FlightNotamView: View {
     @Environment(\.appState) private var appState
 
     var body: some View {
         NavigationStack {
             NotamListView()
-                .navigationTitle("NOTAMs")
+                .navigationTitle(navigationTitle)
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button {
+                            appState?.navigation.exitFlightView()
+                            appState?.briefing.clearBriefing()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                Text("Flights")
+                            }
+                        }
+                    }
+
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
-                            Section("Status") {
-                                ForEach(StatusFilter.allCases) { status in
-                                    Button {
-                                        appState?.notams.statusFilter = status
-                                    } label: {
-                                        if appState?.notams.statusFilter == status {
-                                            Label(status.rawValue, systemImage: "checkmark")
-                                        } else {
-                                            Text(status.rawValue)
-                                        }
-                                    }
-                                }
-                            }
-
+                            briefingMenu
                             Divider()
-
-                            Button {
-                                appState?.navigation.showFilterOptions()
-                            } label: {
-                                Label("More Filters...", systemImage: "slider.horizontal.3")
-                            }
+                            filterMenu
                         } label: {
-                            Label("Filter", systemImage: filterIconName)
+                            Label("Options", systemImage: "ellipsis.circle")
                         }
                     }
                 }
         }
     }
 
-    private var filterIconName: String {
-        appState?.notams.hasActiveFilters == true
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
+    private var navigationTitle: String {
+        if let flight = appState?.flights.selectedFlight {
+            return "\(flight.origin ?? "") → \(flight.destination ?? "")"
+        }
+        return "NOTAMs"
+    }
+
+    // MARK: - Briefing Menu
+
+    @ViewBuilder
+    private var briefingMenu: some View {
+        if let flight = appState?.flights.selectedFlight {
+            let briefings = flight.sortedBriefings
+
+            Section("Briefings") {
+                ForEach(briefings, id: \.id) { briefing in
+                    Button {
+                        appState?.briefing.loadBriefing(briefing)
+                    } label: {
+                        HStack {
+                            if briefing.isLatest {
+                                Image(systemName: "star.fill")
+                            }
+                            Text(briefing.formattedImportDate)
+                            Text("(\(briefing.notamCount))")
+                            if appState?.briefing.currentCDBriefing?.id == briefing.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    appState?.navigation.showImportSheet()
+                } label: {
+                    Label("Import New Briefing", systemImage: "square.and.arrow.down")
+                }
+            }
+        }
+    }
+
+    // MARK: - Filter Menu
+
+    @ViewBuilder
+    private var filterMenu: some View {
+        Section("Status") {
+            ForEach(StatusFilter.allCases) { status in
+                Button {
+                    appState?.notams.statusFilter = status
+                } label: {
+                    if appState?.notams.statusFilter == status {
+                        Label(status.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(status.rawValue)
+                    }
+                }
+            }
+        }
+
+        Divider()
+
+        Button {
+            appState?.navigation.showFilterOptions()
+        } label: {
+            Label("More Filters...", systemImage: "slider.horizontal.3")
+        }
     }
 }
 

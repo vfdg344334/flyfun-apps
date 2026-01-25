@@ -9,10 +9,9 @@ import Foundation
 import SwiftUI
 import OSLog
 
-/// Main tabs in the app
+/// Main tabs in the app (when not viewing a flight)
 enum AppTab: String, CaseIterable, Identifiable {
     case flights = "Flights"
-    case notams = "NOTAMs"
     case ignored = "Ignored"
     case settings = "Settings"
 
@@ -21,7 +20,6 @@ enum AppTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .flights: return "airplane"
-        case .notams: return "list.bullet.rectangle"
         case .ignored: return "xmark.circle"
         case .settings: return "gearshape"
         }
@@ -57,7 +55,7 @@ enum AppSheet: Identifiable {
 final class NavigationDomain {
     // MARK: - State
 
-    /// Currently selected tab
+    /// Currently selected tab (when not viewing a flight)
     var selectedTab: AppTab = .flights
 
     /// Currently presented sheet
@@ -65,6 +63,9 @@ final class NavigationDomain {
 
     /// Navigation path for iPhone drill-down navigation
     var navigationPath = NavigationPath()
+
+    /// Whether we're in "flight view" mode (viewing NOTAMs for a selected flight)
+    var isViewingFlight: Bool = false
 
     /// Whether to show the filter panel (iPad)
     var showFilterPanel = false
@@ -76,6 +77,20 @@ final class NavigationDomain {
     var selectedFlightId: UUID?
 
     // MARK: - Actions
+
+    /// Enter flight view mode (viewing NOTAMs for a flight)
+    func enterFlightView(flightId: UUID) {
+        selectedFlightId = flightId
+        isViewingFlight = true
+        Logger.app.info("Entered flight view for \(flightId)")
+    }
+
+    /// Exit flight view mode (back to flight list)
+    func exitFlightView() {
+        isViewingFlight = false
+        selectedFlightId = nil
+        Logger.app.info("Exited flight view")
+    }
 
     /// Show the import briefing sheet
     func showImportSheet() {
@@ -107,19 +122,23 @@ final class NavigationDomain {
         presentedSheet = nil
     }
 
-    /// Navigate to NOTAM list
+    /// Navigate to NOTAM list (enter flight view if a flight is selected)
     func showNotamList() {
-        selectedTab = .notams
+        if selectedFlightId != nil {
+            isViewingFlight = true
+        }
     }
 
     /// Navigate to flights tab
     func showFlights() {
         selectedTab = .flights
+        isViewingFlight = false
     }
 
     /// Navigate to ignored tab
     func showIgnored() {
         selectedTab = .ignored
+        isViewingFlight = false
     }
 
     /// Toggle filter panel visibility
@@ -139,5 +158,6 @@ final class NavigationDomain {
         navigationPath = NavigationPath()
         showFilterPanel = false
         selectedFlightId = nil
+        isViewingFlight = false
     }
 }

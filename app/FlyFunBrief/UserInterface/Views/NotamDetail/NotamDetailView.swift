@@ -366,7 +366,8 @@ struct NotamDetailView: View {
 
 #Preview {
     NavigationStack {
-        NotamDetailView(notam: .preview)
+        // Preview placeholder - would use actual Notam in real preview
+        Text("NotamDetailView Preview")
     }
     .environment(\.appState, AppState.preview())
 }

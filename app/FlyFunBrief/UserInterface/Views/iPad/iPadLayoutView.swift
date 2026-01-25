@@ -13,16 +13,11 @@ struct iPadLayoutView: View {
     @Environment(\.appState) private var appState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    /// Whether we're showing the filter/flight info sidebar vs the main navigation
-    private var showingNotamContext: Bool {
-        appState?.navigation.selectedTab == .notams && appState?.briefing.currentBriefing != nil
-    }
-
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            // Sidebar: Navigation or Filter Panel based on context
-            if showingNotamContext {
-                notamContextSidebar
+            // Sidebar: Navigation tabs or Flight context (filters + briefing selector)
+            if appState?.navigation.isViewingFlight == true {
+                flightContextSidebar
             } else {
                 navigationSidebar
             }
@@ -60,9 +55,6 @@ struct iPadLayoutView: View {
                 Label("Flights", systemImage: "airplane")
                     .tag(AppTab.flights)
 
-                Label("NOTAMs", systemImage: "list.bullet.rectangle")
-                    .tag(AppTab.notams)
-
                 Label("Ignored", systemImage: "xmark.circle")
                     .tag(AppTab.ignored)
 
@@ -74,60 +66,67 @@ struct iPadLayoutView: View {
         .navigationTitle("FlyFunBrief")
     }
 
-    // MARK: - NOTAM Context Sidebar (Flight Info + Filters)
+    // MARK: - Flight Context Sidebar (Flight Info + Briefings + Filters)
 
     @ViewBuilder
-    private var notamContextSidebar: some View {
+    private var flightContextSidebar: some View {
         List {
-            // Back button section
+            // Back button
             Section {
                 Button {
-                    // Go back to navigation mode by clearing briefing or switching tab
-                    appState?.navigation.selectedTab = .flights
+                    appState?.navigation.exitFlightView()
+                    appState?.briefing.clearBriefing()
                 } label: {
                     Label("Back to Flights", systemImage: "chevron.left")
                 }
             }
 
-            // Flight info section
-            if let route = appState?.briefing.currentBriefing?.route {
+            // Flight info section (editable summary)
+            if let flight = appState?.flights.selectedFlight {
                 Section("Flight") {
-                    flightInfoRow(route: route)
+                    flightInfoSection(flight: flight)
+                }
+
+                // Briefings section
+                Section("Briefings") {
+                    briefingsSection(flight: flight)
                 }
             }
 
-            // Filter sections
-            Section("Status Filter") {
-                statusFilterPicker
-            }
+            // Filter sections (only if we have a briefing loaded)
+            if appState?.briefing.currentBriefing != nil {
+                Section("Status Filter") {
+                    statusFilterPicker
+                }
 
-            Section("Categories") {
-                categoryToggles
-            }
+                Section("Categories") {
+                    categoryToggles
+                }
 
-            Section("Route Corridor") {
-                routeFilterControls
-            }
+                Section("Route Corridor") {
+                    routeFilterControls
+                }
 
-            Section("Time Filter") {
-                timeFilterControls
-            }
+                Section("Time Filter") {
+                    timeFilterControls
+                }
 
-            Section("Visibility") {
-                visibilityToggles
-            }
+                Section("Visibility") {
+                    visibilityToggles
+                }
 
-            Section("Grouping") {
-                groupingPicker
-            }
+                Section("Grouping") {
+                    groupingPicker
+                }
 
-            // Reset filters
-            if appState?.notams.hasActiveFilters == true {
-                Section {
-                    Button(role: .destructive) {
-                        appState?.notams.resetFilters()
-                    } label: {
-                        Label("Reset All Filters", systemImage: "xmark.circle")
+                // Reset filters
+                if appState?.notams.hasActiveFilters == true {
+                    Section {
+                        Button(role: .destructive) {
+                            appState?.notams.resetFilters()
+                        } label: {
+                            Label("Reset All Filters", systemImage: "xmark.circle")
+                        }
                     }
                 }
             }
@@ -136,49 +135,100 @@ struct iPadLayoutView: View {
         .navigationTitle(sidebarTitle)
     }
 
-    // MARK: - Flight Info Row
+    // MARK: - Flight Info Section
 
     @ViewBuilder
-    private func flightInfoRow(route: Route) -> some View {
+    private func flightInfoSection(flight: CDFlight) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Route
-            HStack {
-                Text(route.departure)
-                    .font(.headline.monospaced())
-                Image(systemName: "arrow.right")
-                    .foregroundStyle(.secondary)
-                Text(route.destination)
-                    .font(.headline.monospaced())
+            // Route (tappable to edit)
+            Button {
+                if let id = flight.id {
+                    appState?.navigation.showEditFlight(flightId: id)
+                }
+            } label: {
+                HStack {
+                    Text(flight.origin ?? "")
+                        .font(.headline.monospaced())
+                    Image(systemName: "arrow.right")
+                        .foregroundStyle(.secondary)
+                    Text(flight.destination ?? "")
+                        .font(.headline.monospaced())
+                    Spacer()
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .buttonStyle(.plain)
 
             // Departure time
-            if let depTime = route.departureTime {
+            if let depTime = flight.departureTime {
                 Label(formatDateTime(depTime), systemImage: "clock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            // Waypoints
-            if !route.waypoints.isEmpty {
-                Text(route.waypoints.joined(separator: " "))
+            // Route waypoints
+            if !flight.routeArray.isEmpty {
+                Text(flight.routeArray.joined(separator: " "))
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
             }
-
-            // NOTAM count
-            let notamCount = appState?.notams.filteredNotams.count ?? 0
-            let totalCount = appState?.notams.allNotams.count ?? 0
-            if notamCount != totalCount {
-                Text("\(notamCount) of \(totalCount) NOTAMs shown")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-            } else {
-                Text("\(totalCount) NOTAMs")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Briefings Section
+
+    @ViewBuilder
+    private func briefingsSection(flight: CDFlight) -> some View {
+        let briefings = flight.sortedBriefings
+
+        if briefings.isEmpty {
+            Button {
+                appState?.navigation.showImportSheet()
+            } label: {
+                Label("Import First Briefing", systemImage: "square.and.arrow.down")
+            }
+        } else {
+            ForEach(briefings, id: \.id) { briefing in
+                Button {
+                    // Load this briefing
+                    appState?.briefing.loadBriefing(briefing)
+                } label: {
+                    HStack {
+                        if briefing.isLatest {
+                            Image(systemName: "star.fill")
+                                .foregroundStyle(.yellow)
+                                .font(.caption)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(briefing.formattedImportDate)
+                                .font(.subheadline)
+                            Text("\(briefing.notamCount) NOTAMs")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        if appState?.briefing.currentCDBriefing?.id == briefing.id {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                appState?.navigation.showImportSheet()
+            } label: {
+                Label("Import New Briefing", systemImage: "plus")
+                    .font(.caption)
+            }
+        }
     }
 
     // MARK: - Filter Controls
@@ -249,27 +299,31 @@ struct iPadLayoutView: View {
     // MARK: - Sidebar Title
 
     private var sidebarTitle: String {
-        if let route = appState?.briefing.currentBriefing?.route {
-            return "\(route.departure) → \(route.destination)"
+        if let flight = appState?.flights.selectedFlight {
+            return "\(flight.origin ?? "") → \(flight.destination ?? "")"
         }
-        return "NOTAMs"
+        return "Flight"
     }
 
     // MARK: - Content Column
 
     @ViewBuilder
     private var contentColumn: some View {
-        switch appState?.navigation.selectedTab {
-        case .flights:
-            FlightListView()
-        case .notams:
+        if appState?.navigation.isViewingFlight == true {
+            // Viewing a flight - show NOTAMs
             NotamListView()
-        case .ignored:
-            IgnoreListView()
-        case .settings:
-            SettingsView()
-        case .none:
-            ContentUnavailableView("Select a section", systemImage: "sidebar.left")
+        } else {
+            // Tab-based content
+            switch appState?.navigation.selectedTab {
+            case .flights:
+                FlightListView()
+            case .ignored:
+                IgnoreListView()
+            case .settings:
+                SettingsView()
+            case .none:
+                ContentUnavailableView("Select a section", systemImage: "sidebar.left")
+            }
         }
     }
 
@@ -279,6 +333,28 @@ struct iPadLayoutView: View {
     private var detailContent: some View {
         if let notam = appState?.notams.selectedNotam {
             NotamDetailView(notam: notam)
+        } else if appState?.navigation.isViewingFlight == true {
+            // Viewing flight - prompt to select NOTAM
+            if appState?.briefing.currentBriefing != nil {
+                ContentUnavailableView {
+                    Label("Select a NOTAM", systemImage: "doc.text.magnifyingglass")
+                } description: {
+                    Text("Choose a NOTAM from the list to see details.")
+                }
+            } else {
+                ContentUnavailableView {
+                    Label("No Briefing Loaded", systemImage: "doc.badge.plus")
+                } description: {
+                    Text("Import a briefing to view NOTAMs.")
+                } actions: {
+                    Button {
+                        appState?.navigation.showImportSheet()
+                    } label: {
+                        Label("Import Briefing", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
         } else if appState?.navigation.selectedTab == .flights {
             if let flight = appState?.flights.selectedFlight {
                 FlightDetailView(flight: flight)
@@ -289,24 +365,11 @@ struct iPadLayoutView: View {
                     Text("Choose a flight from the list to see details.")
                 }
             }
-        } else if appState?.briefing.currentBriefing != nil {
-            ContentUnavailableView {
-                Label("Select a NOTAM", systemImage: "doc.text.magnifyingglass")
-            } description: {
-                Text("Choose a NOTAM from the list to see details.")
-            }
         } else {
             ContentUnavailableView {
-                Label("No Briefing Loaded", systemImage: "doc.badge.plus")
+                Label("Welcome to FlyFunBrief", systemImage: "airplane")
             } description: {
-                Text("Select a flight and import a briefing to get started.")
-            } actions: {
-                Button {
-                    appState?.navigation.selectedTab = .flights
-                } label: {
-                    Label("Go to Flights", systemImage: "airplane")
-                }
-                .buttonStyle(.borderedProminent)
+                Text("Select a flight to view and manage your NOTAMs.")
             }
         }
     }

@@ -120,14 +120,19 @@ final class AppState {
             self?.notams.clearBriefing()
         }
 
-        // When a flight is selected, load its latest briefing
+        // When a flight is selected, enter flight view mode and load its latest briefing
         flights.onFlightSelected = { [weak self] flight in
-            guard let self = self,
-                  let latestBriefing = flight.latestBriefing else {
-                return
+            guard let self = self else { return }
+
+            // Enter flight view mode
+            if let flightId = flight.id {
+                self.navigation.enterFlightView(flightId: flightId)
             }
 
-            self.briefing.loadBriefing(latestBriefing)
+            // Load latest briefing if available
+            if let latestBriefing = flight.latestBriefing {
+                self.briefing.loadBriefing(latestBriefing)
+            }
         }
 
         // When a briefing is imported to Core Data, notify briefing domain
