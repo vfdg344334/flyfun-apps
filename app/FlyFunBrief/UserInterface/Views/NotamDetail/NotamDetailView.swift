@@ -16,6 +16,8 @@ struct NotamDetailView: View {
     let notam: Notam
 
     @State private var isRawTextExpanded = false
+    @State private var mapPosition: MapCameraPosition = .automatic
+    @State private var isZoomedToNotam = false
 
     private var annotation: NotamAnnotation? {
         appState?.notams.annotation(for: notam)
@@ -113,11 +115,6 @@ struct NotamDetailView: View {
                 }
 
                 Spacer()
-
-                // Right side: Mini map if geolocated
-                if notam.coordinate != nil {
-                    headerMiniMap
-                }
             }
         }
     }
@@ -151,75 +148,6 @@ struct NotamDetailView: View {
         } else {
             return "\(feet) ft"
         }
-    }
-
-    // MARK: - Header Mini Map
-
-    private var headerMiniMap: some View {
-        Map(initialPosition: .region(headerMapRegion)) {
-            // Flight route polyline
-            if !routeCoordinates.isEmpty {
-                MapPolyline(coordinates: routeCoordinates)
-                    .stroke(.blue, lineWidth: 2)
-            }
-
-            // NOTAM affected area
-            if let coordinate = notam.coordinate {
-                if let radius = notam.radiusNm {
-                    MapCircle(center: coordinate, radius: radius * 1852)
-                        .foregroundStyle(.red.opacity(0.2))
-                        .stroke(.red, lineWidth: 1)
-                }
-
-                // NOTAM marker
-                Annotation("", coordinate: coordinate) {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 8, height: 8)
-                }
-            }
-        }
-        .frame(width: 120, height: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    /// Map region for header mini map - focused on NOTAM with route context
-    private var headerMapRegion: MKCoordinateRegion {
-        guard let notamCoord = notam.coordinate else {
-            return MKCoordinateRegion()
-        }
-
-        var minLat = notamCoord.latitude
-        var maxLat = notamCoord.latitude
-        var minLon = notamCoord.longitude
-        var maxLon = notamCoord.longitude
-
-        // Include route if available
-        for coord in routeCoordinates {
-            minLat = min(minLat, coord.latitude)
-            maxLat = max(maxLat, coord.latitude)
-            minLon = min(minLon, coord.longitude)
-            maxLon = max(maxLon, coord.longitude)
-        }
-
-        // Add padding
-        let latPadding = (maxLat - minLat) * 0.15
-        let lonPadding = (maxLon - minLon) * 0.15
-
-        // Minimum span for NOTAM visibility
-        let notamRadiusMeters = (notam.radiusNm ?? 10) * 1852 * 2
-        let minSpanDegrees = notamRadiusMeters / 111000
-
-        let latSpan = max((maxLat - minLat) + latPadding * 2, minSpanDegrees)
-        let lonSpan = max((maxLon - minLon) + lonPadding * 2, minSpanDegrees)
-
-        return MKCoordinateRegion(
-            center: CLLocationCoordinate2D(
-                latitude: (minLat + maxLat) / 2,
-                longitude: (minLon + maxLon) / 2
-            ),
-            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
-        )
     }
 
     // MARK: - Status Buttons
@@ -259,48 +187,6 @@ struct NotamDetailView: View {
 
     // MARK: - Map Section
 
-    /// Calculate the map region to show both the NOTAM and the flight route
-    private var mapRegion: MKCoordinateRegion {
-        guard let notamCoord = notam.coordinate else {
-            return MKCoordinateRegion()
-        }
-
-        // Start with the NOTAM coordinate
-        var minLat = notamCoord.latitude
-        var maxLat = notamCoord.latitude
-        var minLon = notamCoord.longitude
-        var maxLon = notamCoord.longitude
-
-        // Expand to include route if available
-        if let route = appState?.briefing.currentBriefing?.route {
-            for coord in route.allCoordinates {
-                minLat = min(minLat, coord.latitude)
-                maxLat = max(maxLat, coord.latitude)
-                minLon = min(minLon, coord.longitude)
-                maxLon = max(maxLon, coord.longitude)
-            }
-        }
-
-        // Add padding (10%)
-        let latPadding = (maxLat - minLat) * 0.15
-        let lonPadding = (maxLon - minLon) * 0.15
-
-        // Ensure minimum span for NOTAM radius
-        let notamRadiusMeters = (notam.radiusNm ?? 10) * 1852 * 2
-        let minSpanDegrees = notamRadiusMeters / 111000 // ~111km per degree
-
-        let latSpan = max((maxLat - minLat) + latPadding * 2, minSpanDegrees)
-        let lonSpan = max((maxLon - minLon) + lonPadding * 2, minSpanDegrees)
-
-        let centerLat = (minLat + maxLat) / 2
-        let centerLon = (minLon + maxLon) / 2
-
-        return MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon),
-            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
-        )
-    }
-
     /// Route coordinates for the polyline
     private var routeCoordinates: [CLLocationCoordinate2D] {
         appState?.briefing.currentBriefing?.route?.allCoordinates ?? []
@@ -310,10 +196,45 @@ struct NotamDetailView: View {
     private var mapSection: some View {
         if let coordinate = notam.coordinate {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Location")
-                    .font(.headline)
+                HStack {
+                    Text("Location")
+                        .font(.headline)
 
-                Map(initialPosition: .region(mapRegion)) {
+                    Spacer()
+
+                    // Zoom controls
+                    HStack(spacing: 8) {
+                        Button {
+                            withAnimation {
+                                isZoomedToNotam = true
+                                mapPosition = .region(notamOnlyRegion)
+                            }
+                        } label: {
+                            Image(systemName: "scope")
+                                .font(.caption)
+                                .padding(6)
+                                .background(isZoomedToNotam ? Color.accentColor.opacity(0.2) : Color.clear, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Zoom to NOTAM")
+
+                        Button {
+                            withAnimation {
+                                isZoomedToNotam = false
+                                mapPosition = .region(routeAndNotamRegion)
+                            }
+                        } label: {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption)
+                                .padding(6)
+                                .background(!isZoomedToNotam ? Color.accentColor.opacity(0.2) : Color.clear, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show route and NOTAM")
+                    }
+                }
+
+                Map(position: $mapPosition) {
                     // Flight route polyline (if available)
                     if !routeCoordinates.isEmpty {
                         MapPolyline(coordinates: routeCoordinates)
@@ -356,8 +277,67 @@ struct NotamDetailView: View {
                 }
                 .frame(height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                .onAppear {
+                    // Start with route + NOTAM view
+                    mapPosition = .region(routeAndNotamRegion)
+                }
             }
         }
+    }
+
+    /// Region zoomed to just the NOTAM area
+    private var notamOnlyRegion: MKCoordinateRegion {
+        guard let notamCoord = notam.coordinate else {
+            return MKCoordinateRegion()
+        }
+
+        // Size based on NOTAM radius, with minimum span
+        let notamRadiusMeters = (notam.radiusNm ?? 5) * 1852 * 3 // 3x radius for context
+        let spanDegrees = max(notamRadiusMeters / 111000, 0.05)
+
+        return MKCoordinateRegion(
+            center: notamCoord,
+            span: MKCoordinateSpan(latitudeDelta: spanDegrees, longitudeDelta: spanDegrees)
+        )
+    }
+
+    /// Region showing both the route and NOTAM
+    private var routeAndNotamRegion: MKCoordinateRegion {
+        guard let notamCoord = notam.coordinate else {
+            return MKCoordinateRegion()
+        }
+
+        var minLat = notamCoord.latitude
+        var maxLat = notamCoord.latitude
+        var minLon = notamCoord.longitude
+        var maxLon = notamCoord.longitude
+
+        // Include route if available
+        for coord in routeCoordinates {
+            minLat = min(minLat, coord.latitude)
+            maxLat = max(maxLat, coord.latitude)
+            minLon = min(minLon, coord.longitude)
+            maxLon = max(maxLon, coord.longitude)
+        }
+
+        // Add padding (15%)
+        let latPadding = (maxLat - minLat) * 0.15
+        let lonPadding = (maxLon - minLon) * 0.15
+
+        // Ensure minimum span for NOTAM visibility
+        let notamRadiusMeters = (notam.radiusNm ?? 10) * 1852 * 2
+        let minSpanDegrees = notamRadiusMeters / 111000
+
+        let latSpan = max((maxLat - minLat) + latPadding * 2, minSpanDegrees)
+        let lonSpan = max((maxLon - minLon) + lonPadding * 2, minSpanDegrees)
+
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            ),
+            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+        )
     }
 
     // MARK: - Message Section
