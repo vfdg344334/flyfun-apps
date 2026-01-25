@@ -11,19 +11,20 @@ import RZFlight
 /// Compact row view for NOTAM list
 struct NotamRowView: View {
     @Environment(\.appState) private var appState
-    let notam: Notam
+    let enrichedNotam: EnrichedNotam
 
-    private var annotation: NotamAnnotation? {
-        appState?.notams.annotation(for: notam)
-    }
+    /// Convenience accessor for underlying NOTAM
+    private var notam: Notam { enrichedNotam.notam }
 
     var body: some View {
         HStack(spacing: 12) {
             statusIndicator
             content
             Spacer()
+            badges
         }
         .padding(.vertical, 4)
+        .opacity(enrichedNotam.isGloballyIgnored ? 0.5 : 1.0)
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button {
                 appState?.notams.markAsRead(notam)
@@ -58,7 +59,7 @@ struct NotamRowView: View {
     }
 
     private var statusColor: Color {
-        switch annotation?.status ?? .unread {
+        switch enrichedNotam.status {
         case .unread:
             return .blue
         case .read:
@@ -69,6 +70,27 @@ struct NotamRowView: View {
             return .secondary.opacity(0.5)
         case .followUp:
             return .orange
+        }
+    }
+
+    // MARK: - Badges
+
+    @ViewBuilder
+    private var badges: some View {
+        HStack(spacing: 4) {
+            if enrichedNotam.isNew {
+                Text("NEW")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(.blue, in: Capsule())
+            }
+            if enrichedNotam.isGloballyIgnored {
+                Image(systemName: "eye.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -212,7 +234,7 @@ struct NotamRowView: View {
 
 #Preview {
     List {
-        // Preview would need actual Notam data
+        // Preview would need actual EnrichedNotam data
         Text("NotamRowView Preview")
     }
     .environment(\.appState, AppState.preview())

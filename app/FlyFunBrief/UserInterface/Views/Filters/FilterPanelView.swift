@@ -179,12 +179,18 @@ struct FilterPanelView: View {
         Section {
             Picker("Group By", selection: groupingBinding) {
                 ForEach(NotamGrouping.allCases) { grouping in
-                    Text(grouping.rawValue).tag(grouping)
+                    Label(grouping.rawValue, systemImage: grouping.icon)
+                        .tag(grouping)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.inline)
+            .labelsHidden()
         } header: {
             Label("Grouping", systemImage: "rectangle.3.group")
+        } footer: {
+            if appState?.notams.grouping == .routeOrder {
+                Text("NOTAMs sorted by position along your route: Departure → En Route → Destination → Alternates → Distant → No Coordinates")
+            }
         }
     }
 

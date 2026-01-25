@@ -25,8 +25,18 @@ enum NotamGrouping: String, CaseIterable, Identifiable {
     case none = "None"
     case airport = "Airport"
     case category = "Category"
+    case routeOrder = "Route Order"
 
     var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .none: return "list.bullet"
+        case .airport: return "building.2"
+        case .category: return "folder"
+        case .routeOrder: return "point.topleft.down.to.point.bottomright.curvepath"
+        }
+    }
 }
 
 /// Route corridor filter configuration
@@ -340,6 +350,37 @@ final class NotamDomain {
     /// Enriched NOTAMs grouped by category
     var enrichedNotamsGroupedByCategory: [NotamCategory: [EnrichedNotam]] {
         filteredEnrichedNotams.groupedByCategory()
+    }
+
+    /// Enriched NOTAMs grouped by route segment
+    ///
+    /// Returns NOTAMs organized by: Departure, En Route (sorted by distance), Destination,
+    /// Alternates, Distant (>50nm), No Coordinates
+    var enrichedNotamsGroupedByRouteSegment: [(segment: NotamRouteClassification.RouteSegment, notams: [EnrichedNotam])] {
+        guard let route = currentRoute else {
+            // No route - put everything in noCoordinate segment
+            return [(.noCoordinate, filteredEnrichedNotams)]
+        }
+
+        // Classify underlying NOTAMs
+        let notamArray = filteredEnrichedNotams.map { $0.notam }
+        let classified = notamArray.groupedByRouteSegment(route: route, distantThresholdNm: 50.0)
+
+        // Map back to EnrichedNotam, preserving order
+        let enrichedById = Dictionary(uniqueKeysWithValues: filteredEnrichedNotams.map { ($0.notamId, $0) })
+
+        var result: [(NotamRouteClassification.RouteSegment, [EnrichedNotam])] = []
+
+        // Add segments in display order
+        for segment in NotamRouteClassification.RouteSegment.allCases {
+            guard let items = classified[segment], !items.isEmpty else { continue }
+            let enrichedItems = items.compactMap { enrichedById[$0.notam.id] }
+            if !enrichedItems.isEmpty {
+                result.append((segment, enrichedItems))
+            }
+        }
+
+        return result
     }
 
     /// Count of unread NOTAMs

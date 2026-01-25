@@ -119,10 +119,11 @@ struct FlightNotamView: View {
                 .navigationTitle(navigationTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
+                    ToolbarItem(placement: .topBarLeading) {
                         Button {
                             appState?.navigation.exitFlightView()
                             appState?.briefing.clearBriefing()
+                            appState?.flights.clearSelection()
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "chevron.left")

@@ -38,7 +38,7 @@ struct NotamListView: View {
     @ViewBuilder
     private var notamList: some View {
         let grouping = appState?.notams.grouping ?? .airport
-        let filteredNotams = appState?.notams.filteredNotams ?? []
+        let filteredNotams = appState?.notams.filteredEnrichedNotams ?? []
 
         if filteredNotams.isEmpty {
             ContentUnavailableView.search
@@ -51,6 +51,8 @@ struct NotamListView: View {
                     airportGroupedList
                 case .category:
                     categoryGroupedList
+                case .routeOrder:
+                    routeOrderGroupedList
                 }
             }
             .listStyle(.insetGrouped)
@@ -60,10 +62,10 @@ struct NotamListView: View {
     // MARK: - Flat List
 
     @ViewBuilder
-    private func flatList(_ notams: [Notam]) -> some View {
-        ForEach(notams, id: \.id) { notam in
-            NotamRowView(notam: notam)
-                .tag(notam.id)
+    private func flatList(_ notams: [EnrichedNotam]) -> some View {
+        ForEach(notams, id: \.notamId) { enrichedNotam in
+            NotamRowView(enrichedNotam: enrichedNotam)
+                .tag(enrichedNotam.notamId)
         }
     }
 
@@ -71,15 +73,15 @@ struct NotamListView: View {
 
     @ViewBuilder
     private var airportGroupedList: some View {
-        let grouped = appState?.notams.notamsGroupedByAirport ?? [:]
+        let grouped = appState?.notams.enrichedNotamsGroupedByAirport ?? [:]
         let sortedKeys = grouped.keys.sorted()
 
         ForEach(sortedKeys, id: \.self) { airport in
             Section {
                 if let notams = grouped[airport] {
-                    ForEach(notams, id: \.id) { notam in
-                        NotamRowView(notam: notam)
-                            .tag(notam.id)
+                    ForEach(notams, id: \.notamId) { enrichedNotam in
+                        NotamRowView(enrichedNotam: enrichedNotam)
+                            .tag(enrichedNotam.notamId)
                     }
                 }
             } header: {
@@ -92,19 +94,37 @@ struct NotamListView: View {
 
     @ViewBuilder
     private var categoryGroupedList: some View {
-        let grouped = appState?.notams.notamsGroupedByCategory ?? [:]
+        let grouped = appState?.notams.enrichedNotamsGroupedByCategory ?? [:]
         let sortedKeys = grouped.keys.sorted { $0.displayName < $1.displayName }
 
         ForEach(sortedKeys, id: \.self) { category in
             Section {
                 if let notams = grouped[category] {
-                    ForEach(notams, id: \.id) { notam in
-                        NotamRowView(notam: notam)
-                            .tag(notam.id)
+                    ForEach(notams, id: \.notamId) { enrichedNotam in
+                        NotamRowView(enrichedNotam: enrichedNotam)
+                            .tag(enrichedNotam.notamId)
                     }
                 }
             } header: {
                 NotamSectionHeader(title: category.displayName, count: grouped[category]?.count ?? 0)
+            }
+        }
+    }
+
+    // MARK: - Route Order Grouped
+
+    @ViewBuilder
+    private var routeOrderGroupedList: some View {
+        let grouped = appState?.notams.enrichedNotamsGroupedByRouteSegment ?? []
+
+        ForEach(grouped, id: \.segment) { item in
+            Section {
+                ForEach(item.notams, id: \.notamId) { enrichedNotam in
+                    NotamRowView(enrichedNotam: enrichedNotam)
+                        .tag(enrichedNotam.notamId)
+                }
+            } header: {
+                RouteSegmentHeader(segment: item.segment, count: item.notams.count)
             }
         }
     }
@@ -134,7 +154,7 @@ struct NotamListView: View {
     }
 }
 
-// MARK: - Section Header
+// MARK: - Section Headers
 
 struct NotamSectionHeader: View {
     let title: String
@@ -151,6 +171,38 @@ struct NotamSectionHeader: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
                 .background(.fill.tertiary, in: Capsule())
+        }
+    }
+}
+
+struct RouteSegmentHeader: View {
+    let segment: NotamRouteClassification.RouteSegment
+    let count: Int
+
+    var body: some View {
+        HStack {
+            Image(systemName: segment.icon)
+                .foregroundStyle(segmentColor)
+            Text(segment.displayName)
+                .font(.headline)
+            Spacer()
+            Text("\(count)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.fill.tertiary, in: Capsule())
+        }
+    }
+
+    private var segmentColor: Color {
+        switch segment {
+        case .departure: return .green
+        case .enRoute: return .blue
+        case .destination: return .orange
+        case .alternates: return .purple
+        case .distant: return .gray
+        case .noCoordinate: return .secondary
         }
     }
 }
