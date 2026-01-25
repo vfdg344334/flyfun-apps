@@ -287,12 +287,37 @@ struct NotamDetailView: View {
                     GridRow {
                         Text("Q-Code")
                             .foregroundStyle(.secondary)
+                        Text(qCodeInfo.qCode)
+                            .monospaced()
+                    }
+
+                    GridRow {
+                        Text("Subject")
+                            .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(qCodeInfo.displayText)
-                            Text(qCodeInfo.qCode)
-                                .font(.caption.monospaced())
+                            Text("\(qCodeInfo.subjectMeaning) (\(qCodeInfo.subjectCode))")
+                            Text(qCodeInfo.subjectCategory)
+                                .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
+                    }
+
+                    GridRow {
+                        Text("Condition")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(qCodeInfo.conditionMeaning) (\(qCodeInfo.conditionCode))")
+                            Text(qCodeInfo.conditionCategory)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    GridRow {
+                        Text("Summary")
+                            .foregroundStyle(.secondary)
+                        Text(qCodeInfo.displayText)
+                            .fontWeight(.medium)
                     }
                 } else if let qCode = notam.qCode {
                     GridRow {
