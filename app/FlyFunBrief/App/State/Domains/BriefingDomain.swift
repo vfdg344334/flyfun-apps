@@ -7,6 +7,7 @@
 
 import Foundation
 import RZFlight
+import CoreData
 import OSLog
 
 /// Domain for briefing state management
@@ -15,8 +16,11 @@ import OSLog
 final class BriefingDomain {
     // MARK: - State
 
-    /// Currently loaded briefing
+    /// Currently loaded briefing (RZFlight model)
     private(set) var currentBriefing: Briefing?
+
+    /// Currently loaded Core Data briefing (if persisted)
+    var currentCDBriefing: CDBriefing?
 
     /// Whether a briefing is being imported/parsed
     private(set) var isLoading = false
@@ -45,6 +49,10 @@ final class BriefingDomain {
 
     /// Called when briefing is cleared
     var onBriefingCleared: (() -> Void)?
+
+    /// Called when a briefing is parsed and ready for storage
+    /// The handler should store the briefing and return the persisted CDBriefing
+    var onBriefingParsed: ((Briefing) async -> CDBriefing?)?
 
     // MARK: - Dependencies
 
@@ -80,6 +88,12 @@ final class BriefingDomain {
             importProgress = 0.3
             let briefing = try await service.parseBriefing(pdfData: pdfData, source: "foreflight")
 
+            // Store in Core Data if handler is set
+            importProgress = 0.7
+            if let onParsed = onBriefingParsed {
+                currentCDBriefing = await onParsed(briefing)
+            }
+
             // Update state
             importProgress = 0.9
             currentBriefing = briefing
@@ -110,6 +124,12 @@ final class BriefingDomain {
             importProgress = 0.3
             let briefing = try await service.parseBriefing(pdfData: data, source: source)
 
+            // Store in Core Data if handler is set
+            importProgress = 0.7
+            if let onParsed = onBriefingParsed {
+                currentCDBriefing = await onParsed(briefing)
+            }
+
             importProgress = 0.9
             currentBriefing = briefing
             onBriefingLoaded?(briefing)
@@ -122,9 +142,24 @@ final class BriefingDomain {
         }
     }
 
+    /// Load a briefing from Core Data
+    func loadBriefing(_ cdBriefing: CDBriefing) {
+        guard let briefing = cdBriefing.decodedBriefing else {
+            Logger.app.error("Failed to decode briefing from Core Data")
+            return
+        }
+
+        currentBriefing = briefing
+        currentCDBriefing = cdBriefing
+        onBriefingLoaded?(briefing)
+
+        Logger.app.info("Loaded briefing from Core Data with \(briefing.notams.count) NOTAMs")
+    }
+
     /// Clear the current briefing
     func clearBriefing() {
         currentBriefing = nil
+        currentCDBriefing = nil
         lastError = nil
         onBriefingCleared?()
     }

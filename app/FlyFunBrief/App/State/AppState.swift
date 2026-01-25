@@ -9,6 +9,7 @@
 import Foundation
 import SwiftUI
 import RZFlight
+import CoreData
 import OSLog
 
 /// Single source of truth for all FlyFunBrief state
@@ -17,12 +18,16 @@ import OSLog
 /// Usage:
 /// ```swift
 /// @Environment(\.appState) private var state
+/// state.flights.createFlight(origin: "LFPG", destination: "EGLL")
 /// state.briefing.importBriefing(from: url)
 /// ```
 @Observable
 @MainActor
 final class AppState {
     // MARK: - Composed Domains
+
+    /// Flight management (create, edit, archive)
+    let flights: FlightDomain
 
     /// Current briefing, parsing state, and import handling
     let briefing: BriefingDomain
@@ -41,19 +46,34 @@ final class AppState {
     /// Service for API communication
     let briefingService: BriefingService
 
-    /// Local storage for user annotations
+    /// Local storage for user annotations (legacy FMDB)
     let annotationStore: AnnotationStore
+
+    /// Global NOTAM ignore list manager
+    let ignoreListManager: IgnoreListManager
+
+    /// Core Data persistence controller with CloudKit sync
+    let persistenceController: PersistenceController
+
+    /// Flight repository for Core Data operations
+    let flightRepository: FlightRepository
 
     // MARK: - Init
 
     init() {
+        // Initialize persistence
+        self.persistenceController = PersistenceController.shared
+        self.flightRepository = FlightRepository(persistenceController: persistenceController)
+        self.ignoreListManager = IgnoreListManager(persistenceController: persistenceController)
+
         // Initialize services
         self.briefingService = BriefingService()
         self.annotationStore = AnnotationStore()
 
         // Initialize domains
+        self.flights = FlightDomain(repository: flightRepository)
         self.briefing = BriefingDomain(service: briefingService)
-        self.notams = NotamDomain(annotationStore: annotationStore)
+        self.notams = NotamDomain(annotationStore: annotationStore, ignoreListManager: ignoreListManager)
         self.navigation = NavigationDomain()
         self.settings = SettingsDomain()
 
@@ -69,15 +89,58 @@ final class AppState {
     // MARK: - Cross-Domain Wiring
 
     private func setupCrossDomainWiring() {
-        // When briefing is parsed, update notams domain
+        // When briefing is parsed, offer to store in Core Data
+        briefing.onBriefingParsed = { [weak self] parsedBriefing in
+            guard let self = self,
+                  let flight = self.flights.selectedFlight else {
+                return nil
+            }
+
+            return await self.flights.importBriefing(parsedBriefing, for: flight)
+        }
+
+        // When briefing is loaded (from parsing or Core Data), update notams domain
         briefing.onBriefingLoaded = { [weak self] loadedBriefing in
-            self?.notams.setBriefing(loadedBriefing)
-            self?.navigation.showNotamList()
+            guard let self = self else { return }
+
+            // Check if we have a Core Data briefing with status info
+            if let cdBriefing = self.briefing.currentCDBriefing,
+               let flight = cdBriefing.flight {
+                let previousKeys = self.flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing)
+                self.notams.setBriefing(loadedBriefing, cdBriefing: cdBriefing, previousKeys: previousKeys)
+            } else {
+                self.notams.setBriefing(loadedBriefing)
+            }
+
+            self.navigation.showNotamList()
         }
 
         // When briefing is cleared, clear notams
         briefing.onBriefingCleared = { [weak self] in
             self?.notams.clearBriefing()
+        }
+
+        // When a flight is selected, load its latest briefing
+        flights.onFlightSelected = { [weak self] flight in
+            guard let self = self,
+                  let latestBriefing = flight.latestBriefing else {
+                return
+            }
+
+            self.briefing.loadBriefing(latestBriefing)
+        }
+
+        // When a briefing is imported to Core Data, notify briefing domain
+        flights.onBriefingImported = { [weak self] cdBriefing in
+            // Update the current CD briefing reference
+            self?.briefing.currentCDBriefing = cdBriefing
+
+            // If the briefing is already decoded, refresh the notams
+            if let briefing = cdBriefing.decodedBriefing,
+               let flight = cdBriefing.flight {
+                let previousKeys = self?.flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing) ?? []
+                self?.notams.setBriefing(briefing, cdBriefing: cdBriefing, previousKeys: previousKeys)
+            }
         }
     }
 
@@ -87,11 +150,17 @@ final class AppState {
     func onAppear() async {
         Logger.app.info("AppState.onAppear")
 
-        // Initialize annotation store
+        // Initialize legacy annotation store
         await annotationStore.initialize()
+
+        // Load flights from Core Data
+        await flights.loadFlights()
 
         // Restore settings
         settings.restore()
+
+        // Cleanup expired ignores periodically
+        try? ignoreListManager.cleanupExpired()
 
         Logger.app.info("AppState initialized successfully")
     }
@@ -100,6 +169,7 @@ final class AppState {
     func onDisappear() {
         Logger.app.info("AppState.onDisappear - saving state")
         settings.save()
+        persistenceController.save()
     }
 }
 

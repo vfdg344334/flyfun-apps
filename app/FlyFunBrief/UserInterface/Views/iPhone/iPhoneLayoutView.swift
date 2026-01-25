@@ -14,17 +14,23 @@ struct iPhoneLayoutView: View {
 
     var body: some View {
         TabView(selection: tabBinding) {
-            BriefingTab()
+            FlightsTab()
                 .tabItem {
-                    Label("Briefing", systemImage: "doc.text")
+                    Label("Flights", systemImage: "airplane")
                 }
-                .tag(AppTab.briefing)
+                .tag(AppTab.flights)
 
             NotamListTab()
                 .tabItem {
                     Label("NOTAMs", systemImage: "list.bullet.rectangle")
                 }
                 .tag(AppTab.notams)
+
+            IgnoredTab()
+                .tabItem {
+                    Label("Ignored", systemImage: "xmark.circle")
+                }
+                .tag(AppTab.ignored)
 
             SettingsTab()
                 .tabItem {
@@ -41,7 +47,7 @@ struct iPhoneLayoutView: View {
 
     private var tabBinding: Binding<AppTab> {
         Binding(
-            get: { appState?.navigation.selectedTab ?? .briefing },
+            get: { appState?.navigation.selectedTab ?? .flights },
             set: { appState?.navigation.selectedTab = $0 }
         )
     }
@@ -68,36 +74,28 @@ struct iPhoneLayoutView: View {
             FilterPanelView()
         case .settings:
             SettingsView()
+        case .newFlight:
+            NavigationStack {
+                FlightEditorView(mode: .create)
+            }
+        case .editFlight(let flightId):
+            if let flight = appState?.flights.flights.first(where: { $0.id == flightId }) {
+                NavigationStack {
+                    FlightEditorView(mode: .edit(flight))
+                }
+            }
+        case .flightPicker:
+            FlightPickerView()
         }
     }
 }
 
-// MARK: - Briefing Tab
+// MARK: - Flights Tab
 
-struct BriefingTab: View {
-    @Environment(\.appState) private var appState
-
+struct FlightsTab: View {
     var body: some View {
         NavigationStack {
-            Group {
-                if let briefing = appState?.briefing.currentBriefing {
-                    BriefingSummaryView(briefing: briefing)
-                } else if appState?.briefing.isLoading == true {
-                    ImportProgressView()
-                } else {
-                    EmptyBriefingView()
-                }
-            }
-            .navigationTitle("Briefing")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        appState?.navigation.showImportSheet()
-                    } label: {
-                        Label("Import", systemImage: "square.and.arrow.down")
-                    }
-                }
-            }
+            FlightListView()
         }
     }
 }
@@ -114,22 +112,48 @@ struct NotamListTab: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
-                            ForEach(NotamFilter.allCases) { filter in
-                                Button {
-                                    appState?.notams.filter = filter
-                                } label: {
-                                    if appState?.notams.filter == filter {
-                                        Label(filter.rawValue, systemImage: "checkmark")
-                                    } else {
-                                        Text(filter.rawValue)
+                            Section("Status") {
+                                ForEach(StatusFilter.allCases) { status in
+                                    Button {
+                                        appState?.notams.statusFilter = status
+                                    } label: {
+                                        if appState?.notams.statusFilter == status {
+                                            Label(status.rawValue, systemImage: "checkmark")
+                                        } else {
+                                            Text(status.rawValue)
+                                        }
                                     }
                                 }
                             }
+
+                            Divider()
+
+                            Button {
+                                appState?.navigation.showFilterOptions()
+                            } label: {
+                                Label("More Filters...", systemImage: "slider.horizontal.3")
+                            }
                         } label: {
-                            Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                            Label("Filter", systemImage: filterIconName)
                         }
                     }
                 }
+        }
+    }
+
+    private var filterIconName: String {
+        appState?.notams.hasActiveFilters == true
+            ? "line.3.horizontal.decrease.circle.fill"
+            : "line.3.horizontal.decrease.circle"
+    }
+}
+
+// MARK: - Ignored Tab
+
+struct IgnoredTab: View {
+    var body: some View {
+        NavigationStack {
+            IgnoreListView()
         }
     }
 }
@@ -141,6 +165,51 @@ struct SettingsTab: View {
         NavigationStack {
             SettingsView()
                 .navigationTitle("Settings")
+        }
+    }
+}
+
+// MARK: - Flight Picker View
+
+struct FlightPickerView: View {
+    @Environment(\.appState) private var appState
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let flights = appState?.flights.flights, !flights.isEmpty {
+                    ForEach(flights, id: \.id) { flight in
+                        Button {
+                            appState?.flights.selectFlight(flight)
+                            dismiss()
+                        } label: {
+                            FlightRowView(flight: flight)
+                        }
+                    }
+                } else {
+                    Text("No flights available")
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Button {
+                        dismiss()
+                        appState?.navigation.showNewFlight()
+                    } label: {
+                        Label("Create New Flight", systemImage: "plus")
+                    }
+                }
+            }
+            .navigationTitle("Select Flight")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }

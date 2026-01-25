@@ -11,16 +11,18 @@ import OSLog
 
 /// Main tabs in the app
 enum AppTab: String, CaseIterable, Identifiable {
-    case briefing = "Briefing"
+    case flights = "Flights"
     case notams = "NOTAMs"
+    case ignored = "Ignored"
     case settings = "Settings"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .briefing: return "doc.text"
+        case .flights: return "airplane"
         case .notams: return "list.bullet.rectangle"
+        case .ignored: return "xmark.circle"
         case .settings: return "gearshape"
         }
     }
@@ -32,6 +34,9 @@ enum AppSheet: Identifiable {
     case notamDetail(notamId: String)
     case filterOptions
     case settings
+    case newFlight
+    case editFlight(flightId: UUID)
+    case flightPicker  // For selecting which flight to import briefing to
 
     var id: String {
         switch self {
@@ -39,6 +44,9 @@ enum AppSheet: Identifiable {
         case .notamDetail(let id): return "notam-\(id)"
         case .filterOptions: return "filters"
         case .settings: return "settings"
+        case .newFlight: return "newFlight"
+        case .editFlight(let id): return "editFlight-\(id)"
+        case .flightPicker: return "flightPicker"
         }
     }
 }
@@ -50,7 +58,7 @@ final class NavigationDomain {
     // MARK: - State
 
     /// Currently selected tab
-    var selectedTab: AppTab = .briefing
+    var selectedTab: AppTab = .flights
 
     /// Currently presented sheet
     var presentedSheet: AppSheet?
@@ -64,11 +72,29 @@ final class NavigationDomain {
     /// Column visibility for NavigationSplitView (iPad)
     var columnVisibility: NavigationSplitViewVisibility = .all
 
+    /// Selected flight ID (for navigation persistence)
+    var selectedFlightId: UUID?
+
     // MARK: - Actions
 
     /// Show the import briefing sheet
     func showImportSheet() {
         presentedSheet = .importBriefing
+    }
+
+    /// Show flight picker for import
+    func showFlightPicker() {
+        presentedSheet = .flightPicker
+    }
+
+    /// Show new flight form
+    func showNewFlight() {
+        presentedSheet = .newFlight
+    }
+
+    /// Show edit flight form
+    func showEditFlight(flightId: UUID) {
+        presentedSheet = .editFlight(flightId: flightId)
     }
 
     /// Show NOTAM detail
@@ -86,9 +112,14 @@ final class NavigationDomain {
         selectedTab = .notams
     }
 
-    /// Navigate to briefing tab
-    func showBriefing() {
-        selectedTab = .briefing
+    /// Navigate to flights tab
+    func showFlights() {
+        selectedTab = .flights
+    }
+
+    /// Navigate to ignored tab
+    func showIgnored() {
+        selectedTab = .ignored
     }
 
     /// Toggle filter panel visibility
@@ -96,11 +127,17 @@ final class NavigationDomain {
         showFilterPanel.toggle()
     }
 
+    /// Show the filter options sheet
+    func showFilterOptions() {
+        presentedSheet = .filterOptions
+    }
+
     /// Reset navigation state
     func reset() {
-        selectedTab = .briefing
+        selectedTab = .flights
         presentedSheet = nil
         navigationPath = NavigationPath()
         showFilterPanel = false
+        selectedFlightId = nil
     }
 }

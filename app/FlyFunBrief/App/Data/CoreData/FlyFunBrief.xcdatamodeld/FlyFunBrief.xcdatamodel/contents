@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23231" systemVersion="24D5034f" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="CDBriefing" representedClassName="CDBriefing" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="importedAt" attributeType="Date" defaultDateTimeInterval="0" usesScalarValueType="NO"/>
+        <attribute name="isLatest" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="jsonBlob" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="source" attributeType="String" defaultValueString="foreflight"/>
+        <relationship name="flight" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDFlight" inverseName="briefings" inverseEntity="CDFlight"/>
+        <relationship name="notamStatuses" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CDNotamStatus" inverseName="briefing" inverseEntity="CDNotamStatus"/>
+    </entity>
+    <entity name="CDFlight" representedClassName="CDFlight" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" defaultDateTimeInterval="0" usesScalarValueType="NO"/>
+        <attribute name="departureTime" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="destination" attributeType="String" defaultValueString=""/>
+        <attribute name="durationHours" optional="YES" attributeType="Double" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isArchived" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="origin" attributeType="String" defaultValueString=""/>
+        <attribute name="routeICAOs" optional="YES" attributeType="String"/>
+        <relationship name="briefings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CDBriefing" inverseName="flight" inverseEntity="CDBriefing"/>
+    </entity>
+    <entity name="CDIgnoredNotam" representedClassName="CDIgnoredNotam" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" defaultDateTimeInterval="0" usesScalarValueType="NO"/>
+        <attribute name="expiresAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="identityKey" attributeType="String" defaultValueString=""/>
+        <attribute name="notamId" attributeType="String" defaultValueString=""/>
+        <attribute name="reason" optional="YES" attributeType="String"/>
+        <attribute name="summary" attributeType="String" defaultValueString=""/>
+    </entity>
+    <entity name="CDNotamStatus" representedClassName="CDNotamStatus" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="identityKey" attributeType="String" defaultValueString=""/>
+        <attribute name="notamId" attributeType="String" defaultValueString=""/>
+        <attribute name="status" attributeType="String" defaultValueString="unread"/>
+        <attribute name="textNote" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" attributeType="Date" defaultDateTimeInterval="0" usesScalarValueType="NO"/>
+        <relationship name="briefing" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDBriefing" inverseName="notamStatuses" inverseEntity="CDBriefing"/>
+    </entity>
+</model>
