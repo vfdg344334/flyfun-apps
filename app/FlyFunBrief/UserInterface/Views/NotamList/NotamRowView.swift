@@ -76,34 +76,21 @@ struct NotamRowView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Title row: Generated title from category + tags
-            HStack(spacing: 8) {
-                Text(notamTitle)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
+            // Title row: full width
+            Text(notamTitle)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer()
-
-                // Location badge
-                Text(notam.location)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.fill.tertiary, in: Capsule())
-            }
-
-            // NOTAM ID and Q-code
+            // NOTAM ID, issuing authority, and date
             HStack(spacing: 8) {
                 Text(notam.id)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
 
-                if let qCode = notam.qCode {
-                    Text(qCode)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
-                }
+                Text(notam.location)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
 
                 Spacer()
 
@@ -112,8 +99,8 @@ struct NotamRowView: View {
                     Text("PERM")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.orange)
-                } else if let to = notam.effectiveTo {
-                    Text("until \(formatShortDate(to))")
+                } else if let from = notam.effectiveFrom {
+                    Text(formatShortDate(from))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

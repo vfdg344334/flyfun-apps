@@ -15,6 +15,8 @@ struct NotamDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let notam: Notam
 
+    @State private var isRawTextExpanded = false
+
     private var annotation: NotamAnnotation? {
         appState?.notams.annotation(for: notam)
     }
@@ -28,9 +30,7 @@ struct NotamDetailView: View {
                     mapSection
                 }
                 messageSection
-                if appState?.settings.showRawText == true {
-                    rawTextSection
-                }
+                rawTextSection
                 detailsSection
                 noteSection
             }
@@ -253,7 +253,7 @@ struct NotamDetailView: View {
                 .font(.headline)
 
             Text(notam.message)
-                .font(.body)
+                .font(.caption.monospaced())
                 .textSelection(.enabled)
                 .padding()
                 .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
@@ -264,14 +264,29 @@ struct NotamDetailView: View {
 
     private var rawTextSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Raw NOTAM")
-                .font(.headline)
+            Button {
+                withAnimation {
+                    isRawTextExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Text("Raw NOTAM")
+                        .font(.headline)
+                    Spacer()
+                    Image(systemName: isRawTextExpanded ? "chevron.up" : "chevron.down")
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
-            Text(notam.rawText)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .padding()
-                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            if isRawTextExpanded {
+                Text(notam.rawText)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .padding()
+                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            }
         }
     }
 
