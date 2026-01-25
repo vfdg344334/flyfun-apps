@@ -39,7 +39,7 @@ from security_config import (
 )
 
 # Import API routes
-from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness, notifications
+from api import airports, procedures, filters, statistics, rules, aviation_agent_chat, ga_friendliness, notifications, briefing
 
 from shared.tool_context import ToolContext
 
@@ -301,6 +301,9 @@ else:
 
 # GA Friendliness API - always mount, graceful degradation if no DB
 app.include_router(ga_friendliness.router, prefix="/api/ga", tags=["ga-friendliness"])
+
+# Briefing API - parse ForeFlight PDFs and other briefing sources
+app.include_router(briefing.router, prefix="/api/briefing", tags=["briefing"])
 
 # Serve static files for client assets
 client_dir = Path(__file__).parent.parent / "client"

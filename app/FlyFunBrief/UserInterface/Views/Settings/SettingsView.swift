@@ -1,0 +1,128 @@
+//
+//  SettingsView.swift
+//  FlyFunBrief
+//
+//  User settings and preferences view.
+//
+
+import SwiftUI
+
+/// Settings view for app preferences
+struct SettingsView: View {
+    @Environment(\.appState) private var appState
+
+    var body: some View {
+        Form {
+            // Display Settings
+            Section("Display") {
+                Toggle("Show Raw NOTAM Text", isOn: showRawTextBinding)
+
+                Toggle("Show NOTAM Map", isOn: showNotamMapBinding)
+
+                Picker("Default Grouping", selection: defaultGroupingBinding) {
+                    ForEach(NotamGrouping.allCases) { grouping in
+                        Text(grouping.rawValue).tag(grouping)
+                    }
+                }
+            }
+
+            // Behavior Settings
+            Section("Behavior") {
+                Toggle("Auto-Mark as Read", isOn: autoMarkAsReadBinding)
+
+                Text("Automatically mark NOTAMs as read when viewing details.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // API Settings
+            Section("Server") {
+                TextField("API URL", text: apiURLBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+
+                Text("URL of the FlyFun server for briefing parsing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // About
+            Section("About") {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Text("Build")
+                    Spacer()
+                    Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
+                        .foregroundStyle(.secondary)
+                }
+
+                Link(destination: URL(string: "https://flyfun.aero")!) {
+                    Label("FlyFun Website", systemImage: "globe")
+                }
+            }
+
+            // Reset
+            Section {
+                Button(role: .destructive) {
+                    appState?.settings.resetToDefaults()
+                } label: {
+                    Label("Reset to Defaults", systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
+        .navigationTitle("Settings")
+    }
+
+    // MARK: - Bindings
+
+    private var showRawTextBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.settings.showRawText ?? true },
+            set: { appState?.settings.showRawText = $0 }
+        )
+    }
+
+    private var showNotamMapBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.settings.showNotamMap ?? true },
+            set: { appState?.settings.showNotamMap = $0 }
+        )
+    }
+
+    private var autoMarkAsReadBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.settings.autoMarkAsRead ?? false },
+            set: { appState?.settings.autoMarkAsRead = $0 }
+        )
+    }
+
+    private var defaultGroupingBinding: Binding<NotamGrouping> {
+        Binding(
+            get: { appState?.settings.defaultGrouping ?? .airport },
+            set: { appState?.settings.defaultGrouping = $0 }
+        )
+    }
+
+    private var apiURLBinding: Binding<String> {
+        Binding(
+            get: { appState?.settings.apiBaseURL ?? "" },
+            set: { appState?.settings.apiBaseURL = $0 }
+        )
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    NavigationStack {
+        SettingsView()
+    }
+    .environment(\.appState, AppState.preview())
+}
