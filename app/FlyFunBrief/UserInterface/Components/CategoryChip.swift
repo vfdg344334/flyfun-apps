@@ -23,28 +23,37 @@ struct CategoryChip: View {
 
     private var categoryColor: Color {
         switch category {
-        case .runway:
-            return .red
+        // AGA - Aerodrome Ground Aids (warm colors)
+        case .agaMovement:
+            return .red          // Runway, taxiway - critical
+        case .agaLighting:
+            return .orange       // Lights - safety related
+        case .agaFacilities:
+            return .brown        // Fuel, services
+
+        // CNS - Communications, Navigation, Surveillance (cool colors)
         case .navigation:
-            return .purple
-        case .airspace:
-            return .orange
-        case .obstacle:
-            return .yellow
-        case .lighting:
-            return .blue
-        case .procedure:
-            return .indigo
-        case .communication:
-            return .teal
-        case .movementArea:
-            return .brown
-        case .services:
-            return .green
-        case .warning:
-            return .red
-        case .other:
-            return .secondary
+            return .purple       // VOR, DME, NDB
+        case .cnsILS:
+            return .indigo       // ILS/MLS - precision approaches
+        case .cnsGNSS:
+            return .cyan         // GPS/GNSS
+        case .cnsCommunications:
+            return .teal         // Radio, CPDLC
+
+        // ATM - Air Traffic Management (blue/green spectrum)
+        case .atmAirspace:
+            return .blue         // FIR, TMA, CTR
+        case .atmProcedures:
+            return .mint         // SID, STAR, approaches
+        case .atmServices:
+            return .green        // ATC services
+        case .airspaceRestrictions:
+            return .red          // Danger/restricted areas - critical
+
+        // Other
+        case .otherInfo:
+            return .secondary    // Obstacles, misc info
         }
     }
 }

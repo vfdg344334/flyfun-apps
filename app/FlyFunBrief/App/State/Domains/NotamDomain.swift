@@ -59,47 +59,108 @@ struct RouteFilter: Equatable {
     }
 }
 
-/// Category filter - which NOTAM categories to show
+/// Category filter - which ICAO NOTAM categories to show
+/// Categories map 1:1 to Q-code subject first letter per q_codes.json
 struct CategoryFilter: Equatable {
-    var showRunway: Bool = true
-    var showNavigation: Bool = true
-    var showAirspace: Bool = true
-    var showObstacle: Bool = true
-    var showProcedure: Bool = true
-    var showLighting: Bool = true
-    var showServices: Bool = true
-    var showOther: Bool = true
+    // 12 ICAO categories based on Q-code subject first letter
+    var showAirspace: Bool = true        // A - ATM Airspace
+    var showCommunications: Bool = true  // C - CNS Communications
+    var showFacilities: Bool = true      // F - AGA Facilities
+    var showGNSS: Bool = true            // G - CNS GNSS
+    var showILS: Bool = true             // I - CNS ILS/MLS
+    var showLighting: Bool = true        // L - AGA Lighting
+    var showMovement: Bool = true        // M - AGA Movement (runway, taxiway)
+    var showNavigation: Bool = true      // N - Navigation (VOR, DME, NDB)
+    var showOther: Bool = true           // O - Other (obstacles, AIS)
+    var showProcedures: Bool = true      // P - ATM Procedures (SID, STAR)
+    var showRestrictions: Bool = true    // R - Airspace Restrictions
+    var showServices: Bool = true        // S - ATM Services
 
     /// Returns enabled categories
     var enabledCategories: Set<NotamCategory> {
         var categories: Set<NotamCategory> = []
-        if showRunway { categories.insert(.runway) }
+        if showAirspace { categories.insert(.atmAirspace) }
+        if showCommunications { categories.insert(.cnsCommunications) }
+        if showFacilities { categories.insert(.agaFacilities) }
+        if showGNSS { categories.insert(.cnsGNSS) }
+        if showILS { categories.insert(.cnsILS) }
+        if showLighting { categories.insert(.agaLighting) }
+        if showMovement { categories.insert(.agaMovement) }
         if showNavigation { categories.insert(.navigation) }
-        if showAirspace { categories.insert(.airspace) }
-        if showObstacle { categories.insert(.obstacle) }
-        if showProcedure { categories.insert(.procedure) }
-        if showLighting { categories.insert(.lighting) }
-        if showServices { categories.insert(.services) }
-        if showOther { categories.insert(.other) }
+        if showOther { categories.insert(.otherInfo) }
+        if showProcedures { categories.insert(.atmProcedures) }
+        if showRestrictions { categories.insert(.airspaceRestrictions) }
+        if showServices { categories.insert(.atmServices) }
         return categories
     }
 
     /// Whether all categories are enabled
     var allEnabled: Bool {
-        showRunway && showNavigation && showAirspace && showObstacle &&
-        showProcedure && showLighting && showServices && showOther
+        showAirspace && showCommunications && showFacilities && showGNSS &&
+        showILS && showLighting && showMovement && showNavigation &&
+        showOther && showProcedures && showRestrictions && showServices
     }
 
     /// Enable all categories
     mutating func enableAll() {
-        showRunway = true
-        showNavigation = true
         showAirspace = true
-        showObstacle = true
-        showProcedure = true
+        showCommunications = true
+        showFacilities = true
+        showGNSS = true
+        showILS = true
         showLighting = true
-        showServices = true
+        showMovement = true
+        showNavigation = true
         showOther = true
+        showProcedures = true
+        showRestrictions = true
+        showServices = true
+    }
+}
+
+/// Smart filters based on Q-code subject codes
+/// These apply additional logic beyond simple category matching
+struct SmartFilters: Equatable {
+    // MARK: - Helicopter Filter
+    /// Hide helicopter-related NOTAMs (Q-codes: FH, FP, LU, LW)
+    /// Default OFF = show helicopter NOTAMs
+    var hideHelicopter: Bool = true
+
+    // MARK: - Obstacle Filter
+    /// Special handling for obstacles (Q-codes: OB, OL)
+    /// When enabled, only show obstacles within threshold of departure/destination
+    var filterObstacles: Bool = true
+
+    /// Distance threshold for obstacles in nautical miles
+    var obstacleDistanceNm: Double = 2.0
+
+    // MARK: - Scope Filter
+    /// Filter by Q-line scope field
+    var scopeFilter: ScopeFilter = .all
+
+    /// Whether any smart filter is active
+    var hasActiveFilters: Bool {
+        hideHelicopter || filterObstacles || scopeFilter != .all
+    }
+}
+
+/// Scope filter options from Q-line
+enum ScopeFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case aerodrome = "Aerodrome"      // A - Aerodrome scope
+    case enroute = "En Route"         // E - En-route scope
+    case warning = "Warning"          // W - Navigation warning
+
+    var id: String { rawValue }
+
+    /// Q-line scope codes that match this filter
+    var matchingCodes: Set<Character> {
+        switch self {
+        case .all: return ["A", "E", "W"]
+        case .aerodrome: return ["A"]
+        case .enroute: return ["E"]
+        case .warning: return ["W"]
+        }
     }
 }
 
@@ -180,6 +241,9 @@ final class NotamDomain {
     /// Time filter - filter by validity at flight time
     var timeFilter = TimeFilter()
 
+    /// Smart filters (helicopter, obstacle, scope)
+    var smartFilters = SmartFilters()
+
     /// Airport coordinates for route filtering (populated from briefing or external source)
     var airportCoordinates: [String: CLLocationCoordinate2D] = [:]
 
@@ -193,6 +257,7 @@ final class NotamDomain {
         !visibilityFilter.showRead ||
         visibilityFilter.showIgnored ||
         timeFilter.isEnabled ||
+        smartFilters.hasActiveFilters ||
         !searchQuery.isEmpty
     }
 
@@ -219,17 +284,20 @@ final class NotamDomain {
         if !categoryFilter.allEnabled {
             let enabled = categoryFilter.enabledCategories
             notams = notams.filter { notam in
-                guard let category = notam.category else { return categoryFilter.showOther }
+                guard let category = notam.icaoCategory else { return categoryFilter.showOther }
                 return enabled.contains(category)
             }
         }
 
-        // 3. Apply text search
+        // 3. Apply smart filters
+        notams = applySmartFilters(to: notams)
+
+        // 4. Apply text search
         if !searchQuery.isEmpty {
             notams = notams.containing(searchQuery)
         }
 
-        // 4. Apply status filter
+        // 5. Apply status filter
         switch statusFilter {
         case .all:
             break
@@ -241,7 +309,7 @@ final class NotamDomain {
             notams = notams.filter { annotation(for: $0)?.status == .followUp }
         }
 
-        // 5. Apply visibility filter
+        // 6. Apply visibility filter
         if !visibilityFilter.showIgnored {
             notams = notams.filter { annotation(for: $0)?.status != .ignore }
         }
@@ -294,12 +362,15 @@ final class NotamDomain {
         if !categoryFilter.allEnabled {
             let enabled = categoryFilter.enabledCategories
             notams = notams.filter { enriched in
-                guard let category = enriched.category else { return categoryFilter.showOther }
+                guard let category = enriched.icaoCategory else { return categoryFilter.showOther }
                 return enabled.contains(category)
             }
         }
 
-        // 5. Apply text search
+        // 5. Apply smart filters
+        notams = applySmartFilters(to: notams)
+
+        // 6. Apply text search
         if !searchQuery.isEmpty {
             let searchLower = searchQuery.lowercased()
             notams = notams.filter { enriched in
@@ -309,7 +380,7 @@ final class NotamDomain {
             }
         }
 
-        // 6. Apply status filter
+        // 7. Apply status filter
         switch statusFilter {
         case .all:
             break
@@ -321,7 +392,7 @@ final class NotamDomain {
             notams = notams.filter { $0.status == .followUp }
         }
 
-        // 7. Apply visibility filter (local ignore status)
+        // 8. Apply visibility filter (local ignore status)
         if !visibilityFilter.showIgnored {
             notams = notams.filter { $0.status != .ignore }
         }
@@ -576,6 +647,7 @@ final class NotamDomain {
         statusFilter = .all
         visibilityFilter = VisibilityFilter()
         timeFilter = TimeFilter()
+        smartFilters = SmartFilters()
         searchQuery = ""
 
         // Re-populate route from briefing if available
@@ -694,5 +766,152 @@ final class NotamDomain {
     func isGloballyIgnored(_ notam: Notam) -> Bool {
         let identityKey = NotamIdentity.key(for: notam)
         return ignoredIdentityKeys.contains(identityKey)
+    }
+
+    // MARK: - Smart Filter Helpers
+
+    /// Q-code subjects for helicopter-related NOTAMs
+    private static let helicopterSubjects: Set<String> = ["FH", "FP", "LU", "LW"]
+
+    /// Q-code subjects for obstacle NOTAMs
+    private static let obstacleSubjects: Set<String> = ["OB", "OL"]
+
+    /// Apply smart filters to raw NOTAM array
+    private func applySmartFilters(to notams: [Notam]) -> [Notam] {
+        var result = notams
+
+        // 1. Helicopter filter - hide if enabled
+        if smartFilters.hideHelicopter {
+            result = result.filter { notam in
+                guard let subject = notam.qCodeSubject else { return true }
+                return !Self.helicopterSubjects.contains(subject)
+            }
+        }
+
+        // 2. Obstacle filter - only show obstacles near departure/destination
+        if smartFilters.filterObstacles, let route = currentRoute {
+            let depCoord = route.departureCoordinate
+            let destCoord = route.destinationCoordinate
+
+            result = result.filter { notam in
+                guard let subject = notam.qCodeSubject,
+                      Self.obstacleSubjects.contains(subject) else {
+                    // Not an obstacle - keep it
+                    return true
+                }
+
+                // Obstacle NOTAM - check if near dep/dest
+                guard let notamCoord = notam.coordinate else {
+                    // No coordinates - include by default for safety
+                    return true
+                }
+
+                let notamLoc = CLLocation(
+                    latitude: notamCoord.latitude,
+                    longitude: notamCoord.longitude
+                )
+
+                // Check distance to departure
+                if let coord = depCoord {
+                    let depLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let distNm = notamLoc.distance(from: depLoc) / 1852.0
+                    if distNm <= smartFilters.obstacleDistanceNm {
+                        return true
+                    }
+                }
+
+                // Check distance to destination
+                if let coord = destCoord {
+                    let destLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let distNm = notamLoc.distance(from: destLoc) / 1852.0
+                    if distNm <= smartFilters.obstacleDistanceNm {
+                        return true
+                    }
+                }
+
+                // Obstacle too far from airports
+                return false
+            }
+        }
+
+        // 3. Scope filter
+        if smartFilters.scopeFilter != .all {
+            let matchingCodes = smartFilters.scopeFilter.matchingCodes
+            result = result.filter { notam in
+                guard let scope = notam.scope, !scope.isEmpty else {
+                    // No scope info - include by default
+                    return true
+                }
+                // Check if any character in scope matches the filter
+                return scope.uppercased().contains { matchingCodes.contains($0) }
+            }
+        }
+
+        return result
+    }
+
+    /// Apply smart filters to enriched NOTAM array
+    private func applySmartFilters(to notams: [EnrichedNotam]) -> [EnrichedNotam] {
+        var result = notams
+
+        // 1. Helicopter filter
+        if smartFilters.hideHelicopter {
+            result = result.filter { enriched in
+                guard let subject = enriched.notam.qCodeSubject else { return true }
+                return !Self.helicopterSubjects.contains(subject)
+            }
+        }
+
+        // 2. Obstacle filter
+        if smartFilters.filterObstacles, let route = currentRoute {
+            let depCoord = route.departureCoordinate
+            let destCoord = route.destinationCoordinate
+
+            result = result.filter { enriched in
+                let notam = enriched.notam
+                guard let subject = notam.qCodeSubject,
+                      Self.obstacleSubjects.contains(subject) else {
+                    return true
+                }
+
+                guard let notamCoord = notam.coordinate else {
+                    return true
+                }
+
+                let notamLoc = CLLocation(
+                    latitude: notamCoord.latitude,
+                    longitude: notamCoord.longitude
+                )
+
+                if let coord = depCoord {
+                    let depLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    if notamLoc.distance(from: depLoc) / 1852.0 <= smartFilters.obstacleDistanceNm {
+                        return true
+                    }
+                }
+
+                if let coord = destCoord {
+                    let destLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    if notamLoc.distance(from: destLoc) / 1852.0 <= smartFilters.obstacleDistanceNm {
+                        return true
+                    }
+                }
+
+                return false
+            }
+        }
+
+        // 3. Scope filter
+        if smartFilters.scopeFilter != .all {
+            let matchingCodes = smartFilters.scopeFilter.matchingCodes
+            result = result.filter { enriched in
+                guard let scope = enriched.notam.scope, !scope.isEmpty else {
+                    return true
+                }
+                return scope.uppercased().contains { matchingCodes.contains($0) }
+            }
+        }
+
+        return result
     }
 }

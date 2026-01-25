@@ -78,6 +78,9 @@ struct EnrichedNotam: Identifiable {
     /// Category from ICAO Q-code
     var category: NotamCategory? { notam.category }
 
+    /// ICAO category derived from Q-code (preferred over category)
+    var icaoCategory: NotamCategory? { notam.icaoCategory }
+
     /// Whether the NOTAM is permanent
     var isPermanent: Bool { notam.isPermanent }
 
@@ -129,7 +132,7 @@ extension Array where Element == EnrichedNotam {
     func groupedByCategory() -> [NotamCategory: [EnrichedNotam]] {
         var result: [NotamCategory: [EnrichedNotam]] = [:]
         for enriched in self {
-            let key = enriched.category ?? .other
+            let key = enriched.icaoCategory ?? .otherInfo
             result[key, default: []].append(enriched)
         }
         return result

@@ -279,14 +279,22 @@ struct iPadLayoutView: View {
 
     @ViewBuilder
     private var categoryToggles: some View {
-        Toggle("Runway", isOn: categoryBinding(\.showRunway))
-        Toggle("Navigation", isOn: categoryBinding(\.showNavigation))
-        Toggle("Airspace", isOn: categoryBinding(\.showAirspace))
-        Toggle("Obstacles", isOn: categoryBinding(\.showObstacle))
-        Toggle("Procedures", isOn: categoryBinding(\.showProcedure))
+        // AGA - Ground
+        Toggle("Movement Area", isOn: categoryBinding(\.showMovement))
         Toggle("Lighting", isOn: categoryBinding(\.showLighting))
+        Toggle("Facilities", isOn: categoryBinding(\.showFacilities))
+        // CNS - Navigation
+        Toggle("Navigation", isOn: categoryBinding(\.showNavigation))
+        Toggle("ILS/MLS", isOn: categoryBinding(\.showILS))
+        Toggle("GNSS", isOn: categoryBinding(\.showGNSS))
+        Toggle("Communications", isOn: categoryBinding(\.showCommunications))
+        // ATM - Traffic
+        Toggle("Airspace", isOn: categoryBinding(\.showAirspace))
+        Toggle("Procedures", isOn: categoryBinding(\.showProcedures))
         Toggle("Services", isOn: categoryBinding(\.showServices))
-        Toggle("Other", isOn: categoryBinding(\.showOther))
+        Toggle("Restrictions", isOn: categoryBinding(\.showRestrictions))
+        // Other
+        Toggle("Other Info", isOn: categoryBinding(\.showOther))
     }
 
     @ViewBuilder

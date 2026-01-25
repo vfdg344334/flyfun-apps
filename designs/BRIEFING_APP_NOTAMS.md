@@ -108,26 +108,34 @@ final class NotamDomain {
     var allNotams: [Notam] = []
     var currentBriefing: Briefing?
     var currentCDBriefing: CDBriefing?
+    var currentRoute: Route?
 
     // User state
     var annotations: [String: NotamAnnotation] = [:]  // keyed by notam.id
+    var ignoredIdentityKeys: Set<String> = []         // global ignore list
 
     // Filter state
     var searchQuery: String = ""
-    var grouping: NotamGrouping = .none
-    var categoryFilters: Set<NotamCategory> = Set(NotamCategory.allCases)
+    var grouping: NotamGrouping = .airport
+
+    // Category filter (12 ICAO categories)
+    var categoryFilter: CategoryFilter   // showMovement, showLighting, etc.
+
+    // Smart filters
+    var smartFilters: SmartFilters       // hideHelicopter, filterObstacles, scopeFilter
+
+    // Other filters
     var statusFilter: StatusFilter = .all
-    var showIgnored: Bool = false
-    var showRead: Bool = true
-    var corridorWidth: Double = 25.0  // NM
-    var preFlightBuffer: TimeInterval = 2 * 3600   // 2 hours
-    var postFlightBuffer: TimeInterval = 2 * 3600  // 2 hours
+    var visibilityFilter: VisibilityFilter  // showIgnored, showRead
+    var routeFilter: RouteFilter            // isEnabled, corridorWidthNm
+    var timeFilter: TimeFilter              // isEnabled, buffers
 
     // Computed
     var enrichedNotams: [EnrichedNotam]
     var filteredEnrichedNotams: [EnrichedNotam]
     var enrichedNotamsGroupedByAirport: [(String, [EnrichedNotam])]
     var enrichedNotamsGroupedByCategory: [(NotamCategory, [EnrichedNotam])]
+    var enrichedNotamsGroupedByRouteSegment: [(RouteSegment, [EnrichedNotam])]
 }
 ```
 
@@ -136,19 +144,22 @@ final class NotamDomain {
 ```swift
 var filteredEnrichedNotams: [EnrichedNotam] {
     enrichedNotams
-        // 1. Route corridor filter
-        .filter { corridorFilter($0.notam) }
-        // 2. Category filter
-        .filter { categoryFilters.contains($0.category) }
-        // 3. Text search
-        .filter { searchQuery.isEmpty || $0.matchesSearch(searchQuery) }
-        // 4. Status filter
-        .filter { statusFilter.matches($0.status) }
-        // 5. Visibility filters
+        // 1. Global ignore filter
         .filter { showIgnored || !$0.isGloballyIgnored }
-        .filter { showRead || $0.status != .read }
-        // 6. Time window filter
+        // 2. Route corridor filter
+        .filter { corridorFilter($0.notam) }
+        // 3. Time window filter
         .filter { timeWindowFilter($0.notam) }
+        // 4. Category filter
+        .filter { categoryFilters.contains($0.icaoCategory ?? .otherInfo) }
+        // 5. Smart filters (helicopter, obstacle, scope)
+        .applySmartFilters()
+        // 6. Text search
+        .filter { searchQuery.isEmpty || $0.matchesSearch(searchQuery) }
+        // 7. Status filter
+        .filter { statusFilter.matches($0.status) }
+        // 8. Visibility filters
+        .filter { showRead || $0.status != .read }
 }
 ```
 
@@ -184,11 +195,20 @@ var hasActiveFilters: Bool
 
 ```swift
 enum NotamGrouping {
-    case none       // Flat list
-    case airport    // Group by location ICAO
-    case category   // Group by NotamCategory
+    case none        // Flat list
+    case airport     // Group by location ICAO
+    case category    // Group by NotamCategory
+    case routeOrder  // Group by route segment (Departure → En Route → Dest)
 }
 ```
+
+Route order grouping organizes NOTAMs spatially along the flight route:
+- **Departure** - At or near departure airport
+- **En Route** - Along route corridor, sorted by distance from departure
+- **Destination** - At or near destination airport
+- **Alternates** - At alternate airports
+- **Distant** - More than 50nm from route centerline
+- **No Coordinates** - NOTAMs without geographic data
 
 ### Status Filter
 
@@ -203,17 +223,54 @@ enum StatusFilter {
 }
 ```
 
-### Category Filter
+### ICAO Category Filter
 
-Uses RZFlight's `NotamCategory` enum:
-- `.runway` - Runway conditions, closures
-- `.taxiway` - Taxiway conditions
-- `.apron` - Apron/ramp
-- `.navigation` - NAVAIDs, procedures
-- `.airspace` - Airspace restrictions
-- `.obstacle` - Obstacles, cranes
-- `.services` - Fuel, handling
-- `.other` - Uncategorized
+Uses RZFlight's `NotamCategory` enum, which maps 1:1 to ICAO Q-code subject classification.
+Categories are determined by the first letter of the Q-code subject (characters 2-3 of Q-code).
+
+**AGA - Aerodrome Ground Aids:**
+- `.agaMovement` (M) - Runway, taxiway, apron conditions/closures
+- `.agaLighting` (L) - ALS, PAPI, VASIS, runway/taxiway lights
+- `.agaFacilities` (F) - Fuel, fire/rescue, de-icing, helicopter facilities
+
+**CNS - Communications, Navigation, Surveillance:**
+- `.navigation` (N) - VOR, DME, NDB, TACAN, VORTAC
+- `.cnsILS` (I) - ILS, localizer, glide path, markers, MLS
+- `.cnsGNSS` (G) - GNSS airfield and area-wide operations
+- `.cnsCommunications` (C) - Radar, ADS-B, CPDLC, SELCAL
+
+**ATM - Air Traffic Management:**
+- `.atmAirspace` (A) - FIR, TMA, CTR, ATS routes, reporting points
+- `.atmProcedures` (P) - SID, STAR, holding, instrument approaches
+- `.atmServices` (S) - ATIS, ACC, TWR, approach/ground control
+- `.airspaceRestrictions` (R) - Danger/prohibited/restricted areas, TRA
+
+**Other:**
+- `.otherInfo` (O) - Obstacles, obstacle lights, AIS, entry requirements
+
+### Smart Filters
+
+Q-code based filters with custom logic beyond simple category matching:
+
+```swift
+struct SmartFilters {
+    /// Hide helicopter NOTAMs (Q-codes: FH, FP, LU, LW)
+    /// Default: ON (hide helicopter)
+    var hideHelicopter: Bool = true
+
+    /// Filter obstacles to show only near airports
+    /// Obstacle Q-codes: OB, OL
+    var filterObstacles: Bool = true
+    var obstacleDistanceNm: Double = 2.0  // Show within 2nm of dep/dest
+
+    /// Filter by Q-line scope field
+    var scopeFilter: ScopeFilter = .all  // A=Aerodrome, E=En-route, W=Warning
+}
+```
+
+**Helicopter Filter:** Heliport-related NOTAMs (FATO, windsocks, helipad lighting) are hidden by default for fixed-wing operations.
+
+**Obstacle Filter:** Obstacle NOTAMs (cranes, towers, construction) are typically only relevant near departure/destination airports. When enabled, obstacles beyond the threshold are filtered out, reducing clutter.
 
 ### Route Corridor Filter
 
@@ -354,12 +411,14 @@ Full NOTAM detail sheet:
 - Global ignore option
 
 ### FilterPanelView
-Filter configuration:
-- Category toggles
-- Status filter picker
-- Corridor width slider
-- Time window adjustments
-- Show/hide ignored toggle
+Comprehensive filter configuration:
+- **Smart Filters** - Helicopter toggle, obstacle distance, scope picker
+- **ICAO Categories** - 12 categories in collapsible groups (AGA, CNS, ATM)
+- **Route Filter** - Corridor width, ICAO codes
+- **Time Filter** - Active at flight time
+- **Status Filter** - All/unread/important/followUp
+- **Visibility** - Show read, show ignored
+- **Grouping** - None/airport/category/route order
 
 ## Gotchas
 
@@ -368,6 +427,9 @@ Filter configuration:
 3. **Ignored vs status.ignored** - Global ignore list is separate from per-NOTAM ignore status
 4. **"New" is flight-scoped** - Compared to all previous briefings for this flight
 5. **Filter order matters** - Route corridor first (expensive) then cheap filters
+6. **Use icaoCategory, not category** - The `icaoCategory` computed property derives from Q-code, with fallback to stored category
+7. **Smart filters need route** - Obstacle filtering requires departure/destination coordinates
+8. **Helicopter filter is default ON** - Unlike other filters, helicopter NOTAMs are hidden by default
 
 ## References
 

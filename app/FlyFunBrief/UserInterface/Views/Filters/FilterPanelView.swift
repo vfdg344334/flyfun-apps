@@ -18,6 +18,7 @@ struct FilterPanelView: View {
             Form {
                 routeSection
                 timeSection
+                smartFiltersSection
                 categorySection
                 statusSection
                 visibilitySection
@@ -121,21 +122,85 @@ struct FilterPanelView: View {
         return formatter.string(from: date)
     }
 
+    // MARK: - Smart Filters Section
+
+    private var smartFiltersSection: some View {
+        Section {
+            // Helicopter filter
+            Toggle("Hide Helicopter NOTAMs", isOn: hideHelicopterBinding)
+
+            // Obstacle filter
+            Toggle("Smart Obstacle Filter", isOn: filterObstaclesBinding)
+
+            if appState?.notams.smartFilters.filterObstacles == true {
+                HStack {
+                    Text("Show within")
+                    Picker("Distance", selection: obstacleDistanceBinding) {
+                        Text("1 nm").tag(1.0)
+                        Text("2 nm").tag(2.0)
+                        Text("5 nm").tag(5.0)
+                        Text("10 nm").tag(10.0)
+                    }
+                    .pickerStyle(.menu)
+                    Text("of airports")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+
+            // Scope filter
+            Picker("Scope", selection: scopeFilterBinding) {
+                ForEach(ScopeFilter.allCases) { scope in
+                    Text(scope.rawValue).tag(scope)
+                }
+            }
+        } header: {
+            Label("Smart Filters", systemImage: "sparkles")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if appState?.notams.smartFilters.hideHelicopter == true {
+                    Text("Helicopter NOTAMs (heliports, FATO, windsocks) are hidden")
+                }
+                if appState?.notams.smartFilters.filterObstacles == true {
+                    Text("Obstacles shown only near departure/destination")
+                }
+            }
+            .font(.caption)
+        }
+    }
+
     // MARK: - Category Section
 
     private var categorySection: some View {
         Section {
-            CategoryToggleRow(label: "Runway", systemImage: "road.lanes", isOn: categoryBinding(\.showRunway))
-            CategoryToggleRow(label: "Navigation", systemImage: "antenna.radiowaves.left.and.right", isOn: categoryBinding(\.showNavigation))
-            CategoryToggleRow(label: "Airspace", systemImage: "square.3.layers.3d", isOn: categoryBinding(\.showAirspace))
-            CategoryToggleRow(label: "Obstacles", systemImage: "exclamationmark.triangle", isOn: categoryBinding(\.showObstacle))
-            CategoryToggleRow(label: "Procedures", systemImage: "arrow.triangle.turn.up.right.diamond", isOn: categoryBinding(\.showProcedure))
-            CategoryToggleRow(label: "Lighting", systemImage: "lightbulb", isOn: categoryBinding(\.showLighting))
-            CategoryToggleRow(label: "Services", systemImage: "wrench.and.screwdriver", isOn: categoryBinding(\.showServices))
-            CategoryToggleRow(label: "Other", systemImage: "ellipsis.circle", isOn: categoryBinding(\.showOther))
+            // AGA Categories (Aerodrome Ground Aids)
+            DisclosureGroup("AGA - Ground") {
+                CategoryToggleRow(label: "Movement Area", systemImage: NotamCategory.agaMovement.icon, isOn: categoryBinding(\.showMovement))
+                CategoryToggleRow(label: "Lighting", systemImage: NotamCategory.agaLighting.icon, isOn: categoryBinding(\.showLighting))
+                CategoryToggleRow(label: "Facilities", systemImage: NotamCategory.agaFacilities.icon, isOn: categoryBinding(\.showFacilities))
+            }
+
+            // CNS Categories (Communications, Navigation, Surveillance)
+            DisclosureGroup("CNS - Navigation") {
+                CategoryToggleRow(label: "Navigation", systemImage: NotamCategory.navigation.icon, isOn: categoryBinding(\.showNavigation))
+                CategoryToggleRow(label: "ILS/MLS", systemImage: NotamCategory.cnsILS.icon, isOn: categoryBinding(\.showILS))
+                CategoryToggleRow(label: "GNSS", systemImage: NotamCategory.cnsGNSS.icon, isOn: categoryBinding(\.showGNSS))
+                CategoryToggleRow(label: "Communications", systemImage: NotamCategory.cnsCommunications.icon, isOn: categoryBinding(\.showCommunications))
+            }
+
+            // ATM Categories (Air Traffic Management)
+            DisclosureGroup("ATM - Traffic") {
+                CategoryToggleRow(label: "Airspace", systemImage: NotamCategory.atmAirspace.icon, isOn: categoryBinding(\.showAirspace))
+                CategoryToggleRow(label: "Procedures", systemImage: NotamCategory.atmProcedures.icon, isOn: categoryBinding(\.showProcedures))
+                CategoryToggleRow(label: "Services", systemImage: NotamCategory.atmServices.icon, isOn: categoryBinding(\.showServices))
+                CategoryToggleRow(label: "Restrictions", systemImage: NotamCategory.airspaceRestrictions.icon, isOn: categoryBinding(\.showRestrictions))
+            }
+
+            // Other
+            CategoryToggleRow(label: "Other Info", systemImage: NotamCategory.otherInfo.icon, isOn: categoryBinding(\.showOther))
         } header: {
             HStack {
-                Label("Categories", systemImage: "tag")
+                Label("ICAO Categories", systemImage: "tag")
                 Spacer()
                 if appState?.notams.categoryFilter.allEnabled == false {
                     Button("All") {
@@ -144,6 +209,8 @@ struct FilterPanelView: View {
                     .font(.caption)
                 }
             }
+        } footer: {
+            Text("Categories based on ICAO Q-code subject classification")
         }
     }
 
@@ -256,6 +323,36 @@ struct FilterPanelView: View {
         Binding(
             get: { appState?.notams.grouping ?? .airport },
             set: { appState?.notams.grouping = $0 }
+        )
+    }
+
+    // MARK: - Smart Filter Bindings
+
+    private var hideHelicopterBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.smartFilters.hideHelicopter ?? true },
+            set: { appState?.notams.smartFilters.hideHelicopter = $0 }
+        )
+    }
+
+    private var filterObstaclesBinding: Binding<Bool> {
+        Binding(
+            get: { appState?.notams.smartFilters.filterObstacles ?? true },
+            set: { appState?.notams.smartFilters.filterObstacles = $0 }
+        )
+    }
+
+    private var obstacleDistanceBinding: Binding<Double> {
+        Binding(
+            get: { appState?.notams.smartFilters.obstacleDistanceNm ?? 2.0 },
+            set: { appState?.notams.smartFilters.obstacleDistanceNm = $0 }
+        )
+    }
+
+    private var scopeFilterBinding: Binding<ScopeFilter> {
+        Binding(
+            get: { appState?.notams.smartFilters.scopeFilter ?? .all },
+            set: { appState?.notams.smartFilters.scopeFilter = $0 }
         )
     }
 }
