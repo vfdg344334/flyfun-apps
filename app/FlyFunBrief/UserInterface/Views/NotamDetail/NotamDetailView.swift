@@ -283,7 +283,18 @@ struct NotamDetailView: View {
                 .font(.headline)
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                if let qCode = notam.qCode {
+                if let qCodeInfo = notam.qCodeInfo {
+                    GridRow {
+                        Text("Q-Code")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(qCodeInfo.displayText)
+                            Text(qCodeInfo.qCode)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } else if let qCode = notam.qCode {
                     GridRow {
                         Text("Q-Code")
                             .foregroundStyle(.secondary)

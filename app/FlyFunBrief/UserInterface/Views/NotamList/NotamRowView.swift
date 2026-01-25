@@ -129,14 +129,20 @@ struct NotamRowView: View {
 
     // MARK: - Title Generation
 
-    /// Generate a human-readable title from category and tags
+    /// Generate a human-readable title from Q-code info or category
     private var notamTitle: String {
-        // Use primary category from categorization pipeline if available
+        // Best: use parsed Q-code display text from server
+        if let qCodeInfo = notam.qCodeInfo {
+            // displayText is like "Runway: Closed" - perfect for title
+            return qCodeInfo.displayText
+        }
+
+        // Fallback: use primary category from categorization pipeline
         if let primary = notam.primaryCategory {
             let categoryTitle = formatCategory(primary)
             let tagText = formatTags(notam.customTags)
             if !tagText.isEmpty {
-                return "\(categoryTitle) \(tagText)"
+                return "\(categoryTitle): \(tagText)"
             }
             return categoryTitle
         }
@@ -144,11 +150,6 @@ struct NotamRowView: View {
         // Fall back to ICAO category
         if let category = notam.category {
             return category.displayName
-        }
-
-        // Last resort: use Q-code or location
-        if let qCode = notam.qCode {
-            return decodeQCode(qCode)
         }
 
         return notam.location
@@ -208,37 +209,6 @@ struct NotamRowView: View {
         case "changed": return "Changed"
         case "work_in_progress": return "WIP"
         default: return tag.capitalized
-        }
-    }
-
-    /// Decode Q-code to basic description
-    private func decodeQCode(_ qCode: String) -> String {
-        guard qCode.count >= 3 else { return qCode }
-
-        let subject = String(qCode.prefix(3))
-        switch subject.uppercased() {
-        case "QMR": return "Runway"
-        case "QMX": return "Taxiway"
-        case "QMA": return "Apron"
-        case "QLR", "QLL", "QLX", "QLP", "QLV": return "Lighting"
-        case "QNV": return "VOR"
-        case "QND": return "DME"
-        case "QNI": return "ILS"
-        case "QNL": return "Localizer"
-        case "QNG": return "Glideslope"
-        case "QNB": return "NDB"
-        case "QPI": return "Approach"
-        case "QPD": return "SID"
-        case "QPS": return "STAR"
-        case "QAR": return "Restricted Area"
-        case "QAD": return "Danger Area"
-        case "QAP": return "Prohibited Area"
-        case "QOB", "QOE": return "Obstacle"
-        case "QCA", "QCF": return "Communication"
-        case "QST", "QSA", "QSP": return "ATC"
-        case "QSF": return "Fuel"
-        case "QWP", "QWU", "QWM", "QWE", "QWH", "QWB", "QWA", "QWF", "QWC", "QWL": return "Warning"
-        default: return qCode
         }
     }
 
