@@ -55,6 +55,11 @@ final class AppState {
     /// Flight repository for Core Data operations
     let flightRepository: FlightRepository
 
+    // MARK: - Pending Import State
+
+    /// Briefing waiting to be assigned to a flight (from share extension)
+    var pendingBriefing: Briefing?
+
     // MARK: - Init
 
     init() {
@@ -85,14 +90,23 @@ final class AppState {
     // MARK: - Cross-Domain Wiring
 
     private func setupCrossDomainWiring() {
-        // When briefing is parsed, offer to store in Core Data
+        // When briefing is parsed, store in Core Data (or prompt for flight selection)
         briefing.onBriefingParsed = { [weak self] parsedBriefing in
-            guard let self = self,
-                  let flight = self.flights.selectedFlight else {
-                return nil
+            guard let self = self else { return nil }
+
+            // If a flight is selected, import directly
+            if let flight = self.flights.selectedFlight {
+                return await self.flights.importBriefing(parsedBriefing, for: flight)
             }
 
-            return await self.flights.importBriefing(parsedBriefing, for: flight)
+            // No flight selected - store as pending and prompt user
+            Logger.app.info("No flight selected - storing pending briefing for assignment")
+            self.pendingBriefing = parsedBriefing
+
+            // Show flight picker to let user choose
+            self.navigation.showFlightPicker()
+
+            return nil
         }
 
         // When briefing is loaded (from parsing or Core Data), update notams domain
@@ -143,6 +157,78 @@ final class AppState {
                 self?.notams.setBriefing(briefing, cdBriefing: cdBriefing, previousKeys: previousKeys)
             }
         }
+    }
+
+    // MARK: - Pending Briefing Actions
+
+    /// Assign pending briefing to a flight
+    /// Called when user selects a flight from the picker after sharing
+    func assignPendingBriefing(to flight: CDFlight) async {
+        guard let briefingToAssign = pendingBriefing else {
+            Logger.app.warning("No pending briefing to assign")
+            return
+        }
+
+        Logger.app.info("Assigning pending briefing to flight: \(flight.displayTitle)")
+
+        // Clear pending state
+        pendingBriefing = nil
+
+        // Dismiss the picker
+        navigation.dismissSheet()
+
+        // Select the flight
+        flights.selectFlight(flight)
+
+        // Import the briefing
+        if let cdBriefing = await flights.importBriefing(briefingToAssign, for: flight) {
+            // Update briefing domain
+            briefing.currentCDBriefing = cdBriefing
+
+            // Update notams
+            let previousKeys = flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing)
+            notams.setBriefing(briefingToAssign, cdBriefing: cdBriefing, previousKeys: previousKeys)
+
+            // Navigate to NOTAM list
+            navigation.showNotamList()
+
+            Logger.app.info("Successfully assigned briefing to flight")
+        }
+    }
+
+    /// Create a new flight from the pending briefing's route
+    func createFlightFromPendingBriefing() async {
+        guard let briefingToAssign = pendingBriefing else {
+            Logger.app.warning("No pending briefing to create flight from")
+            return
+        }
+
+        Logger.app.info("Creating new flight from pending briefing")
+
+        // Extract route info from briefing
+        let origin = briefingToAssign.route?.departure ?? "XXXX"
+        let destination = briefingToAssign.route?.destination ?? "XXXX"
+        let departureTime = briefingToAssign.route?.departureTime
+
+        // Create the flight
+        guard let newFlight = await flights.createFlight(
+            origin: origin,
+            destination: destination,
+            departureTime: departureTime
+        ) else {
+            Logger.app.error("Failed to create flight from pending briefing")
+            return
+        }
+
+        // Now assign the briefing to this new flight
+        await assignPendingBriefing(to: newFlight)
+    }
+
+    /// Cancel pending briefing import
+    func cancelPendingBriefing() {
+        pendingBriefing = nil
+        navigation.dismissSheet()
+        Logger.app.info("Cancelled pending briefing import")
     }
 
     // MARK: - Lifecycle

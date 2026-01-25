@@ -241,41 +241,106 @@ struct FlightPickerView: View {
     @Environment(\.appState) private var appState
     @Environment(\.dismiss) private var dismiss
 
+    /// Whether we have a pending briefing to assign
+    private var hasPendingBriefing: Bool {
+        appState?.pendingBriefing != nil
+    }
+
+    /// Route summary from pending briefing
+    private var pendingRouteSummary: String? {
+        guard let route = appState?.pendingBriefing?.route else { return nil }
+        return "\(route.departure) → \(route.destination)"
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                // Show pending briefing info if present
+                if hasPendingBriefing {
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Briefing Ready to Import", systemImage: "doc.text.fill")
+                                .font(.headline)
+                            if let route = pendingRouteSummary {
+                                Text(route)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Select a flight or create a new one")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                // Existing flights
                 if let flights = appState?.flights.flights, !flights.isEmpty {
-                    ForEach(flights, id: \.id) { flight in
-                        Button {
-                            appState?.flights.selectFlight(flight)
-                            dismiss()
-                        } label: {
-                            FlightRowView(flight: flight)
+                    Section(hasPendingBriefing ? "Existing Flights" : "") {
+                        ForEach(flights, id: \.id) { flight in
+                            Button {
+                                selectFlight(flight)
+                            } label: {
+                                FlightRowView(flight: flight)
+                            }
                         }
                     }
-                } else {
+                } else if !hasPendingBriefing {
                     Text("No flights available")
                         .foregroundStyle(.secondary)
                 }
 
+                // Create new flight section
                 Section {
+                    if hasPendingBriefing {
+                        // Option to create flight from briefing route
+                        Button {
+                            Task {
+                                await appState?.createFlightFromPendingBriefing()
+                            }
+                        } label: {
+                            Label("Create Flight from Briefing", systemImage: "plus.circle.fill")
+                        }
+                        .tint(.accentColor)
+                    }
+
                     Button {
+                        if hasPendingBriefing {
+                            appState?.cancelPendingBriefing()
+                        }
                         dismiss()
                         appState?.navigation.showNewFlight()
                     } label: {
-                        Label("Create New Flight", systemImage: "plus")
+                        Label("Create New Flight Manually", systemImage: "plus")
                     }
                 }
             }
-            .navigationTitle("Select Flight")
+            .navigationTitle(hasPendingBriefing ? "Import Briefing" : "Select Flight")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        dismiss()
+                        if hasPendingBriefing {
+                            appState?.cancelPendingBriefing()
+                        } else {
+                            dismiss()
+                        }
                     }
                 }
             }
+        }
+    }
+
+    private func selectFlight(_ flight: CDFlight) {
+        if hasPendingBriefing {
+            // Assign pending briefing to this flight
+            Task {
+                await appState?.assignPendingBriefing(to: flight)
+            }
+        } else {
+            // Normal flight selection
+            appState?.flights.selectFlight(flight)
+            dismiss()
         }
     }
 }
