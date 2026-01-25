@@ -94,10 +94,29 @@ Key exports: `NotificationParser`, `NotificationScorer`, `NotificationBatchProce
 
 ---
 
-## Mobile (iOS/macOS)
+## FlyFunBrief (Briefing App)
+
+### Briefing App Architecture
+Core architecture patterns: RZFlight model reuse, composed AppState with domains, enriched model pattern, identity-based NOTAM tracking. **Read first** before any FlyFunBrief work.
+Key exports: `AppState`, `BriefingDomain`, `NotamDomain`, `FlightDomain`, `EnrichedNotam`
+→ Full doc: BRIEFING_APP_ARCHITECTURE.md
+
+### Briefing App Data Layer
+Core Data stack with CloudKit sync, repository pattern, identity key-based status transfer, global ignore list with auto-expiration.
+Key exports: `FlightRepository`, `IgnoreListManager`, `PersistenceController`, `CDFlight`, `CDBriefing`, `CDNotamStatus`
+→ Full doc: BRIEFING_APP_DATA.md
+
+### Briefing App NOTAM System
+NOTAM domain, filtering pipeline, enriched model pattern, identity matching across briefings, global ignore list.
+Key exports: `NotamDomain`, `EnrichedNotam`, `NotamIdentity`, `NotamStatus`, filter types
+→ Full doc: BRIEFING_APP_NOTAMS.md
+
+---
+
+## FlyFunEuroAIP (Mobile iOS/macOS)
 
 ### iOS App Architecture
-Core architecture patterns: RZFlight model reuse, composed AppState, domain structure, environment injection. **Read first** before any iOS work.
+Core architecture patterns: RZFlight model reuse, composed AppState, domain structure, environment injection. **Read first** before any FlyFunEuroAIP work.
 → Full doc: IOS_APP_ARCHITECTURE.md
 
 ### iOS App UI Layout
