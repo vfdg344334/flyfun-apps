@@ -30,9 +30,9 @@ struct NotamDetailView: View {
                     mapSection
                 }
                 messageSection
-                rawTextSection
                 detailsSection
                 noteSection
+                rawTextSection
             }
             .padding()
         }
@@ -306,33 +306,27 @@ struct NotamDetailView: View {
                             .monospaced()
                     }
 
+                    // Subject and Condition in one row
                     GridRow {
-                        Text("Subject")
-                            .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
+                            Text("Subject")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             Text("\(qCodeInfo.subjectMeaning) (\(qCodeInfo.subjectCode))")
                             Text(qCodeInfo.subjectCategory)
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
-                    }
 
-                    GridRow {
-                        Text("Condition")
-                            .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
+                            Text("Condition")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             Text("\(qCodeInfo.conditionMeaning) (\(qCodeInfo.conditionCode))")
                             Text(qCodeInfo.conditionCategory)
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
-                    }
-
-                    GridRow {
-                        Text("Summary")
-                            .foregroundStyle(.secondary)
-                        Text(qCodeInfo.displayText)
-                            .fontWeight(.medium)
                     }
                 } else if let qCode = notam.qCode {
                     GridRow {

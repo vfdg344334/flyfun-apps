@@ -12,6 +12,7 @@ import RZFlight
 struct iPadLayoutView: View {
     @Environment(\.appState) private var appState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isBriefingsExpanded = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -183,6 +184,8 @@ struct iPadLayoutView: View {
     @ViewBuilder
     private func briefingsSection(flight: CDFlight) -> some View {
         let briefings = flight.sortedBriefings
+        let currentBriefing = appState?.briefing.currentCDBriefing
+        let olderBriefings = briefings.filter { $0.id != currentBriefing?.id }
 
         if briefings.isEmpty {
             Button {
@@ -191,37 +194,38 @@ struct iPadLayoutView: View {
                 Label("Import First Briefing", systemImage: "square.and.arrow.down")
             }
         } else {
-            ForEach(briefings, id: \.id) { briefing in
+            // Current briefing (always visible)
+            if let current = currentBriefing {
+                briefingRow(current, isCurrent: true)
+            }
+
+            // Older briefings (expandable)
+            if !olderBriefings.isEmpty {
                 Button {
-                    // Load this briefing
-                    appState?.briefing.loadBriefing(briefing)
+                    withAnimation {
+                        isBriefingsExpanded.toggle()
+                    }
                 } label: {
                     HStack {
-                        if briefing.isLatest {
-                            Image(systemName: "star.fill")
-                                .foregroundStyle(.yellow)
-                                .font(.caption)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(briefing.formattedImportDate)
-                                .font(.subheadline)
-                            Text("\(briefing.notamCount) NOTAMs")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
+                        Text("Previous Briefings (\(olderBriefings.count))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Spacer()
-
-                        if appState?.briefing.currentCDBriefing?.id == briefing.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.blue)
-                        }
+                        Image(systemName: isBriefingsExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .buttonStyle(.plain)
+
+                if isBriefingsExpanded {
+                    ForEach(olderBriefings, id: \.id) { briefing in
+                        briefingRow(briefing, isCurrent: false)
+                    }
+                }
             }
 
+            // Import button (always visible)
             Button {
                 appState?.navigation.showImportSheet()
             } label: {
@@ -229,6 +233,37 @@ struct iPadLayoutView: View {
                     .font(.caption)
             }
         }
+    }
+
+    @ViewBuilder
+    private func briefingRow(_ briefing: CDBriefing, isCurrent: Bool) -> some View {
+        Button {
+            appState?.briefing.loadBriefing(briefing)
+        } label: {
+            HStack {
+                if briefing.isLatest {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.caption)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(briefing.formattedImportDate)
+                        .font(.subheadline)
+                    Text("\(briefing.notamCount) NOTAMs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.blue)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Filter Controls
