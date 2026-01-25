@@ -175,33 +175,6 @@ final class FlightRepository {
 
     /// Update NOTAM status in a briefing
     func updateNotamStatus(
-        notamId: String,
-        briefing: CDBriefing,
-        status: NotamStatus,
-        textNote: String? = nil
-    ) throws {
-        if let cdStatus = CDNotamStatus.find(notamId: notamId, briefing: briefing, in: viewContext) {
-            cdStatus.statusEnum = status
-            if let note = textNote {
-                cdStatus.textNote = note
-            }
-        } else {
-            // Create new status entry
-            let cdStatus = CDNotamStatus(context: viewContext)
-            cdStatus.id = UUID()
-            cdStatus.notamId = notamId
-            cdStatus.identityKey = notamId // Will need to compute proper key
-            cdStatus.status = status.rawValue
-            cdStatus.textNote = textNote
-            cdStatus.updatedAt = Date()
-            cdStatus.briefing = briefing
-        }
-
-        try viewContext.save()
-    }
-
-    /// Update NOTAM status using the NOTAM object
-    func updateNotamStatus(
         _ notam: Notam,
         briefing: CDBriefing,
         status: NotamStatus,
