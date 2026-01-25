@@ -11,6 +11,7 @@ import RZFlight
 /// Main NOTAM list view with grouping support
 struct NotamListView: View {
     @Environment(\.appState) private var appState
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         Group {
@@ -144,9 +145,16 @@ struct NotamListView: View {
             set: { id in
                 if let id, let notam = appState?.notams.allNotams.first(where: { $0.id == id }) {
                     appState?.notams.selectedNotam = notam
+
                     // Mark as read when selected
                     if appState?.settings.autoMarkAsRead == true {
                         appState?.notams.markAsRead(notam)
+                    }
+
+                    // On iPhone (compact), present detail as sheet
+                    // On iPad (regular), NavigationSplitView handles it automatically
+                    if horizontalSizeClass == .compact {
+                        appState?.navigation.showNotamDetail(notamId: id)
                     }
                 }
             }

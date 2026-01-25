@@ -215,9 +215,6 @@ final class NotamDomain {
     /// Text search query
     var searchQuery: String = ""
 
-    /// User annotations keyed by NOTAM ID (legacy FMDB storage)
-    private(set) var annotations: [String: NotamAnnotation] = [:]
-
     /// Identity keys from previous briefings (for new NOTAM detection)
     private(set) var previousIdentityKeys: Set<String> = []
 
@@ -302,19 +299,19 @@ final class NotamDomain {
         case .all:
             break
         case .unread:
-            notams = notams.filter { annotation(for: $0)?.status == .unread }
+            notams = notams.filter { enrichedNotam(for: $0)?.status == .unread }
         case .important:
-            notams = notams.filter { annotation(for: $0)?.status == .important }
+            notams = notams.filter { enrichedNotam(for: $0)?.status == .important }
         case .followUp:
-            notams = notams.filter { annotation(for: $0)?.status == .followUp }
+            notams = notams.filter { enrichedNotam(for: $0)?.status == .followUp }
         }
 
         // 6. Apply visibility filter
         if !visibilityFilter.showIgnored {
-            notams = notams.filter { annotation(for: $0)?.status != .ignore }
+            notams = notams.filter { enrichedNotam(for: $0)?.status != .ignore }
         }
         if !visibilityFilter.showRead {
-            notams = notams.filter { annotation(for: $0)?.status != .read }
+            notams = notams.filter { enrichedNotam(for: $0)?.status != .read }
         }
 
         return notams
@@ -471,13 +468,13 @@ final class NotamDomain {
 
     // MARK: - Dependencies
 
-    private let annotationStore: AnnotationStore
+    private let flightRepository: FlightRepository
     private var ignoreListManager: IgnoreListManager?
 
     // MARK: - Init
 
-    init(annotationStore: AnnotationStore, ignoreListManager: IgnoreListManager? = nil) {
-        self.annotationStore = annotationStore
+    init(flightRepository: FlightRepository, ignoreListManager: IgnoreListManager? = nil) {
+        self.flightRepository = flightRepository
         self.ignoreListManager = ignoreListManager
     }
 
@@ -488,7 +485,9 @@ final class NotamDomain {
 
     // MARK: - Actions
 
-    /// Set NOTAMs from a loaded briefing (legacy flow without Core Data)
+    /// Set NOTAMs from a loaded briefing (standalone mode without Core Data flight)
+    /// Note: In this mode, status persistence is not available.
+    /// Use setBriefing(_:cdBriefing:previousKeys:) for full functionality.
     func setBriefing(_ briefing: Briefing) {
         self.briefingId = briefing.id
         self.allNotams = briefing.notams
@@ -513,26 +512,13 @@ final class NotamDomain {
             }
         }
 
-        // Load annotations for this briefing (legacy FMDB storage)
+        // Build enriched NOTAMs (standalone mode - all unread)
         Task {
-            annotations = await annotationStore.loadAnnotations(forBriefingId: briefing.id)
-            // Initialize unread annotations for new NOTAMs
-            for notam in briefing.notams {
-                if annotations[notam.id] == nil {
-                    annotations[notam.id] = NotamAnnotation(
-                        notamId: notam.id,
-                        briefingId: briefing.id,
-                        status: .unread
-                    )
-                }
-            }
-
-            // Build enriched NOTAMs (legacy mode - no Core Data status)
             await loadIgnoredKeys()
-            buildEnrichedNotams()
+            buildEnrichedNotamsStandalone()
         }
 
-        Logger.app.info("NotamDomain loaded \(briefing.notams.count) NOTAMs")
+        Logger.app.info("NotamDomain loaded \(briefing.notams.count) NOTAMs (standalone mode)")
     }
 
     /// Set NOTAMs from a Core Data briefing with status tracking
@@ -584,16 +570,16 @@ final class NotamDomain {
         }
     }
 
-    /// Build enriched NOTAMs from legacy annotations
-    private func buildEnrichedNotams() {
+    /// Build enriched NOTAMs for standalone mode (no Core Data)
+    /// All NOTAMs start as unread in this mode
+    private func buildEnrichedNotamsStandalone() {
         enrichedNotams = allNotams.map { notam in
-            let annotation = annotations[notam.id]
             let identityKey = NotamIdentity.key(for: notam)
             return EnrichedNotam(
                 notam: notam,
-                status: annotation?.status ?? .unread,
-                textNote: annotation?.textNote,
-                statusChangedAt: annotation?.statusChangedAt,
+                status: .unread,
+                textNote: nil,
+                statusChangedAt: nil,
                 isNew: !previousIdentityKeys.contains(identityKey),
                 isGloballyIgnored: ignoredIdentityKeys.contains(identityKey)
             )
@@ -603,7 +589,7 @@ final class NotamDomain {
     /// Build enriched NOTAMs from Core Data statuses
     private func buildEnrichedNotamsFromCoreData() {
         guard let cdBriefing = currentCDBriefing else {
-            buildEnrichedNotams()
+            buildEnrichedNotamsStandalone()
             return
         }
 
@@ -622,7 +608,7 @@ final class NotamDomain {
         if currentCDBriefing != nil {
             buildEnrichedNotamsFromCoreData()
         } else {
-            buildEnrichedNotams()
+            buildEnrichedNotamsStandalone()
         }
     }
 
@@ -635,7 +621,6 @@ final class NotamDomain {
         currentCDBriefing = nil
         selectedNotam = nil
         selectedEnrichedNotam = nil
-        annotations = [:]
         airportCoordinates = [:]
         previousIdentityKeys = []
     }
@@ -658,62 +643,54 @@ final class NotamDomain {
         }
     }
 
-    /// Get annotation for a NOTAM
-    func annotation(for notam: Notam) -> NotamAnnotation? {
-        annotations[notam.id]
+    /// Get enriched NOTAM for a given notam
+    func enrichedNotam(for notam: Notam) -> EnrichedNotam? {
+        enrichedNotams.first { $0.notamId == notam.id }
     }
 
-    /// Update annotation status for a NOTAM
+    /// Update status for a NOTAM (persists to Core Data)
     func setStatus(_ status: NotamStatus, for notam: Notam) {
-        guard let briefingId else { return }
+        guard let cdBriefing = currentCDBriefing else {
+            Logger.app.warning("Cannot set status without Core Data briefing")
+            return
+        }
 
-        var annotation = annotations[notam.id] ?? NotamAnnotation(
-            notamId: notam.id,
-            briefingId: briefingId,
-            status: status
-        )
-        annotation.status = status
-        annotation.statusChangedAt = Date()
-        annotation.updatedAt = Date()
-
-        annotations[notam.id] = annotation
-
-        // Persist
-        Task {
-            await annotationStore.saveAnnotation(annotation)
+        do {
+            try flightRepository.updateNotamStatus(notam, briefing: cdBriefing, status: status)
+            refreshEnrichedNotams()
+        } catch {
+            Logger.app.error("Failed to update NOTAM status: \(error.localizedDescription)")
         }
     }
 
-    /// Add a text note to a NOTAM
+    /// Add a text note to a NOTAM (persists to Core Data)
     func setNote(_ note: String?, for notam: Notam) {
-        guard let briefingId else { return }
+        guard let cdBriefing = currentCDBriefing else {
+            Logger.app.warning("Cannot set note without Core Data briefing")
+            return
+        }
 
-        var annotation = annotations[notam.id] ?? NotamAnnotation(
-            notamId: notam.id,
-            briefingId: briefingId,
-            status: .unread
-        )
-        annotation.textNote = note
-        annotation.updatedAt = Date()
+        // Get current status to preserve it
+        let currentStatus = enrichedNotam(for: notam)?.status ?? .unread
 
-        annotations[notam.id] = annotation
-
-        // Persist
-        Task {
-            await annotationStore.saveAnnotation(annotation)
+        do {
+            try flightRepository.updateNotamStatus(notam, briefing: cdBriefing, status: currentStatus, textNote: note)
+            refreshEnrichedNotams()
+        } catch {
+            Logger.app.error("Failed to update NOTAM note: \(error.localizedDescription)")
         }
     }
 
     /// Mark a NOTAM as read
     func markAsRead(_ notam: Notam) {
-        if annotation(for: notam)?.status == .unread {
+        if enrichedNotam(for: notam)?.status == .unread {
             setStatus(.read, for: notam)
         }
     }
 
     /// Toggle important status
     func toggleImportant(_ notam: Notam) {
-        let current = annotation(for: notam)?.status ?? .unread
+        let current = enrichedNotam(for: notam)?.status ?? .unread
         let newStatus: NotamStatus = (current == .important) ? .read : .important
         setStatus(newStatus, for: notam)
     }

@@ -34,11 +34,6 @@ Create a new Xcode project:
 Add the following Swift Package:
 - **RZFlight**: `https://github.com/roznet/rzflight` (branch: main)
 
-Add via CocoaPods (Podfile):
-```ruby
-pod 'FMDB'
-```
-
 ### 5. Add Source Files
 
 Copy all `.swift` files from this directory structure into the Xcode project.
@@ -64,9 +59,14 @@ FlyFunBrief/
 │   ├── Services/
 │   │   └── BriefingService.swift   # API communication
 │   ├── Data/
-│   │   └── AnnotationStore.swift   # SQLite persistence
+│   │   ├── Persistence/            # Core Data with CloudKit
+│   │   │   ├── PersistenceController.swift
+│   │   │   └── FlyFunBrief.xcdatamodeld
+│   │   └── Repositories/
+│   │       └── FlightRepository.swift  # Core Data CRUD
 │   ├── Models/
-│   │   └── NotamAnnotation.swift   # User annotation model
+│   │   ├── NotamStatus.swift       # User status enum
+│   │   └── EnrichedNotam.swift     # NOTAM with user state
 │   └── Config/
 │       └── SecretsManager.swift    # Configuration loading
 └── UserInterface/

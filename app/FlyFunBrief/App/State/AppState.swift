@@ -46,9 +46,6 @@ final class AppState {
     /// Service for API communication
     let briefingService: BriefingService
 
-    /// Local storage for user annotations (legacy FMDB)
-    let annotationStore: AnnotationStore
-
     /// Global NOTAM ignore list manager
     let ignoreListManager: IgnoreListManager
 
@@ -68,12 +65,11 @@ final class AppState {
 
         // Initialize services
         self.briefingService = BriefingService()
-        self.annotationStore = AnnotationStore()
 
         // Initialize domains
         self.flights = FlightDomain(repository: flightRepository)
         self.briefing = BriefingDomain(service: briefingService)
-        self.notams = NotamDomain(annotationStore: annotationStore, ignoreListManager: ignoreListManager)
+        self.notams = NotamDomain(flightRepository: flightRepository, ignoreListManager: ignoreListManager)
         self.navigation = NavigationDomain()
         self.settings = SettingsDomain()
 
@@ -154,9 +150,6 @@ final class AppState {
     /// Called when app appears
     func onAppear() async {
         Logger.app.info("AppState.onAppear")
-
-        // Initialize legacy annotation store
-        await annotationStore.initialize()
 
         // Load flights from Core Data
         await flights.loadFlights()

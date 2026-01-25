@@ -106,13 +106,12 @@ Central domain for NOTAM state and filtering (~657 lines).
 final class NotamDomain {
     // Source data
     var allNotams: [Notam] = []
-    var currentBriefing: Briefing?
-    var currentCDBriefing: CDBriefing?
+    var currentCDBriefing: CDBriefing?  // Core Data briefing for persistence
     var currentRoute: Route?
 
-    // User state
-    var annotations: [String: NotamAnnotation] = [:]  // keyed by notam.id
-    var ignoredIdentityKeys: Set<String> = []         // global ignore list
+    // User state (persisted via Core Data through FlightRepository)
+    var ignoredIdentityKeys: Set<String> = []  // global ignore list
+    var previousIdentityKeys: Set<String> = []  // for "new" detection
 
     // Filter state
     var searchQuery: String = ""
@@ -327,28 +326,23 @@ let isIgnored = ignoredKeys.contains(identityKey)
 
 ## Usage Examples
 
-### Build enriched NOTAMs from briefing
+### Build enriched NOTAMs from Core Data briefing
 
 ```swift
-func setBriefing(_ briefing: Briefing, cdBriefing: CDBriefing?) {
+func setBriefing(_ briefing: Briefing, cdBriefing: CDBriefing, previousKeys: Set<String>) {
     allNotams = briefing.notams
-    currentBriefing = briefing
+    currentRoute = briefing.route
     currentCDBriefing = cdBriefing
+    previousIdentityKeys = previousKeys
 
-    let statuses = cdBriefing?.statusesByIdentityKey ?? [:]
-    let ignoredKeys = ignoreListManager.getIgnoredIdentityKeys()
-    let previousKeys = getPreviousIdentityKeys()
-
-    enrichedNotams = allNotams.map { notam in
-        let key = NotamIdentity.key(for: notam)
-        return EnrichedNotam(
-            notam: notam,
-            status: statuses[key]?.statusEnum ?? .unread,
-            textNote: statuses[key]?.textNote,
-            isNew: !previousKeys.contains(key),
-            isGloballyIgnored: ignoredKeys.contains(key)
-        )
-    }
+    // Build enriched NOTAMs using Core Data statuses
+    let statuses = cdBriefing.statusesByNotamId
+    enrichedNotams = EnrichedNotam.enrich(
+        notams: allNotams,
+        statuses: statuses,
+        previousIdentityKeys: previousKeys,
+        ignoredKeys: ignoredIdentityKeys
+    )
 }
 ```
 
@@ -356,25 +350,17 @@ func setBriefing(_ briefing: Briefing, cdBriefing: CDBriefing?) {
 
 ```swift
 func setStatus(_ status: NotamStatus, for notam: Notam) {
-    // Update local state
-    annotations[notam.id] = NotamAnnotation(
-        notamId: notam.id,
-        status: status
-    )
-
-    // Persist asynchronously
-    Task {
-        if let cdBriefing = currentCDBriefing {
-            flightRepository.updateNotamStatus(
-                notam,
-                briefing: cdBriefing,
-                status: status,
-                textNote: nil
-            )
-        }
+    guard let cdBriefing = currentCDBriefing else {
+        Logger.app.warning("Cannot set status without Core Data briefing")
+        return
     }
 
-    refreshEnrichedNotams()
+    do {
+        try flightRepository.updateNotamStatus(notam, briefing: cdBriefing, status: status)
+        refreshEnrichedNotams()
+    } catch {
+        Logger.app.error("Failed to update NOTAM status: \(error.localizedDescription)")
+    }
 }
 ```
 

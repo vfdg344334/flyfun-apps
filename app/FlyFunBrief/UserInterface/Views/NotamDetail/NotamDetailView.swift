@@ -19,8 +19,9 @@ struct NotamDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var isZoomedToNotam = false
 
-    private var annotation: NotamAnnotation? {
-        appState?.notams.annotation(for: notam)
+    /// Get the enriched version of this NOTAM with status info
+    private var enrichedNotam: EnrichedNotam? {
+        appState?.notams.enrichedNotam(for: notam)
     }
 
     var body: some View {
@@ -52,7 +53,7 @@ struct NotamDetailView: View {
                     Button {
                         appState?.notams.toggleImportant(notam)
                     } label: {
-                        if annotation?.status == .important {
+                        if enrichedNotam?.status == .important {
                             Label("Remove from Important", systemImage: "star.slash")
                         } else {
                             Label("Mark as Important", systemImage: "star")
@@ -162,7 +163,7 @@ struct NotamDetailView: View {
     }
 
     private func statusButton(_ status: NotamStatus, icon: String, label: String, color: Color) -> some View {
-        let isSelected = annotation?.status == status
+        let isSelected = enrichedNotam?.status == status
 
         return Button {
             appState?.notams.setStatus(status, for: notam)
@@ -547,7 +548,7 @@ struct NotamDetailView: View {
 
     private var noteBinding: Binding<String> {
         Binding(
-            get: { annotation?.textNote ?? "" },
+            get: { enrichedNotam?.textNote ?? "" },
             set: { appState?.notams.setNote($0.isEmpty ? nil : $0, for: notam) }
         )
     }
