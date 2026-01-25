@@ -25,6 +25,7 @@ def serialize_datetime(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 from euro_aip.briefing import ForeFlightSource, CategorizationPipeline
+from euro_aip.briefing.categorization import parse_q_code
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,23 @@ class RouteResponse(SwiftCompatibleModel):
     flight_level: Optional[int] = None
 
 
+class QCodeInfoResponse(SwiftCompatibleModel):
+    """Parsed Q-code information."""
+    q_code: str
+    subject_code: str
+    subject_meaning: str
+    subject_phrase: str
+    subject_category: str
+    condition_code: str
+    condition_meaning: str
+    condition_phrase: str
+    condition_category: str
+    display_text: str
+    short_text: str
+    is_checklist: bool = False
+    is_plain_language: bool = False
+
+
 class NotamResponse(SwiftCompatibleModel):
     """NOTAM data from a parsed briefing."""
     id: str
@@ -83,6 +101,7 @@ class NotamResponse(SwiftCompatibleModel):
 
     # Q-code fields
     q_code: Optional[str] = None
+    q_code_info: Optional[QCodeInfoResponse] = None
     traffic_type: Optional[str] = None
     purpose: Optional[str] = None
     scope: Optional[str] = None
@@ -169,6 +188,26 @@ def _route_to_response(route) -> Optional[RouteResponse]:
 
 def _notam_to_response(notam) -> NotamResponse:
     """Convert Notam model to NotamResponse."""
+    # Parse Q-code info if available
+    q_code_info = None
+    if notam.q_code:
+        info = parse_q_code(notam.q_code)
+        q_code_info = QCodeInfoResponse(
+            q_code=info.q_code,
+            subject_code=info.subject_code,
+            subject_meaning=info.subject_meaning,
+            subject_phrase=info.subject_phrase,
+            subject_category=info.subject_category,
+            condition_code=info.condition_code,
+            condition_meaning=info.condition_meaning,
+            condition_phrase=info.condition_phrase,
+            condition_category=info.condition_category,
+            display_text=info.display_text,
+            short_text=info.short_text,
+            is_checklist=info.is_checklist,
+            is_plain_language=info.is_plain_language,
+        )
+
     return NotamResponse(
         id=notam.id,
         location=notam.location,
@@ -180,6 +219,7 @@ def _notam_to_response(notam) -> NotamResponse:
         fir=notam.fir,
         affected_locations=notam.affected_locations or [],
         q_code=notam.q_code,
+        q_code_info=q_code_info,
         traffic_type=notam.traffic_type,
         purpose=notam.purpose,
         scope=notam.scope,
