@@ -56,6 +56,10 @@ final class BriefingDomain {
 
     // MARK: - Dependencies
 
+    /// Native PDF parser (offline, fast)
+    private let nativeParser = ForeFlightParser()
+
+    /// Server-based parser (fallback for non-ForeFlight sources)
     private let service: BriefingService
 
     // MARK: - Init
@@ -67,6 +71,7 @@ final class BriefingDomain {
     // MARK: - Actions
 
     /// Import a briefing from a PDF file URL
+    /// Uses native PDFKit parsing (fast, works offline)
     func importBriefing(from url: URL) async {
         Logger.app.info("Importing briefing from: \(url.path)")
 
@@ -80,13 +85,9 @@ final class BriefingDomain {
         }
 
         do {
-            // Read the file
-            importProgress = 0.1
-            let pdfData = try Data(contentsOf: url)
-
-            // Parse via API
+            // Parse locally using PDFKit (fast, offline)
             importProgress = 0.3
-            let briefing = try await service.parseBriefing(pdfData: pdfData, source: "foreflight")
+            let briefing = try nativeParser.parse(url: url)
 
             // Store in Core Data if handler is set
             importProgress = 0.7
@@ -99,7 +100,7 @@ final class BriefingDomain {
             currentBriefing = briefing
             onBriefingLoaded?(briefing)
 
-            Logger.app.info("Successfully imported briefing with \(briefing.notams.count) NOTAMs")
+            Logger.app.info("Successfully imported briefing with \(briefing.notams.count) NOTAMs (native parsing)")
 
         } catch {
             Logger.app.error("Failed to import briefing: \(error.localizedDescription)")
@@ -108,6 +109,7 @@ final class BriefingDomain {
     }
 
     /// Import a briefing from PDF data (from share extension)
+    /// Uses native PDFKit parsing (fast, works offline)
     func importBriefing(data: Data, source: String = "foreflight") async {
         Logger.app.info("Importing briefing from data (\(data.count) bytes)")
 
@@ -121,8 +123,9 @@ final class BriefingDomain {
         }
 
         do {
+            // Parse locally using PDFKit (fast, offline)
             importProgress = 0.3
-            let briefing = try await service.parseBriefing(pdfData: data, source: source)
+            let briefing = try nativeParser.parse(data: data)
 
             // Store in Core Data if handler is set
             importProgress = 0.7
@@ -134,7 +137,7 @@ final class BriefingDomain {
             currentBriefing = briefing
             onBriefingLoaded?(briefing)
 
-            Logger.app.info("Successfully imported briefing with \(briefing.notams.count) NOTAMs")
+            Logger.app.info("Successfully imported briefing with \(briefing.notams.count) NOTAMs (native parsing)")
 
         } catch {
             Logger.app.error("Failed to import briefing: \(error.localizedDescription)")
