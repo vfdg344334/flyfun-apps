@@ -29,12 +29,38 @@ struct FlyFunBriefApp: App {
         }
     }
 
-    /// Handle deep links from share extension
-    /// URL format: flyfunbrief://import?path=<encoded-file-path>
+    /// Handle URLs opened via deep link or "Open In"
+    /// Supports:
+    /// - flyfunbrief://import?path=<encoded-file-path> (from share extension)
+    /// - file://<path-to-pdf> (from "Open In" / document handler)
     private func handleOpenURL(_ url: URL) {
-        Logger.app.info("Received deep link: \(url.absoluteString)")
+        Logger.app.info("Received URL: \(url.absoluteString)")
 
-        guard url.scheme == "flyfunbrief" else { return }
+        // Handle file:// URLs (from "Open In" document handler)
+        if url.isFileURL {
+            // Check if it's a PDF
+            guard url.pathExtension.lowercased() == "pdf" else {
+                Logger.app.warning("Ignoring non-PDF file: \(url.lastPathComponent)")
+                return
+            }
+
+            // Need to access security-scoped resource for files from other apps
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            importBriefing(from: url)
+            return
+        }
+
+        // Handle flyfunbrief:// deep links (from share extension)
+        guard url.scheme == "flyfunbrief" else {
+            Logger.app.warning("Unknown URL scheme: \(url.scheme ?? "nil")")
+            return
+        }
 
         // Parse query parameter for file path
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -68,7 +94,7 @@ struct FlyFunBriefApp: App {
         importBriefing(fromPath: pendingPath)
     }
 
-    /// Import briefing from a file path
+    /// Import briefing from a file path (from share extension)
     private func importBriefing(fromPath path: String) {
         let fileURL = URL(fileURLWithPath: path)
 
@@ -78,10 +104,15 @@ struct FlyFunBriefApp: App {
             return
         }
 
-        Logger.app.info("Importing briefing from: \(fileURL.path)")
+        importBriefing(from: fileURL)
+    }
+
+    /// Import briefing from a URL (from "Open In" or direct file access)
+    private func importBriefing(from url: URL) {
+        Logger.app.info("Importing briefing from: \(url.path)")
 
         Task {
-            await appState.briefing.importBriefing(from: fileURL)
+            await appState.briefing.importBriefing(from: url)
         }
     }
 }
