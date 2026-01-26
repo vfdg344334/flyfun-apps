@@ -91,6 +91,7 @@ struct FlyFunBriefApp: App {
 struct ContentView: View {
     @Environment(\.appState) private var appState
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     /// App Group identifier for sharing data with extension
     private let appGroupId = "group.net.ro-z.flyfunbrief"
@@ -111,6 +112,13 @@ struct ContentView: View {
 
             // Check for pending imports from share extension
             checkForPendingImports()
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            // Check for pending imports when app becomes active (returning from background)
+            if newPhase == .active {
+                Logger.app.debug("App became active - checking for pending imports")
+                checkForPendingImports()
+            }
         }
     }
 
