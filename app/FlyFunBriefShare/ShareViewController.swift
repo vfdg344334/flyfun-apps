@@ -20,21 +20,182 @@ class ShareViewController: UIViewController {
     /// UserDefaults key for pending import path
     private let pendingImportKey = "pendingBriefingImportPath"
 
+    // UI Elements
+    private let containerView = UIView()
+    private let iconImageView = UIImageView()
+    private let titleLabel = UILabel()
+    private let messageLabel = UILabel()
+    private let openAppButton = UIButton(type: .system)
+    private let doneButton = UIButton(type: .system)
+    private let spinner = UIActivityIndicatorView(style: .large)
+
+    private var savedFileURL: URL?
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
-
-        // Set up minimal UI - show brief loading indicator
-        view.backgroundColor = .systemBackground
-
-        let spinner = UIActivityIndicatorView(style: .large)
-        spinner.center = view.center
-        spinner.startAnimating()
-        view.addSubview(spinner)
-
-        // Process the shared items
+        setupUI()
         processSharedItems()
+    }
+
+    // MARK: - UI Setup
+
+    private func setupUI() {
+        // Semi-transparent background
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+
+        // Container card
+        containerView.backgroundColor = .systemBackground
+        containerView.layer.cornerRadius = 16
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(containerView)
+
+        // Icon
+        iconImageView.contentMode = .scaleAspectFit
+        iconImageView.tintColor = .systemBlue
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(iconImageView)
+
+        // Title
+        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.textAlignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(titleLabel)
+
+        // Message
+        messageLabel.font = .systemFont(ofSize: 15)
+        messageLabel.textColor = .secondaryLabel
+        messageLabel.textAlignment = .center
+        messageLabel.numberOfLines = 0
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(messageLabel)
+
+        // Open App button
+        openAppButton.setTitle("Open FlyFunBrief", for: .normal)
+        openAppButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        openAppButton.backgroundColor = .systemBlue
+        openAppButton.setTitleColor(.white, for: .normal)
+        openAppButton.layer.cornerRadius = 12
+        openAppButton.translatesAutoresizingMaskIntoConstraints = false
+        openAppButton.addTarget(self, action: #selector(openAppTapped), for: .touchUpInside)
+        openAppButton.isHidden = true
+        containerView.addSubview(openAppButton)
+
+        // Done button
+        doneButton.setTitle("Done", for: .normal)
+        doneButton.titleLabel?.font = .systemFont(ofSize: 17)
+        doneButton.translatesAutoresizingMaskIntoConstraints = false
+        doneButton.addTarget(self, action: #selector(doneTapped), for: .touchUpInside)
+        doneButton.isHidden = true
+        containerView.addSubview(doneButton)
+
+        // Spinner
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(spinner)
+
+        NSLayoutConstraint.activate([
+            containerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            containerView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            containerView.widthAnchor.constraint(equalToConstant: 300),
+
+            iconImageView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 24),
+            iconImageView.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 60),
+            iconImageView.heightAnchor.constraint(equalToConstant: 60),
+
+            titleLabel.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 16),
+            titleLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            titleLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -20),
+
+            messageLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            messageLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            messageLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -20),
+
+            openAppButton.topAnchor.constraint(equalTo: messageLabel.bottomAnchor, constant: 20),
+            openAppButton.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            openAppButton.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -20),
+            openAppButton.heightAnchor.constraint(equalToConstant: 50),
+
+            doneButton.topAnchor.constraint(equalTo: openAppButton.bottomAnchor, constant: 12),
+            doneButton.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+            doneButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -20),
+
+            spinner.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+            spinner.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 20),
+        ])
+
+        // Initial state: loading
+        showLoading()
+    }
+
+    private func showLoading() {
+        iconImageView.image = UIImage(systemName: "doc.text")
+        titleLabel.text = "Importing Briefing..."
+        messageLabel.text = ""
+        spinner.startAnimating()
+        openAppButton.isHidden = true
+        doneButton.isHidden = true
+    }
+
+    private func showSuccess() {
+        spinner.stopAnimating()
+        iconImageView.image = UIImage(systemName: "checkmark.circle.fill")
+        iconImageView.tintColor = .systemGreen
+        titleLabel.text = "Briefing Ready!"
+        messageLabel.text = "Open FlyFunBrief to review your NOTAMs"
+        openAppButton.isHidden = false
+        doneButton.isHidden = false
+    }
+
+    private func showError(_ message: String) {
+        spinner.stopAnimating()
+        iconImageView.image = UIImage(systemName: "xmark.circle.fill")
+        iconImageView.tintColor = .systemRed
+        titleLabel.text = "Import Failed"
+        messageLabel.text = message
+        openAppButton.isHidden = true
+        doneButton.setTitle("Close", for: .normal)
+        doneButton.isHidden = false
+    }
+
+    // MARK: - Actions
+
+    @objc private func openAppTapped() {
+        guard let fileURL = savedFileURL else {
+            completeSuccessfully()
+            return
+        }
+
+        // Try to open the main app via URL scheme
+        guard let encodedPath = fileURL.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "flyfunbrief://import?path=\(encodedPath)") else {
+            completeSuccessfully()
+            return
+        }
+
+        // Use responder chain to open URL (works in some iOS versions)
+        var responder: UIResponder? = self
+        while responder != nil {
+            if let application = responder as? UIApplication {
+                application.open(url, options: [:]) { [weak self] success in
+                    self?.logger.info("Open app result: \(success)")
+                    self?.completeSuccessfully()
+                }
+                return
+            }
+            responder = responder?.next
+        }
+
+        // Fallback: use extensionContext.open (may not work)
+        extensionContext?.open(url) { [weak self] success in
+            self?.logger.info("extensionContext.open result: \(success)")
+            self?.completeSuccessfully()
+        }
+    }
+
+    @objc private func doneTapped() {
+        completeSuccessfully()
     }
 
     // MARK: - Processing
@@ -43,7 +204,7 @@ class ShareViewController: UIViewController {
         guard let extensionContext = extensionContext,
               let inputItems = extensionContext.inputItems as? [NSExtensionItem] else {
             logger.error("No extension context or input items")
-            completeWithError("No items to share")
+            DispatchQueue.main.async { self.showError("No items to share") }
             return
         }
 
@@ -60,7 +221,7 @@ class ShareViewController: UIViewController {
         }
 
         logger.error("No PDF found in shared items")
-        completeWithError("No PDF file found")
+        DispatchQueue.main.async { self.showError("No PDF file found") }
     }
 
     private func processPDFProvider(_ provider: NSItemProvider) {
@@ -69,13 +230,13 @@ class ShareViewController: UIViewController {
 
             if let error = error {
                 self.logger.error("Error loading PDF: \(error.localizedDescription)")
-                self.completeWithError("Failed to load PDF")
+                DispatchQueue.main.async { self.showError("Failed to load PDF") }
                 return
             }
 
             guard let url = url else {
                 self.logger.error("No URL for PDF")
-                self.completeWithError("PDF file not accessible")
+                DispatchQueue.main.async { self.showError("PDF file not accessible") }
                 return
             }
 
@@ -89,7 +250,7 @@ class ShareViewController: UIViewController {
             forSecurityApplicationGroupIdentifier: appGroupId
         ) else {
             logger.error("Could not access app group container")
-            completeWithError("Storage not available")
+            DispatchQueue.main.async { self.showError("Storage not available") }
             return
         }
 
@@ -106,20 +267,24 @@ class ShareViewController: UIViewController {
             try FileManager.default.copyItem(at: url, to: destinationURL)
             logger.info("Copied PDF to shared container: \(filename)")
 
-            // Save pending import path to shared UserDefaults (reliable fallback)
+            // Save for later
+            savedFileURL = destinationURL
+
+            // Save pending import path to shared UserDefaults
             savePendingImport(path: destinationURL.path)
 
-            // Try to open main app with deep link
-            openMainApp(with: destinationURL)
+            // Show success UI
+            DispatchQueue.main.async {
+                self.showSuccess()
+            }
 
         } catch {
             logger.error("Failed to copy PDF: \(error.localizedDescription)")
-            completeWithError("Failed to save PDF")
+            DispatchQueue.main.async { self.showError("Failed to save PDF") }
         }
     }
 
     /// Save the pending import path to shared UserDefaults
-    /// This ensures the main app can find the file even if deep link fails
     private func savePendingImport(path: String) {
         guard let defaults = UserDefaults(suiteName: appGroupId) else {
             logger.warning("Could not access shared UserDefaults")
@@ -131,49 +296,11 @@ class ShareViewController: UIViewController {
         logger.info("Saved pending import path to UserDefaults")
     }
 
-    private func openMainApp(with fileURL: URL) {
-        // Construct deep link URL with proper format: scheme://host/path
-        // Use "import" as host and file path as the URL path
-        guard let encodedPath = fileURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "flyfunbrief://import?path=\(encodedPath)") else {
-            logger.error("Failed to create deep link URL")
-            // Still complete successfully - app will find file via UserDefaults
-            completeSuccessfully()
-            return
-        }
-
-        logger.info("Attempting deep link: \(url.absoluteString)")
-
-        // Open URL via extensionContext
-        DispatchQueue.main.async { [weak self] in
-            self?.extensionContext?.open(url) { success in
-                if success {
-                    self?.logger.info("Opened main app via deep link")
-                } else {
-                    // Deep link failed - app will find file via UserDefaults on next launch
-                    self?.logger.warning("Deep link failed - file saved for next app launch")
-                }
-                self?.completeSuccessfully()
-            }
-        }
-    }
-
     // MARK: - Completion
 
     private func completeSuccessfully() {
         DispatchQueue.main.async {
             self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
-        }
-    }
-
-    private func completeWithError(_ message: String) {
-        DispatchQueue.main.async {
-            let error = NSError(
-                domain: "com.ro-z.flyfunbrief.share",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: message]
-            )
-            self.extensionContext?.cancelRequest(withError: error)
         }
     }
 }
