@@ -77,7 +77,7 @@ final class SettingsDomain {
             self.defaultGrouping = .airport
         }
 
-        self.autoMarkAsRead = UserDefaults.standard.bool(forKey: Keys.autoMarkAsRead)
+        self.autoMarkAsRead = UserDefaults.standard.object(forKey: Keys.autoMarkAsRead) as? Bool ?? true
         self.showRawText = UserDefaults.standard.object(forKey: Keys.showRawText) as? Bool ?? true
         self.showNotamMap = UserDefaults.standard.object(forKey: Keys.showNotamMap) as? Bool ?? true
     }
@@ -99,7 +99,7 @@ final class SettingsDomain {
     func resetToDefaults() {
         apiBaseURL = Self.defaultAPIBaseURL
         defaultGrouping = .airport
-        autoMarkAsRead = false
+        autoMarkAsRead = true
         showRawText = true
         showNotamMap = true
         Logger.app.info("Settings reset to defaults")

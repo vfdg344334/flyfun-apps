@@ -68,8 +68,9 @@ struct NotamDetailView: View {
             }
         }
         .onAppear {
-            // Mark as read when viewing
-            if appState?.settings.autoMarkAsRead == true {
+            // Auto-mark as read when viewing (if setting enabled and currently unread)
+            if appState?.settings.autoMarkAsRead == true,
+               enrichedNotam?.status == .unread {
                 appState?.notams.markAsRead(notam)
             }
         }
