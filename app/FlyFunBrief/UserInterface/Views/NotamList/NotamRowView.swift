@@ -8,13 +8,18 @@
 import SwiftUI
 import RZFlight
 
-/// Compact row view for NOTAM list
+/// Row view for NOTAM list with configurable display style
 struct NotamRowView: View {
     @Environment(\.appState) private var appState
     let enrichedNotam: EnrichedNotam
 
     /// Convenience accessor for underlying NOTAM
     private var notam: Notam { enrichedNotam.notam }
+
+    /// Current row style from app state
+    private var rowStyle: NotamRowStyle {
+        appState?.notams.rowStyle ?? .standard
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -23,7 +28,7 @@ struct NotamRowView: View {
             Spacer()
             badges
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, rowStyle == .full ? 8 : 4)
         .opacity(enrichedNotam.isGloballyIgnored ? 0.5 : 1.0)
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button {
@@ -98,41 +103,80 @@ struct NotamRowView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Title row: full width
-            Text(notamTitle)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Title row with inline ID for compact mode
+            if rowStyle == .compact {
+                compactTitleRow
+            } else {
+                // Title row: full width
+                Text(notamTitle)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-            // NOTAM ID, issuing authority, and date
-            HStack(spacing: 8) {
-                Text(notam.id)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+            // Detail row (ID, location, date) - hidden in compact mode
+            if rowStyle.showDetailRow {
+                HStack(spacing: 8) {
+                    Text(notam.id)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
 
-                Text(notam.location)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.tertiary)
-
-                Spacer()
-
-                // Time info
-                if notam.isPermanent {
-                    Text("PERM")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.orange)
-                } else if let from = notam.effectiveFrom {
-                    Text(formatShortDate(from))
-                        .font(.caption2)
+                    Text(notam.location)
+                        .font(.caption.monospaced())
                         .foregroundStyle(.tertiary)
+
+                    Spacer()
+
+                    // Time info
+                    if notam.isPermanent {
+                        Text("PERM")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.orange)
+                    } else if let from = notam.effectiveFrom {
+                        Text(formatShortDate(from))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
 
-            // Message text (smaller)
-            Text(notam.message.prefix(120) + (notam.message.count > 120 ? "..." : ""))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            // Message text - line limit varies by style
+            if rowStyle.messageLineLimit > 0 {
+                let charLimit = rowStyle == .full ? 500 : 120
+                Text(notam.message.prefix(charLimit) + (notam.message.count > charLimit ? "..." : ""))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(rowStyle.messageLineLimit)
+            }
+        }
+    }
+
+    // MARK: - Compact Title Row
+
+    /// Compact mode: title + ID on same line
+    private var compactTitleRow: some View {
+        HStack(spacing: 8) {
+            Text(notamTitle)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Text(notam.id)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+
+            // Time info inline
+            if notam.isPermanent {
+                Text("PERM")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+            } else if let from = notam.effectiveFrom {
+                Text(formatShortDate(from))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 

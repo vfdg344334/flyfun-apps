@@ -25,9 +25,11 @@ struct iPadLayoutView: View {
         } content: {
             // Content: NOTAM list, flight list, etc.
             contentColumn
+                .navigationSplitViewColumnWidth(min: 350, ideal: 450, max: 550)
         } detail: {
             // Detail: Selected NOTAM or flight details
             detailContent
+                .navigationSplitViewColumnWidth(min: 350, ideal: 450, max: 600)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -96,6 +98,10 @@ struct iPadLayoutView: View {
 
             // Filter sections (only if we have a briefing loaded)
             if appState?.briefing.currentBriefing != nil {
+                Section("View Style") {
+                    rowStylePicker
+                }
+
                 Section("Status Filter") {
                     statusFilterPicker
                 }
@@ -268,6 +274,15 @@ struct iPadLayoutView: View {
 
     // MARK: - Filter Controls
 
+    private var rowStylePicker: some View {
+        Picker("Style", selection: rowStyleBinding) {
+            ForEach(NotamRowStyle.allCases) { style in
+                Text(style.rawValue).tag(style)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
     private var statusFilterPicker: some View {
         Picker("Status", selection: statusFilterBinding) {
             ForEach(StatusFilter.allCases) { status in
@@ -430,6 +445,13 @@ struct iPadLayoutView: View {
         Binding(
             get: { appState?.notams.statusFilter ?? .all },
             set: { appState?.notams.statusFilter = $0 }
+        )
+    }
+
+    private var rowStyleBinding: Binding<NotamRowStyle> {
+        Binding(
+            get: { appState?.notams.rowStyle ?? .standard },
+            set: { appState?.notams.rowStyle = $0 }
         )
     }
 

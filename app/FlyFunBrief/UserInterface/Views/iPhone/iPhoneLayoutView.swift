@@ -190,6 +190,22 @@ struct FlightNotamView: View {
 
     @ViewBuilder
     private var filterMenu: some View {
+        Section("View Style") {
+            ForEach(NotamRowStyle.allCases) { style in
+                Button {
+                    appState?.notams.rowStyle = style
+                } label: {
+                    if appState?.notams.rowStyle == style {
+                        Label(style.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(style.rawValue)
+                    }
+                }
+            }
+        }
+
+        Divider()
+
         Section("Status") {
             ForEach(StatusFilter.allCases) { status in
                 Button {

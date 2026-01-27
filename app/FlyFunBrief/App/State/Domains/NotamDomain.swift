@@ -39,6 +39,32 @@ enum NotamGrouping: String, CaseIterable, Identifiable {
     }
 }
 
+/// Row display style for NOTAM list
+enum NotamRowStyle: String, CaseIterable, Identifiable {
+    case compact = "Compact"
+    case standard = "Standard"
+    case full = "Full"
+
+    var id: String { rawValue }
+
+    /// Maximum lines for message text in each style
+    var messageLineLimit: Int {
+        switch self {
+        case .compact: return 0    // No message shown
+        case .standard: return 2
+        case .full: return 8
+        }
+    }
+
+    /// Whether to show detailed info row
+    var showDetailRow: Bool {
+        switch self {
+        case .compact: return false
+        case .standard, .full: return true
+        }
+    }
+}
+
 /// Route corridor filter configuration
 struct RouteFilter: Equatable {
     /// Space-separated ICAO codes defining the route
@@ -211,6 +237,9 @@ final class NotamDomain {
 
     /// Current grouping
     var grouping: NotamGrouping = .airport
+
+    /// Row display style
+    var rowStyle: NotamRowStyle = .standard
 
     /// Text search query
     var searchQuery: String = ""
