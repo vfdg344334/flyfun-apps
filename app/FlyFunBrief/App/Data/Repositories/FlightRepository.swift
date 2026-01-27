@@ -36,7 +36,8 @@ final class FlightRepository {
         destination: String,
         departureTime: Date? = nil,
         durationHours: Double? = nil,
-        routeICAOs: String? = nil
+        routeICAOs: String? = nil,
+        cruiseAltitude: Int32? = nil
     ) throws -> CDFlight {
         let flight = CDFlight.create(
             in: viewContext,
@@ -44,7 +45,8 @@ final class FlightRepository {
             destination: destination,
             departureTime: departureTime,
             durationHours: durationHours,
-            routeICAOs: routeICAOs
+            routeICAOs: routeICAOs,
+            cruiseAltitude: cruiseAltitude
         )
 
         try viewContext.save()
@@ -60,6 +62,7 @@ final class FlightRepository {
         departureTime: Date? = nil,
         durationHours: Double? = nil,
         routeICAOs: String? = nil,
+        cruiseAltitude: Int32? = nil,
         isArchived: Bool? = nil
     ) throws {
         if let origin = origin { flight.origin = origin.uppercased() }
@@ -67,6 +70,7 @@ final class FlightRepository {
         if let departureTime = departureTime { flight.departureTime = departureTime }
         if let durationHours = durationHours { flight.durationHours = durationHours }
         if let routeICAOs = routeICAOs { flight.routeICAOs = routeICAOs.uppercased() }
+        if let cruiseAltitude = cruiseAltitude { flight.cruiseAltitude = cruiseAltitude }
         if let isArchived = isArchived { flight.isArchived = isArchived }
 
         try viewContext.save()

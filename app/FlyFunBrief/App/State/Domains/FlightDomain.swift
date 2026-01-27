@@ -92,7 +92,8 @@ final class FlightDomain {
         destination: String,
         departureTime: Date? = nil,
         durationHours: Double? = nil,
-        routeICAOs: String? = nil
+        routeICAOs: String? = nil,
+        cruiseAltitude: Int32? = nil
     ) async -> CDFlight? {
         lastError = nil
 
@@ -102,7 +103,8 @@ final class FlightDomain {
                 destination: destination,
                 departureTime: departureTime,
                 durationHours: durationHours,
-                routeICAOs: routeICAOs
+                routeICAOs: routeICAOs,
+                cruiseAltitude: cruiseAltitude
             )
 
             // Reload flights to get sorted list
@@ -123,7 +125,8 @@ final class FlightDomain {
         destination: String? = nil,
         departureTime: Date? = nil,
         durationHours: Double? = nil,
-        routeICAOs: String? = nil
+        routeICAOs: String? = nil,
+        cruiseAltitude: Int32? = nil
     ) async {
         lastError = nil
 
@@ -134,7 +137,8 @@ final class FlightDomain {
                 destination: destination,
                 departureTime: departureTime,
                 durationHours: durationHours,
-                routeICAOs: routeICAOs
+                routeICAOs: routeICAOs,
+                cruiseAltitude: cruiseAltitude
             )
 
             // Reload to update sorting

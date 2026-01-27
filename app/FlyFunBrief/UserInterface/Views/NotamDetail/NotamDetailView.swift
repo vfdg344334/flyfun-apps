@@ -34,6 +34,9 @@ struct NotamDetailView: View {
                 }
                 messageSection
                 detailsSection
+                if !notam.documentReferences.isEmpty {
+                    documentReferencesSection
+                }
                 noteSection
                 rawTextSection
             }
@@ -97,26 +100,47 @@ struct NotamDetailView: View {
                     }
                     .font(.subheadline)
 
-                    if let from = notam.effectiveFrom {
-                        Label(formatDate(from), systemImage: "calendar")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if notam.isPermanent {
-                        Label("PERMANENT", systemImage: "infinity")
-                            .font(.caption.bold())
-                            .foregroundStyle(.orange)
-                    }
+                    // Date range
+                    dateRangeLabel
 
                     // Altitude constraints
                     if notam.lowerLimit != nil || notam.upperLimit != nil {
                         altitudeLabel
                     }
+
+                    // Distance to route
+                    if let distanceText = routeDistanceText {
+                        distanceLabel(distanceText)
+                    }
                 }
 
                 Spacer()
             }
+        }
+    }
+
+    // MARK: - Date Range Label
+
+    @ViewBuilder
+    private var dateRangeLabel: some View {
+        if notam.isPermanent {
+            if let from = notam.effectiveFrom {
+                Label("\(formatDate(from)) → PERM", systemImage: "calendar")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Label("PERMANENT", systemImage: "infinity")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+            }
+        } else if let from = notam.effectiveFrom, let to = notam.effectiveTo {
+            Label("\(formatDate(from)) → \(formatDate(to))", systemImage: "calendar")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let from = notam.effectiveFrom {
+            Label(formatDate(from), systemImage: "calendar")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -136,6 +160,35 @@ struct NotamDetailView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Distance Label
+
+    private func distanceLabel(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                .font(.caption)
+            Text(text)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    /// Distance from route centerline
+    private var routeDistanceText: String? {
+        let routeCoords = flightRouteCoordinates
+        guard routeCoords.count >= 2,
+              let coordinate = notam.coordinate else {
+            return nil
+        }
+
+        let distance = RouteGeometry.minimumDistanceToRoute(from: coordinate, routePoints: routeCoords)
+
+        if distance < 1 {
+            return "< 1 nm from route"
+        } else {
+            return String(format: "%.0f nm from route", distance)
+        }
     }
 
     /// Format altitude in feet to readable string (SFC, FL, or ft)
@@ -214,31 +267,71 @@ struct NotamDetailView: View {
         return nil
     }
 
-    /// Route coordinates - uses briefing route (geocoded by server)
-    /// CDFlight waypoints are used for display names if available
+    /// Route coordinates - built from CDFlight using KnownAirports for coordinate lookup
+    /// Route order: origin -> routeICAOs waypoints -> destination
     private var flightRouteCoordinates: [CLLocationCoordinate2D] {
-        // Use briefing route coordinates (geocoded on server)
-        briefingRoute?.allCoordinates ?? []
+        guard let flight = flight,
+              let knownAirports = appState?.knownAirports else {
+            return []
+        }
+
+        var coords: [CLLocationCoordinate2D] = []
+
+        // Origin
+        if let origin = flight.origin,
+           let airport = knownAirports.airport(icao: origin, ensureRunway: false) {
+            coords.append(airport.coordinate)
+        }
+
+        // Intermediate waypoints from routeICAOs
+        for icao in flight.routeArray {
+            if let airport = knownAirports.airport(icao: icao, ensureRunway: false) {
+                coords.append(airport.coordinate)
+            }
+        }
+
+        // Destination
+        if let destination = flight.destination,
+           let airport = knownAirports.airport(icao: destination, ensureRunway: false) {
+            coords.append(airport.coordinate)
+        }
+
+        return coords
     }
 
-    /// Route waypoint names and coordinates for display
-    /// Combines CDFlight waypoint names with briefing route coordinates
+    /// Route waypoint names and coordinates for display (intermediate points only)
     private var flightWaypoints: [(name: String, coordinate: CLLocationCoordinate2D)] {
-        // Use briefing waypoint coords if available
-        guard let waypointCoords = briefingRoute?.waypointCoords else { return [] }
-        return waypointCoords.map { wp in
-            (name: wp.name, coordinate: wp.coordinate)
+        guard let flight = flight,
+              let knownAirports = appState?.knownAirports else {
+            return []
+        }
+
+        return flight.routeArray.compactMap { icao in
+            guard let airport = knownAirports.airport(icao: icao, ensureRunway: false) else {
+                return nil
+            }
+            return (name: icao, coordinate: airport.coordinate)
         }
     }
 
-    /// Origin coordinate from briefing
+    /// Origin coordinate from CDFlight using KnownAirports
     private var originCoordinate: CLLocationCoordinate2D? {
-        briefingRoute?.departureCoordinate
+        guard let origin = flight?.origin,
+              let knownAirports = appState?.knownAirports,
+              let airport = knownAirports.airport(icao: origin, ensureRunway: false) else {
+            return nil
+        }
+        return airport.coordinate
     }
 
-    /// Destination coordinate from briefing
+    /// Destination coordinate from CDFlight using KnownAirports
     private var destinationCoordinate: CLLocationCoordinate2D? {
-        briefingRoute?.destinationCoordinate
+        guard let destination = flight?.destination,
+              let knownAirports = appState?.knownAirports,
+              let airport = knownAirports.airport(icao: destination, ensureRunway: false) else {
+            return nil
+        }
+        return airport.coordinate
     }
 
     @ViewBuilder
@@ -345,6 +438,13 @@ struct NotamDetailView: View {
                 .onAppear {
                     // Start with route + NOTAM view
                     mapPosition = .region(routeAndNotamRegion)
+                }
+                .onChange(of: notam.id) {
+                    // Recenter map when NOTAM changes
+                    withAnimation {
+                        isZoomedToNotam = false
+                        mapPosition = .region(routeAndNotamRegion)
+                    }
                 }
             }
         }
@@ -530,6 +630,50 @@ struct NotamDetailView: View {
                 }
             }
             .font(.subheadline)
+        }
+    }
+
+    // MARK: - Document References Section
+
+    private var documentReferencesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Document References")
+                .font(.headline)
+
+            ForEach(notam.documentReferences, id: \.identifier) { ref in
+                VStack(alignment: .leading, spacing: 6) {
+                    // Reference identifier and provider
+                    HStack {
+                        Text(ref.identifier)
+                            .font(.subheadline.weight(.medium))
+                        Text("(\(ref.providerName))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // Links
+                    HStack(spacing: 16) {
+                        // Search URL
+                        if let searchURL = ref.searchURL {
+                            Link(destination: searchURL) {
+                                Label("Search", systemImage: "magnifyingglass")
+                                    .font(.caption)
+                            }
+                        }
+
+                        // Document URLs
+                        ForEach(Array(ref.documentURLs.enumerated()), id: \.offset) { index, docURL in
+                            Link(destination: docURL) {
+                                Label(ref.documentURLs.count > 1 ? "Doc \(index + 1)" : "Document", systemImage: "doc.text")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            }
         }
     }
 

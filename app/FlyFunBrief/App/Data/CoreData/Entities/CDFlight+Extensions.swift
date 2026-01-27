@@ -19,7 +19,8 @@ extension CDFlight {
         destination: String,
         departureTime: Date? = nil,
         durationHours: Double? = nil,
-        routeICAOs: String? = nil
+        routeICAOs: String? = nil,
+        cruiseAltitude: Int32? = nil
     ) -> CDFlight {
         let flight = CDFlight(context: context)
         flight.id = UUID()
@@ -28,6 +29,7 @@ extension CDFlight {
         flight.departureTime = departureTime
         flight.durationHours = durationHours ?? 0
         flight.routeICAOs = routeICAOs?.uppercased()
+        flight.cruiseAltitude = cruiseAltitude ?? 0
         flight.createdAt = Date()
         flight.isArchived = false
         return flight

@@ -11,6 +11,7 @@ import SwiftUI
 import RZFlight
 import CoreData
 import OSLog
+import FMDB
 
 /// Single source of truth for all FlyFunBrief state
 /// Composes domain objects to avoid becoming a god-class
@@ -55,6 +56,9 @@ final class AppState {
     /// Flight repository for Core Data operations
     let flightRepository: FlightRepository
 
+    /// Airport database for coordinate lookups
+    let knownAirports: KnownAirports?
+
     // MARK: - Pending Import State
 
     /// Briefing waiting to be assigned to a flight (from share extension)
@@ -70,6 +74,21 @@ final class AppState {
 
         // Initialize services
         self.briefingService = BriefingService()
+
+        // Initialize airport database
+        if let dbPath = Bundle.main.path(forResource: "airports", ofType: "db") {
+            let db = FMDatabase(path: dbPath)
+            if db.open() {
+                self.knownAirports = KnownAirports(db: db)
+                Logger.app.info("Initialized KnownAirports from bundled database")
+            } else {
+                self.knownAirports = nil
+                Logger.app.warning("Failed to open airports.db - route display will be limited")
+            }
+        } else {
+            self.knownAirports = nil
+            Logger.app.warning("airports.db not found in bundle - route display will be limited")
+        }
 
         // Initialize domains
         self.flights = FlightDomain(repository: flightRepository)

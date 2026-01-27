@@ -40,6 +40,8 @@ struct FlightEditorView: View {
     @State private var hasDepartureTime: Bool = false
     @State private var durationHours: Double = 0
     @State private var routeString: String = ""
+    @State private var hasCruiseAltitude: Bool = false
+    @State private var cruiseAltitude: Int = 5000
 
     @State private var isSaving = false
 
@@ -86,6 +88,35 @@ struct FlightEditorView: View {
                     )
                 }
             }
+
+            // Altitude section
+            Section("Cruise Altitude") {
+                Toggle("Set cruise altitude", isOn: $hasCruiseAltitude)
+
+                if hasCruiseAltitude {
+                    HStack {
+                        Text("Altitude")
+                        Spacer()
+                        TextField("ft", value: $cruiseAltitude, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                        Text("ft")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // Quick altitude buttons
+                    HStack(spacing: 8) {
+                        ForEach([3000, 5000, 7000, 10000], id: \.self) { alt in
+                            Button("\(alt / 1000)k") {
+                                cruiseAltitude = alt
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(cruiseAltitude == alt ? .blue : .gray)
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle(mode.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -129,6 +160,10 @@ struct FlightEditorView: View {
             }
             durationHours = flight.durationHours
             routeString = flight.routeICAOs ?? ""
+            if flight.cruiseAltitude > 0 {
+                cruiseAltitude = Int(flight.cruiseAltitude)
+                hasCruiseAltitude = true
+            }
         }
     }
 
@@ -145,7 +180,8 @@ struct FlightEditorView: View {
                     destination: destination.uppercased(),
                     departureTime: hasDepartureTime ? departureDate : nil,
                     durationHours: durationHours > 0 ? durationHours : nil,
-                    routeICAOs: routeString.isEmpty ? nil : routeString.uppercased()
+                    routeICAOs: routeString.isEmpty ? nil : routeString.uppercased(),
+                    cruiseAltitude: hasCruiseAltitude ? Int32(cruiseAltitude) : nil
                 )
 
             case .edit(let flight):
@@ -155,7 +191,8 @@ struct FlightEditorView: View {
                     destination: destination.uppercased(),
                     departureTime: hasDepartureTime ? departureDate : nil,
                     durationHours: durationHours > 0 ? durationHours : nil,
-                    routeICAOs: routeString.isEmpty ? nil : routeString.uppercased()
+                    routeICAOs: routeString.isEmpty ? nil : routeString.uppercased(),
+                    cruiseAltitude: hasCruiseAltitude ? Int32(cruiseAltitude) : nil
                 )
             }
 
