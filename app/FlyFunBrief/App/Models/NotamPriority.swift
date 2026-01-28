@@ -118,13 +118,13 @@ final class NotamPriorityEvaluator {
 
 // MARK: - High Priority Rules
 
-/// High priority: NOTAM is within 10nm of route AND altitude overlaps cruise ±2000ft
+/// High priority: NOTAM is within 50nm of route AND altitude overlaps cruise ±2000ft
 struct HighPriorityCloseAndRelevantAltitude: NotamPriorityRule {
     let id = "high_close_altitude"
     let name = "Close to route at flight altitude"
 
     /// Distance threshold in nautical miles
-    let distanceThresholdNm: Double = 10.0
+    let distanceThresholdNm: Double = 50.0
 
     func evaluate(notam: Notam, distanceNm: Double?, context: FlightContext) -> NotamPriority? {
         // Need both distance and altitude info
@@ -137,7 +137,7 @@ struct HighPriorityCloseAndRelevantAltitude: NotamPriorityRule {
         guard let cruiseRange = context.cruiseAltitudeRange else {
             // No cruise altitude set - can't evaluate altitude relevance
             // Still consider close NOTAMs as potentially high priority
-            return distance <= 5.0 ? .high : nil
+            return distance <= 10.0 ? .high : nil
         }
 
         // Get NOTAM altitude range
