@@ -196,6 +196,26 @@ struct VisibilityFilter: Equatable {
     var showRead: Bool = true
 }
 
+/// Priority filter options
+enum PriorityFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case high = "High"
+    case normal = "Normal"
+    case low = "Low"
+
+    var id: String { rawValue }
+
+    /// Check if a priority matches this filter
+    func matches(_ priority: NotamPriority) -> Bool {
+        switch self {
+        case .all: return true
+        case .high: return priority == .high
+        case .normal: return priority == .normal
+        case .low: return priority == .low
+        }
+    }
+}
+
 /// Time filter - filter NOTAMs by validity at flight time
 struct TimeFilter: Equatable {
     /// Whether time filtering is enabled
@@ -273,6 +293,14 @@ final class NotamDomain {
     /// Airport coordinates for route filtering (populated from briefing or external source)
     var airportCoordinates: [String: CLLocationCoordinate2D] = [:]
 
+    /// Flight context for priority evaluation (set by AppState when flight is selected)
+    private(set) var currentFlightContext: FlightContext = .empty
+
+    // MARK: - Priority Filter
+
+    /// Priority filter - which priorities to show
+    var priorityFilter: PriorityFilter = .all
+
     // MARK: - Computed Properties
 
     /// Whether any filters are active
@@ -280,6 +308,7 @@ final class NotamDomain {
         routeFilter.isEnabled ||
         !categoryFilter.allEnabled ||
         statusFilter != .all ||
+        priorityFilter != .all ||
         !visibilityFilter.showRead ||
         visibilityFilter.showIgnored ||
         timeFilter.isEnabled ||
@@ -426,6 +455,11 @@ final class NotamDomain {
             notams = notams.filter { $0.status != .read }
         }
 
+        // 9. Apply priority filter
+        if priorityFilter != .all {
+            notams = notams.filter { priorityFilter.matches($0.priority) }
+        }
+
         return notams
     }
 
@@ -495,6 +529,11 @@ final class NotamDomain {
         enrichedNotams.newCount
     }
 
+    /// Count of high priority NOTAMs
+    var highPriorityCount: Int {
+        enrichedNotams.highPriorityCount
+    }
+
     // MARK: - Dependencies
 
     private let flightRepository: FlightRepository
@@ -510,6 +549,18 @@ final class NotamDomain {
     /// Update the ignore list manager reference
     func setIgnoreListManager(_ manager: IgnoreListManager) {
         self.ignoreListManager = manager
+    }
+
+    /// Update the flight context for priority evaluation.
+    ///
+    /// Call this when the flight is selected or updated. The context is used
+    /// to compute route distance, altitude relevance, and priority for each NOTAM.
+    ///
+    /// - Parameter context: The flight context, or nil to clear
+    func setFlightContext(_ context: FlightContext?) {
+        self.currentFlightContext = context ?? .empty
+        // Re-enrich NOTAMs with new context
+        refreshEnrichedNotams()
     }
 
     // MARK: - Actions
@@ -602,17 +653,13 @@ final class NotamDomain {
     /// Build enriched NOTAMs for standalone mode (no Core Data)
     /// All NOTAMs start as unread in this mode
     private func buildEnrichedNotamsStandalone() {
-        enrichedNotams = allNotams.map { notam in
-            let identityKey = NotamIdentity.key(for: notam)
-            return EnrichedNotam(
-                notam: notam,
-                status: .unread,
-                textNote: nil,
-                statusChangedAt: nil,
-                isNew: !previousIdentityKeys.contains(identityKey),
-                isGloballyIgnored: ignoredIdentityKeys.contains(identityKey)
-            )
-        }
+        enrichedNotams = EnrichedNotam.enrich(
+            notams: allNotams,
+            statuses: [:],  // No Core Data statuses
+            previousIdentityKeys: previousIdentityKeys,
+            ignoredKeys: ignoredIdentityKeys,
+            flightContext: currentFlightContext
+        )
     }
 
     /// Build enriched NOTAMs from Core Data statuses
@@ -628,7 +675,8 @@ final class NotamDomain {
             notams: allNotams,
             statuses: statuses,
             previousIdentityKeys: previousIdentityKeys,
-            ignoredKeys: ignoredIdentityKeys
+            ignoredKeys: ignoredIdentityKeys,
+            flightContext: currentFlightContext
         )
     }
 
@@ -659,6 +707,7 @@ final class NotamDomain {
         routeFilter = RouteFilter()
         categoryFilter = CategoryFilter()
         statusFilter = .all
+        priorityFilter = .all
         visibilityFilter = VisibilityFilter()
         timeFilter = TimeFilter()
         smartFilters = SmartFilters()

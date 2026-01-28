@@ -21,6 +21,7 @@ struct FilterPanelView: View {
                 smartFiltersSection
                 categorySection
                 statusSection
+                prioritySection
                 visibilitySection
                 groupingSection
             }
@@ -229,6 +230,56 @@ struct FilterPanelView: View {
         }
     }
 
+    // MARK: - Priority Section
+
+    private var prioritySection: some View {
+        Section {
+            Picker("Priority", selection: priorityFilterBinding) {
+                ForEach(PriorityFilter.allCases) { priority in
+                    HStack {
+                        priorityIcon(for: priority)
+                        Text(priority.rawValue)
+                    }
+                    .tag(priority)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if appState?.notams.highPriorityCount ?? 0 > 0 {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text("\(appState?.notams.highPriorityCount ?? 0) high priority NOTAMs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Label("Computed Priority", systemImage: "bolt.fill")
+        } footer: {
+            Text("Priority is computed based on distance from route, altitude overlap, and NOTAM type.")
+        }
+    }
+
+    @ViewBuilder
+    private func priorityIcon(for filter: PriorityFilter) -> some View {
+        switch filter {
+        case .all:
+            EmptyView()
+        case .high:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption2)
+        case .normal:
+            EmptyView()
+        case .low:
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(.secondary)
+                .font(.caption2)
+        }
+    }
+
     // MARK: - Visibility Section
 
     private var visibilitySection: some View {
@@ -302,6 +353,13 @@ struct FilterPanelView: View {
         Binding(
             get: { appState?.notams.statusFilter ?? .all },
             set: { appState?.notams.statusFilter = $0 }
+        )
+    }
+
+    private var priorityFilterBinding: Binding<PriorityFilter> {
+        Binding(
+            get: { appState?.notams.priorityFilter ?? .all },
+            set: { appState?.notams.priorityFilter = $0 }
         )
     }
 
@@ -395,6 +453,15 @@ struct CompactFilterBar: View {
                         isActive: true
                     ) {
                         appState?.notams.statusFilter = .all
+                    }
+                }
+
+                if appState?.notams.priorityFilter != .all {
+                    FilterChip(
+                        label: "Priority: \(appState?.notams.priorityFilter.rawValue ?? "")",
+                        isActive: true
+                    ) {
+                        appState?.notams.priorityFilter = .all
                     }
                 }
 
