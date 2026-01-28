@@ -10,6 +10,7 @@ import Foundation
 import SwiftUI
 import RZFlight
 import CoreData
+import CoreLocation
 import OSLog
 import FMDB
 
@@ -141,6 +142,9 @@ final class AppState {
                 self.notams.setBriefing(loadedBriefing)
             }
 
+            // Update flight context for priority evaluation
+            self.updateFlightContext()
+
             self.navigation.showNotamList()
         }
 
@@ -161,19 +165,28 @@ final class AppState {
             // Load latest briefing if available
             if let latestBriefing = flight.latestBriefing {
                 self.briefing.loadBriefing(latestBriefing)
+                // Note: updateFlightContext() will be called in onBriefingLoaded
+            } else {
+                // No briefing yet - still update context with flight info
+                self.updateFlightContext()
             }
         }
 
         // When a briefing is imported to Core Data, notify briefing domain
         flights.onBriefingImported = { [weak self] cdBriefing in
+            guard let self = self else { return }
+
             // Update the current CD briefing reference
-            self?.briefing.currentCDBriefing = cdBriefing
+            self.briefing.currentCDBriefing = cdBriefing
 
             // If the briefing is already decoded, refresh the notams
             if let briefing = cdBriefing.decodedBriefing,
                let flight = cdBriefing.flight {
-                let previousKeys = self?.flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing) ?? []
-                self?.notams.setBriefing(briefing, cdBriefing: cdBriefing, previousKeys: previousKeys)
+                let previousKeys = self.flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing)
+                self.notams.setBriefing(briefing, cdBriefing: cdBriefing, previousKeys: previousKeys)
+
+                // Update flight context for priority evaluation
+                self.updateFlightContext()
             }
         }
     }
@@ -207,6 +220,9 @@ final class AppState {
             // Update notams
             let previousKeys = flights.getPreviousIdentityKeys(for: flight, excluding: cdBriefing)
             notams.setBriefing(briefingToAssign, cdBriefing: cdBriefing, previousKeys: previousKeys)
+
+            // Update flight context for priority evaluation
+            updateFlightContext()
 
             // Navigate to NOTAM list
             navigation.showNotamList()
@@ -248,6 +264,71 @@ final class AppState {
         pendingBriefing = nil
         navigation.dismissSheet()
         Logger.app.info("Cancelled pending briefing import")
+    }
+
+    // MARK: - Flight Context
+
+    /// Build FlightContext from current flight and briefing for priority evaluation.
+    ///
+    /// This combines:
+    /// - Route coordinates from CDFlight using KnownAirports lookups
+    /// - Cruise altitude from CDFlight
+    /// - Departure/arrival times from Route or CDFlight
+    /// - Alternates from Route
+    private func buildFlightContext() -> FlightContext {
+        guard let flight = flights.selectedFlight else {
+            return .empty
+        }
+
+        // Build route coordinates from CDFlight using KnownAirports
+        var routeCoordinates: [CLLocationCoordinate2D] = []
+
+        if let airports = knownAirports {
+            // Origin
+            if let origin = flight.origin,
+               let airport = airports.airport(icao: origin, ensureRunway: false) {
+                routeCoordinates.append(airport.coordinate)
+            }
+
+            // Intermediate waypoints from CDFlight
+            for icao in flight.routeArray {
+                if let airport = airports.airport(icao: icao, ensureRunway: false) {
+                    routeCoordinates.append(airport.coordinate)
+                }
+            }
+
+            // Destination
+            if let destination = flight.destination,
+               let airport = airports.airport(icao: destination, ensureRunway: false) {
+                routeCoordinates.append(airport.coordinate)
+            }
+        }
+
+        // Get times from briefing route if available, otherwise from flight
+        let route = notams.currentRoute
+        let departureTime = route?.departureTime ?? flight.departureTime
+        let arrivalTime = route?.arrivalTime
+
+        // Get alternates from route
+        let alternates = route?.alternates ?? []
+
+        return FlightContext(
+            routeCoordinates: routeCoordinates,
+            departureICAO: flight.origin,
+            destinationICAO: flight.destination,
+            alternateICAOs: alternates,
+            cruiseAltitude: flight.cruiseAltitude > 0 ? Int(flight.cruiseAltitude) : nil,
+            departureTime: departureTime,
+            arrivalTime: arrivalTime
+        )
+    }
+
+    /// Update the flight context for NOTAM priority evaluation.
+    /// Call this after flight selection or briefing load.
+    private func updateFlightContext() {
+        let context = buildFlightContext()
+        notams.setFlightContext(context)
+        Logger.app.debug("Updated flight context: hasRoute=\(context.hasValidRoute), altitude=\(context.cruiseAltitude ?? 0)")
     }
 
     // MARK: - Lifecycle
