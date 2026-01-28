@@ -23,11 +23,15 @@ jobs:
     - name: Checkout flyfun-apps
       uses: actions/checkout@v4
 
-    - name: Clone rzflight dependency
+    - name: Clone rzflight dependency to correct path
       run: |
-        # The project expects rzflight at ../../../rzflight relative to app/
-        # Which means it should be at the same level as the repo root
-        git clone --depth 1 https://github.com/roznet/rzflight.git ../rzflight
+        # The project has: XCLocalSwiftPackageReference "../../../rzflight"
+        # From app/FlyFunBrief.xcodeproj, go up 3 levels and then rzflight
+        # app/FlyFunBrief.xcodeproj -> app/ -> repo root -> parent -> grandparent
+        # GitHub checkout is at $GITHUB_WORKSPACE = /Users/runner/work/{repo}/{repo}
+        # So ../../../ from app/ = /Users/runner/work/
+        # We need to clone rzflight to /Users/runner/work/rzflight
+        git clone --depth 1 https://github.com/roznet/rzflight.git /Users/runner/work/rzflight
 
     - name: Select Xcode version
       uses: maxim-lobanov/setup-xcode@v1
@@ -39,9 +43,13 @@ jobs:
 
     - name: Show directory structure
       run: |
+        echo "=== GITHUB_WORKSPACE ==="
+        echo $GITHUB_WORKSPACE
+        echo "=== Current dir ===" 
         pwd
-        ls -la
-        ls -la ..
+        echo "=== Parent of workspace ==="
+        ls -la $GITHUB_WORKSPACE/../..
+        echo "=== app/ directory ==="
         ls -la app/
 
     - name: Build FlyFunBrief
@@ -64,9 +72,9 @@ jobs:
     - name: Checkout flyfun-apps
       uses: actions/checkout@v4
 
-    - name: Clone rzflight dependency
+    - name: Clone rzflight dependency to correct path
       run: |
-        git clone --depth 1 https://github.com/roznet/rzflight.git ../rzflight
+        git clone --depth 1 https://github.com/roznet/rzflight.git /Users/runner/work/rzflight
 
     - name: Select Xcode version
       uses: maxim-lobanov/setup-xcode@v1
