@@ -1,10 +1,10 @@
 # FlyFunBrief NOTAM System
 
-> NOTAM domain, filtering, enrichment, and identity matching.
+> NOTAM domain, filtering, enrichment, priority evaluation, and identity matching.
 
 ## Intent
 
-Provide comprehensive NOTAM management with user status tracking, intelligent filtering, and cross-briefing status transfer. The system wraps RZFlight's Notam model with user-specific state.
+Provide comprehensive NOTAM management with user status tracking, intelligent filtering, dynamic priority evaluation, and cross-briefing status transfer. The system wraps RZFlight's Notam model with user-specific state and flight context.
 
 ## Architecture
 
@@ -26,25 +26,32 @@ Provide comprehensive NOTAM management with user status tracking, intelligent fi
 
 ## EnrichedNotam Model
 
-Wraps RZFlight's Notam with user-specific display state:
+Wraps RZFlight's Notam with user-specific display state and flight context:
 
 ```swift
 struct EnrichedNotam: Identifiable {
+    // Core NOTAM
     let notam: Notam              // RZFlight model
+
+    // User state
     let status: NotamStatus       // read/unread/important/ignored/followUp
     let textNote: String?         // User annotation
     let isNew: Bool               // First time seen in this flight's history
     let isGloballyIgnored: Bool   // Matches global ignore list
 
+    // Flight context (computed at enrichment time)
+    let routeDistanceNm: Double?  // Distance from route centerline
+    let isAltitudeRelevant: Bool  // Overlaps cruise altitude ±2000ft
+    let isActiveForFlight: Bool   // Active during flight window
+    let priority: NotamPriority   // Computed priority from rules
+
     var id: String { notam.id }
     var identityKey: String { NotamIdentity.key(for: notam) }
 
-    // Convenience forwarding
-    var message: String { notam.message }
-    var location: String? { notam.location }
-    var effectiveFrom: Date? { notam.effectiveFrom }
-    var effectiveTo: Date? { notam.effectiveTo }
-    var category: NotamCategory { notam.category }
+    // Convenience computed properties
+    var routeDistanceText: String?    // Formatted: "<1nm", "15nm"
+    var isDistanceRelevant: Bool      // < 50nm from route
+    var altitudeRangeText: String?    // Formatted: "SFC-FL100"
 }
 
 enum NotamStatus: Int16 {
@@ -54,7 +61,15 @@ enum NotamStatus: Int16 {
     case ignored = 3
     case followUp = 4
 }
+
+enum NotamPriority: Int, Comparable {
+    case low = 0      // Far from route, irrelevant altitude
+    case normal = 1   // Default
+    case high = 2     // Close + altitude match, critical closures
+}
 ```
+
+All flight context values are computed once during enrichment, keeping views simple and avoiding repeated calculations.
 
 ## NotamIdentity
 
@@ -125,9 +140,13 @@ final class NotamDomain {
 
     // Other filters
     var statusFilter: StatusFilter = .all
+    var priorityFilter: PriorityFilter = .all  // Filter by computed priority
     var visibilityFilter: VisibilityFilter  // showIgnored, showRead
     var routeFilter: RouteFilter            // isEnabled, corridorWidthNm
     var timeFilter: TimeFilter              // isEnabled, buffers
+
+    // Flight context for priority evaluation
+    var currentFlightContext: FlightContext = .empty
 
     // Computed
     var enrichedNotams: [EnrichedNotam]
@@ -135,6 +154,7 @@ final class NotamDomain {
     var enrichedNotamsGroupedByAirport: [(String, [EnrichedNotam])]
     var enrichedNotamsGroupedByCategory: [(NotamCategory, [EnrichedNotam])]
     var enrichedNotamsGroupedByRouteSegment: [(RouteSegment, [EnrichedNotam])]
+    var highPriorityCount: Int              // Count of high priority NOTAMs
 }
 ```
 
@@ -159,6 +179,8 @@ var filteredEnrichedNotams: [EnrichedNotam] {
         .filter { statusFilter.matches($0.status) }
         // 8. Visibility filters
         .filter { showRead || $0.status != .read }
+        // 9. Priority filter
+        .filter { priorityFilter.matches($0.priority) }
 }
 ```
 
@@ -324,6 +346,97 @@ let isIgnored = ignoredKeys.contains(identityKey)
 
 **Auto-expiration:** Ignored entries automatically expire when the NOTAM's `effectiveTo` date passes, unless marked permanent.
 
+## Priority System
+
+Dynamic priority evaluation based on flight context. Priority is **independent** of user status and filtering - it's a computed property that helps users identify important NOTAMs.
+
+### FlightContext
+
+Captures all flight-related information for priority evaluation:
+
+```swift
+struct FlightContext {
+    let routeCoordinates: [CLLocationCoordinate2D]  // Route geometry
+    let departureICAO: String?
+    let destinationICAO: String?
+    let alternateICAOs: [String]
+    let cruiseAltitude: Int?        // Feet
+    let departureTime: Date?
+    let arrivalTime: Date?
+
+    var hasValidRoute: Bool         // >= 2 coordinates
+    var flightWindowStart: Date?    // Departure - 2h
+    var flightWindowEnd: Date?      // Arrival + 2h
+    var cruiseAltitudeRange: ClosedRange<Int>?  // ±2000ft
+}
+```
+
+The context is set by AppState when a flight is selected and passed to `NotamDomain.setFlightContext()`.
+
+### Priority Rules
+
+Priority is evaluated using a chain of rules. Rules are hardcoded initially but designed for future extensibility to user-configurable rules.
+
+```swift
+protocol NotamPriorityRule {
+    var id: String { get }
+    var name: String { get }
+    func evaluate(notam: Notam, distanceNm: Double?, context: FlightContext) -> NotamPriority?
+}
+```
+
+**Current Rules (in evaluation order):**
+
+| Rule | Condition | Priority |
+|------|-----------|----------|
+| Close + Altitude | Within 10nm AND altitude overlaps cruise ±2000ft | High |
+| Runway Closure | At dep/dest AND runway/taxiway closure | High |
+| Obstacle Far | Obstacle type AND > 2nm from airports | Low |
+| Helicopter | Helicopter-related Q-codes (FH, FP, LH, etc.) | Low |
+| Default | No rule matches | Normal |
+
+### Priority Filter
+
+Filter NOTAMs by computed priority:
+
+```swift
+enum PriorityFilter: String, CaseIterable {
+    case all = "All"
+    case high = "High"
+    case normal = "Normal"
+    case low = "Low"
+}
+
+// Usage
+notamDomain.priorityFilter = .high  // Show only high priority
+```
+
+### UI Display
+
+- **High priority**: Orange warning triangle icon
+- **Normal priority**: No icon
+- **Low priority**: Gray down arrow icon
+
+Icons appear in the NOTAM row badges area, alongside the global ignore indicator.
+
+### Enrichment Flow
+
+```
+AppState builds FlightContext from CDFlight + KnownAirports
+    ↓
+NotamDomain.setFlightContext(context)
+    ↓
+EnrichedNotam.enrich() called with flightContext
+    ↓
+For each NOTAM:
+  1. Compute route distance using RouteGeometry
+  2. Check altitude relevance against cruise ±2000ft
+  3. Check if active during flight window
+  4. Evaluate priority rules chain
+    ↓
+EnrichedNotam created with all computed values
+```
+
 ## Usage Examples
 
 ### Build enriched NOTAMs from Core Data briefing
@@ -381,11 +494,14 @@ let notams = notamDomain.filteredEnrichedNotams
 
 ### NotamRowView
 Displays single NOTAM in list with:
-- Category chip (colored badge)
 - Status indicator (unread dot, important star)
-- "NEW" badge for first-seen NOTAMs
-- Location and effective dates
+- Priority icon (high=warning triangle, low=down arrow)
+- Distance from route (highlighted if < 50nm)
+- Altitude range (highlighted if overlaps cruise ±2000ft)
+- "Inactive" badge if NOTAM inactive during flight window
 - Swipe actions for status changes
+
+All display values are pre-computed in EnrichedNotam - the view only renders.
 
 ### NotamDetailView
 Full NOTAM detail sheet:
@@ -403,6 +519,7 @@ Comprehensive filter configuration:
 - **Route Filter** - Corridor width, ICAO codes
 - **Time Filter** - Active at flight time
 - **Status Filter** - All/unread/important/followUp
+- **Priority Filter** - All/high/normal/low (based on computed priority)
 - **Visibility** - Show read, show ignored
 - **Grouping** - None/airport/category/route order
 
@@ -416,8 +533,15 @@ Comprehensive filter configuration:
 6. **Use icaoCategory, not category** - The `icaoCategory` computed property derives from Q-code, with fallback to stored category
 7. **Smart filters need route** - Obstacle filtering requires departure/destination coordinates
 8. **Helicopter filter is default ON** - Unlike other filters, helicopter NOTAMs are hidden by default
+9. **Priority vs Status** - Priority is computed from flight context; Status is user-assigned. Both are independent.
+10. **FlightContext must be set** - Call `setFlightContext()` when flight changes, otherwise priority defaults to `.normal`
+11. **Priority rules are extensible** - Designed as protocol for future user-configurable rules
 
 ## References
 
 - Key code: `app/FlyFunBrief/App/State/Domains/NotamDomain.swift`
+- Priority: `app/FlyFunBrief/App/Models/NotamPriority.swift`
+- Flight context: `app/FlyFunBrief/App/Models/FlightContext.swift`
+- Enriched model: `app/FlyFunBrief/App/Models/EnrichedNotam.swift`
+- Row view: `app/FlyFunBrief/UserInterface/Views/NotamList/NotamRowView.swift`
 - Related: [BRIEFING_APP_DATA.md](BRIEFING_APP_DATA.md) for persistence

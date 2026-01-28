@@ -2,13 +2,22 @@
 //  EnrichedNotam.swift
 //  FlyFunBrief
 //
-//  Display model combining NOTAM data with user status and annotations.
+//  Display model combining NOTAM data with user status, flight context, and computed priority.
 //
 
 import Foundation
 import RZFlight
 
-/// NOTAM enriched with user status information for display
+/// NOTAM enriched with user status, flight context, and computed priority for display.
+///
+/// This model combines:
+/// - The raw NOTAM from RZFlight
+/// - User-assigned status (read/important/etc.)
+/// - Flight context relevance (distance, altitude, time)
+/// - Computed priority based on rules
+///
+/// All context-dependent values are computed once at enrichment time,
+/// keeping views simple and avoiding repeated calculations.
 struct EnrichedNotam: Identifiable {
     // MARK: - Core NOTAM
 
@@ -41,6 +50,23 @@ struct EnrichedNotam: Identifiable {
     /// Whether this NOTAM matches a global ignore entry
     let isGloballyIgnored: Bool
 
+    // MARK: - Flight Context (computed at enrichment time)
+
+    /// Distance from route centerline in nautical miles.
+    /// Nil if no route or NOTAM has no coordinates.
+    let routeDistanceNm: Double?
+
+    /// Whether the NOTAM altitude range overlaps cruise altitude ±2000ft.
+    /// False if no cruise altitude set or NOTAM is surface-to-unlimited.
+    let isAltitudeRelevant: Bool
+
+    /// Whether the NOTAM is active during the flight window (±2h buffer).
+    /// True if no flight time is set (assume potentially active).
+    let isActiveForFlight: Bool
+
+    /// Computed priority based on rules evaluation.
+    let priority: NotamPriority
+
     // MARK: - Identifiable
 
     var id: String { notam.id }
@@ -53,7 +79,11 @@ struct EnrichedNotam: Identifiable {
         textNote: String? = nil,
         statusChangedAt: Date? = nil,
         isNew: Bool = false,
-        isGloballyIgnored: Bool = false
+        isGloballyIgnored: Bool = false,
+        routeDistanceNm: Double? = nil,
+        isAltitudeRelevant: Bool = false,
+        isActiveForFlight: Bool = true,
+        priority: NotamPriority = .normal
     ) {
         self.notam = notam
         self.identityKey = NotamIdentity.key(for: notam)
@@ -62,6 +92,57 @@ struct EnrichedNotam: Identifiable {
         self.statusChangedAt = statusChangedAt
         self.isNew = isNew
         self.isGloballyIgnored = isGloballyIgnored
+        self.routeDistanceNm = routeDistanceNm
+        self.isAltitudeRelevant = isAltitudeRelevant
+        self.isActiveForFlight = isActiveForFlight
+        self.priority = priority
+    }
+
+    // MARK: - Flight Context Display Helpers
+
+    /// Formatted route distance text (e.g., "<1nm", "15nm")
+    var routeDistanceText: String? {
+        guard let distance = routeDistanceNm else { return nil }
+        if distance < 1 {
+            return "<1nm"
+        } else {
+            return String(format: "%.0fnm", distance)
+        }
+    }
+
+    /// Whether the NOTAM is close enough to route to be highlighted (<50nm)
+    var isDistanceRelevant: Bool {
+        guard let distance = routeDistanceNm else { return false }
+        return distance < 50
+    }
+
+    /// Formatted altitude range text (e.g., "SFC-FL100", "1000-5000ft")
+    var altitudeRangeText: String? {
+        let lower = notam.lowerLimit
+        let upper = notam.upperLimit
+
+        guard lower != nil || upper != nil else { return nil }
+
+        let lowerText = formatAltitude(lower, isLower: true)
+        let upperText = formatAltitude(upper, isLower: false)
+
+        return "\(lowerText)-\(upperText)"
+    }
+
+    private func formatAltitude(_ feet: Int?, isLower: Bool) -> String {
+        guard let feet = feet else {
+            return isLower ? "SFC" : "UNL"
+        }
+
+        if feet == 0 {
+            return "SFC"
+        } else if feet >= 18000 {
+            return "FL\(feet / 100)"
+        } else if feet >= 1000 {
+            return "\(feet / 1000)k"
+        } else {
+            return "\(feet)ft"
+        }
     }
 
     // MARK: - Convenience Accessors
@@ -138,25 +219,44 @@ extension Array where Element == EnrichedNotam {
         return result
     }
 
-    /// Sort by importance: new > important > unread > rest
+    /// Sort by importance: high priority > new > important > unread > rest
     func sortedByImportance() -> [EnrichedNotam] {
         sorted { lhs, rhs in
-            // New NOTAMs first
+            // High priority NOTAMs first
+            if lhs.priority != rhs.priority {
+                return lhs.priority > rhs.priority
+            }
+            // New NOTAMs next
             if lhs.isNew != rhs.isNew {
                 return lhs.isNew
             }
-            // Then by status priority
-            let priority: [NotamStatus: Int] = [
+            // Then by user status priority
+            let statusPriority: [NotamStatus: Int] = [
                 .important: 0,
                 .followUp: 1,
                 .unread: 2,
                 .read: 3,
                 .ignore: 4
             ]
-            let lhsPriority = priority[lhs.status] ?? 5
-            let rhsPriority = priority[rhs.status] ?? 5
+            let lhsPriority = statusPriority[lhs.status] ?? 5
+            let rhsPriority = statusPriority[rhs.status] ?? 5
             return lhsPriority < rhsPriority
         }
+    }
+
+    /// Filter by computed priority
+    func withPriority(_ priority: NotamPriority) -> [EnrichedNotam] {
+        filter { $0.priority == priority }
+    }
+
+    /// Filter to high priority only
+    func highPriorityOnly() -> [EnrichedNotam] {
+        filter { $0.priority == .high }
+    }
+
+    /// Count of high priority NOTAMs
+    var highPriorityCount: Int {
+        filter { $0.priority == .high }.count
     }
 
     /// Count of new NOTAMs
@@ -178,16 +278,47 @@ extension Array where Element == EnrichedNotam {
 // MARK: - Builder from Core Data
 
 extension EnrichedNotam {
-    /// Create enriched NOTAMs from a briefing with statuses
+    /// Create enriched NOTAMs from a briefing with statuses and flight context.
+    ///
+    /// This is the primary factory method. It computes all context-dependent values
+    /// (distance, altitude relevance, priority) once at creation time.
+    ///
+    /// - Parameters:
+    ///   - notams: Raw NOTAMs from RZFlight
+    ///   - statuses: User statuses keyed by NOTAM ID
+    ///   - previousIdentityKeys: Identity keys from previous briefings (for "new" detection)
+    ///   - ignoredKeys: Globally ignored identity keys
+    ///   - flightContext: Flight/route context for relevance computation (optional)
+    /// - Returns: Array of enriched NOTAMs with all computed properties
     static func enrich(
         notams: [Notam],
         statuses: [String: CDNotamStatus],
         previousIdentityKeys: Set<String>,
-        ignoredKeys: Set<String>
+        ignoredKeys: Set<String>,
+        flightContext: FlightContext? = nil
     ) -> [EnrichedNotam] {
-        notams.map { notam in
+        let context = flightContext ?? .empty
+        let evaluator = NotamPriorityEvaluator.shared
+
+        return notams.map { notam in
             let identityKey = NotamIdentity.key(for: notam)
             let cdStatus = statuses[notam.id]
+
+            // Compute route distance
+            let routeDistance = computeRouteDistance(for: notam, context: context)
+
+            // Compute altitude relevance
+            let altitudeRelevant = computeAltitudeRelevance(for: notam, context: context)
+
+            // Compute time/activity relevance
+            let activeForFlight = computeActiveForFlight(for: notam, context: context)
+
+            // Evaluate priority using rules
+            let priority = evaluator.evaluate(
+                notam: notam,
+                distanceNm: routeDistance,
+                context: context
+            )
 
             return EnrichedNotam(
                 notam: notam,
@@ -195,8 +326,56 @@ extension EnrichedNotam {
                 textNote: cdStatus?.textNote,
                 statusChangedAt: cdStatus?.updatedAt,
                 isNew: !previousIdentityKeys.contains(identityKey),
-                isGloballyIgnored: ignoredKeys.contains(identityKey)
+                isGloballyIgnored: ignoredKeys.contains(identityKey),
+                routeDistanceNm: routeDistance,
+                isAltitudeRelevant: altitudeRelevant,
+                isActiveForFlight: activeForFlight,
+                priority: priority
             )
         }
+    }
+
+    // MARK: - Context Computation Helpers
+
+    /// Compute perpendicular distance from NOTAM to route centerline
+    private static func computeRouteDistance(for notam: Notam, context: FlightContext) -> Double? {
+        guard context.hasValidRoute,
+              let coordinate = notam.coordinate else {
+            return nil
+        }
+
+        return RouteGeometry.minimumDistanceToRoute(
+            from: coordinate,
+            routePoints: context.routeCoordinates
+        )
+    }
+
+    /// Check if NOTAM altitude range overlaps with cruise altitude ±2000ft
+    private static func computeAltitudeRelevance(for notam: Notam, context: FlightContext) -> Bool {
+        guard let cruiseRange = context.cruiseAltitudeRange else {
+            return false
+        }
+
+        let notamLower = notam.lowerLimit ?? 0
+        let notamUpper = notam.upperLimit ?? 99999
+
+        // Skip surface-to-unlimited (always includes all altitudes, not useful)
+        if notamLower == 0 && notamUpper >= 99900 {
+            return false
+        }
+
+        // Check if ranges overlap
+        return cruiseRange.lowerBound <= notamUpper && cruiseRange.upperBound >= notamLower
+    }
+
+    /// Check if NOTAM is active during flight window
+    private static func computeActiveForFlight(for notam: Notam, context: FlightContext) -> Bool {
+        guard let windowStart = context.flightWindowStart,
+              let windowEnd = context.flightWindowEnd else {
+            // No flight time set - assume potentially active
+            return true
+        }
+
+        return notam.isActive(during: windowStart, to: windowEnd)
     }
 }
