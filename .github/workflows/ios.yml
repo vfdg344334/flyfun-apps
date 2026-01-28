@@ -27,10 +27,8 @@ jobs:
       run: |
         # The project has: XCLocalSwiftPackageReference "../../../rzflight"
         # From app/FlyFunBrief.xcodeproj, go up 3 levels and then rzflight
-        # app/FlyFunBrief.xcodeproj -> app/ -> repo root -> parent -> grandparent
-        # GitHub checkout is at $GITHUB_WORKSPACE = /Users/runner/work/{repo}/{repo}
+        # GitHub checkout is at /Users/runner/work/{repo}/{repo}
         # So ../../../ from app/ = /Users/runner/work/
-        # We need to clone rzflight to /Users/runner/work/rzflight
         git clone --depth 1 https://github.com/roznet/rzflight.git /Users/runner/work/rzflight
 
     - name: Select Xcode version
@@ -41,24 +39,13 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
 
-    - name: Show directory structure
-      run: |
-        echo "=== GITHUB_WORKSPACE ==="
-        echo $GITHUB_WORKSPACE
-        echo "=== Current dir ===" 
-        pwd
-        echo "=== Parent of workspace ==="
-        ls -la $GITHUB_WORKSPACE/../..
-        echo "=== app/ directory ==="
-        ls -la app/
-
     - name: Build FlyFunBrief
       working-directory: app
       run: |
         xcodebuild build \
           -project FlyFunBrief.xcodeproj \
           -scheme FlyFunBrief \
-          -destination 'platform=iOS Simulator,name=iPhone 15' \
+          -destination 'platform=iOS Simulator,name=iPhone 16' \
           -configuration Debug \
           CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=YES
@@ -87,7 +74,7 @@ jobs:
         xcodebuild test \
           -project FlyFunBrief.xcodeproj \
           -scheme FlyFunBrief \
-          -destination 'platform=iOS Simulator,name=iPhone 15' \
+          -destination 'platform=iOS Simulator,name=iPhone 16' \
           -configuration Debug \
           CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=YES
