@@ -126,16 +126,17 @@ struct NotamRowView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // Detail row (ID, location, distance, altitude, inactive) - hidden in compact mode
+            // Detail row (location, ID, distance, altitude, inactive) - hidden in compact mode
             if rowStyle.showDetailRow {
                 HStack(spacing: 8) {
+                    // Location first - highlighted if airport, subdued if FIR/other
+                    Text(notam.location)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(isAirportLocation ? .primary : .tertiary)
+
                     Text(notam.id)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
-
-                    Text(notam.location)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
 
                     Spacer()
 
@@ -283,6 +284,16 @@ struct NotamRowView: View {
         }
     }
 
+    // MARK: - Location Type
+
+    /// Whether the NOTAM scope is aerodrome (A) vs en-route (E) or warning (W)
+    /// Uses the scope field from the Q-line which is the authoritative source
+    private var isAirportLocation: Bool {
+        // Scope from Q-line: A = Aerodrome, E = En-route, W = Nav Warning
+        // Can contain multiple letters (e.g., "AE" for both)
+        guard let scope = notam.scope else { return false }
+        return scope.contains("A")
+    }
 }
 
 // MARK: - Preview
