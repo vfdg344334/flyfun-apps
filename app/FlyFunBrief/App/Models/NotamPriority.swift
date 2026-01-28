@@ -173,12 +173,11 @@ struct HighPriorityRunwayClosureAtAirport: NotamPriorityRule {
     }
 
     private func isClosureNotam(_ notam: Notam) -> Bool {
-        // Check Q-code for closure (second letter C = closed)
-        if let qCode = notam.qCode, qCode.count >= 2 {
-            let condition = qCode.suffix(2).prefix(1)  // 5th char of Q-line
-            if condition == "C" {
-                return true
-            }
+        // Check Q-code condition for closure (C = closed, LC = limited closed, etc.)
+        // The last character 'C' in the condition code indicates closure
+        if let conditionCode = notam.qCodeInfo?.conditionCode,
+           conditionCode.hasSuffix("C") {
+            return true
         }
 
         // Check custom tags
@@ -226,8 +225,7 @@ struct LowPriorityObstaclesFarFromAirports: NotamPriorityRule {
 
     private func isObstacleNotam(_ notam: Notam) -> Bool {
         // Check Q-code subject (OB = obstacle, OL = obstacle light)
-        if let qCode = notam.qCode, qCode.count >= 2 {
-            let subject = String(qCode.prefix(2))
+        if let subject = notam.qCodeSubject {
             if subject == "OB" || subject == "OL" {
                 return true
             }
@@ -262,9 +260,8 @@ struct LowPriorityHelicopterNotams: NotamPriorityRule {
     }
 
     private func isHelicopterNotam(_ notam: Notam) -> Bool {
-        // Q-code subjects for helicopter: FH (heliport), LH (heli lighting)
-        if let qCode = notam.qCode, qCode.count >= 2 {
-            let subject = String(qCode.prefix(2))
+        // Q-code subjects for helicopter: FH (heliport), FP (heliport procedures), LH/LU/LW (heli lighting)
+        if let subject = notam.qCodeSubject {
             if subject == "FH" || subject == "LH" || subject == "FP" ||
                subject == "LU" || subject == "LW" {
                 return true
